@@ -23,8 +23,10 @@ android {
         versionName = "0.1"
 
         // "0" = Developer Mode (no Developer Center project needed).
-        manifestPlaceholders["mwdat_application_id"] = localProps.getProperty("mwdat.applicationId", "0")
-        manifestPlaceholders["mwdat_client_token"] = localProps.getProperty("mwdat.clientToken", "0")
+        // Emitted as string resources: a bare android:value="0" in the manifest is stored as an
+        // Integer, and the SDK reads these keys with getString(), which would return null.
+        resValue("string", "mwdat_application_id", localProps.getProperty("mwdat.applicationId", "0"))
+        resValue("string", "mwdat_client_token", localProps.getProperty("mwdat.clientToken", "0"))
 
         buildConfigField(
             "String",
@@ -54,8 +56,11 @@ dependencies {
     implementation(libs.androidx.compose.material3)
     implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
+    implementation(libs.androidx.exifinterface)
 
     implementation(libs.mwdat.core)
     implementation(libs.mwdat.camera)
+    implementation(libs.mwdat.inputs)  // glasses capture button / Neural Band events
+    implementation(libs.mwdat.display) // Meta Ray-Ban Display screen (best effort)
     implementation(libs.mwdat.mockdevice) // "Mock glasses" button; uses the phone camera as the feed
 }

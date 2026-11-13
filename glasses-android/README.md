@@ -35,6 +35,29 @@ Minimal Android app that streams the camera from Meta glasses via the
 | `GlassesScreen.kt` | Compose UI |
 | `PhotoSink.kt` | Where captures go (HTTP POST of a JPEG). Replace with your backend call |
 
+## Photos and gallery
+
+**Capture** takes a still with `stream.capturePhoto()` (separate from the lower-res live preview),
+decodes it (HEIC or Bitmap), saves a JPEG (quality 95) to the app's private storage at
+`<app files>/photos/IMG_<timestamp>.jpg`, then sends it through `PhotoSink`.
+**Gallery** shows a thumbnail grid; tap a photo to swipe through them full-screen, and Delete removes one.
+Pull the files off the phone with Android Studio's Device Explorer (data/data/com.agb.glassescam/files/photos).
+
+## Quick shot (single photo, no stream)
+
+**Arm quick shot** opens a session without starting video. The Capture button on screen, the glasses'
+physical **capture button** (short press), or a **Neural Band** select/tap gesture then takes one
+full-resolution photo (`camera.photo.capturePhoto(FULL, HIGH)`), saves it to the gallery and sends it to
+`PhotoSink`. On Meta Ray-Ban Display glasses it also shows "Ready" / "Photo saved" on the glasses screen
+(best effort; other glasses have no screen, so that step is skipped).
+
+- Needs the experimental `mwdat-inputs` module and standalone photo capture: dev/beta channels only,
+  not publishable yet. Inputs may need capability approval in the Wearables Developer Center.
+- Double press of the capture button is ignored (the SDK sends a short press first, so there's a 400 ms delay).
+- Unknown until tested on hardware: whether the glasses also take their own native photo on a button press.
+- Known issue: after a firmware update to v128, reboot the glasses or camera capture can fail.
+- Display updates are held back while a capture transfers, so "Photo saved" appears after the transfer.
+
 ## Caveats
 
 - **Not compiled or run yet.** Written from Meta's docs and CameraAccess sample without an Android SDK on

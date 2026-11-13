@@ -17,10 +17,10 @@
 
         <meta-data
             android:name="com.meta.wearable.mwdat.APPLICATION_ID"
-            android:value="${mwdat_application_id}" />
+            android:value="@string/mwdat_application_id" />
         <meta-data
             android:name="com.meta.wearable.mwdat.CLIENT_TOKEN"
-            android:value="${mwdat_client_token}" />
+            android:value="@string/mwdat_client_token" />
 
         <activity
             android:name=".MainActivity"
