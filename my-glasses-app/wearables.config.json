@@ -1,0 +1,9 @@
+{
+  "platform": "meta-ray-ban-display",
+  "ui": "meta-ray-ban-display-ui-toolkit",
+  "toolkitRepository": "https://github.com/meta/meta-ray-ban-display-ui-toolkit-web/",
+  "toolkitPackages": {
+    "@wearables-ui-toolkit/mrbd": "130.33.0",
+    "@wearables-ui-toolkit/icons": "130.33.0"
+  }
+}
