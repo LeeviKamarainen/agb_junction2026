@@ -1,0 +1,51 @@
+# GlassesCam (Android)
+
+Minimal Android app that streams the camera from Meta glasses via the
+[Meta Wearables Device Access Toolkit](https://wearables.developer.meta.com/docs/develop/dat/build-integration-android/)
+(`mwdat-core` / `mwdat-camera` 1.0.1, from Maven Central) and can capture stills and POST them to a backend.
+
+## One-time setup
+
+1. **Android Studio** (recent; AGP 8.11 / Kotlin 2.2 / JDK 17). Open this `glasses-android` folder and let it sync.
+   The Gradle wrapper jar isn't included; Android Studio will fetch Gradle 8.13 from `gradle-wrapper.properties`.
+2. `copy local.properties.example local.properties`, then set `sdk.dir` if Studio hasn't already.
+   Leave `mwdat.applicationId` / `mwdat.clientToken` at `0` for Developer Mode.
+   Set `backend.url` to receive captured photos (emulator-to-host is `10.0.2.2`).
+3. **Glasses + phone** (physical Android 12+ phone, minSdk is 31):
+   - Pair the glasses in the Meta AI app and update firmware
+     (check [version dependencies](https://wearables.developer.meta.com/docs/develop/dat/version-dependencies/)).
+   - Meta AI app: Settings > App Info, tap the app version 5 times, enable **Developer Mode**.
+   - Only one dev-mode app is registered at a time; registering a new one unregisters the previous.
+
+## Run
+
+1. Run the app on the phone, accept the Bluetooth prompt.
+2. **Register**: jumps to the Meta AI app to approve; returns via the `glassescam://` deep link.
+   Registration state and device count show at the top.
+3. **Start stream**: asks for glasses camera permission (Meta AI app sheet), opens a session,
+   and the live preview appears. **Capture** grabs a still and sends it through `PhotoSink`.
+
+## Layout
+
+| File | Role |
+|---|---|
+| `MainActivity.kt` | Bluetooth permission, `Wearables.initialize`, glasses permission launcher |
+| `GlassesViewModel.kt` | Registration, session, camera, stream, photo capture, teardown |
+| `HevcDecoder.kt` | `MediaCodec` HEVC decoder rendering frames to the preview `Surface` |
+| `GlassesScreen.kt` | Compose UI |
+| `PhotoSink.kt` | Where captures go (HTTP POST of a JPEG). Replace with your backend call |
+
+## Caveats
+
+- **Not compiled or run yet.** Written from Meta's docs and CameraAccess sample without an Android SDK on
+  this machine. Expect small compile fixes (SDK type/method names were not all verifiable).
+- Live frames are HEVC (`compressVideo = true`); the preview is decoded with `MediaCodec`. If the picture
+  stays black, compare with the sample's `HevcDecoder` and `csdCollector` (it feeds codec-config data explicitly).
+- To analyze frames continuously, prefer repeated `capturePhoto()` (gives a `Bitmap`/HEIC) over
+  decoding the HEVC stream yourself.
+- Stream runs only while the app is foregrounded; the sample uses a `connectedDevice` foreground service to keep it alive.
+- Bandwidth is Bluetooth Classic: the SDK lowers resolution, then frame rate (not below 15 fps) when constrained.
+- **Mock glasses** switch: pairs a fake Ray-Ban Meta via `MockDeviceKit` and feeds it the phone's back camera
+  (asks for the phone CAMERA permission). Use it to develop without glasses, or when the real ones are busy.
+  Turn it off before using real glasses, since mock registration replaces the real one in dev mode.
+  `CameraFacing.BACK` is a guess at the enum value; adjust if it doesn't compile.
