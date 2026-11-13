@@ -1,0 +1,12 @@
+# Copy to local.properties (git-ignored) and adjust.
+sdk.dir=C\:\\Users\\<you>\\AppData\\Local\\Android\\Sdk
+
+# Meta Wearables DAT credentials.
+# In Developer Mode on the phone, "0" is correct for both.
+# For production, take them from the Meta Wearables Developer Center
+# (project > Configuration tab).
+mwdat.applicationId=0
+mwdat.clientToken=0
+
+# Where captured photos get POSTed (see PhotoSink.kt). Emulator -> host PC is 10.0.2.2.
+backend.url=http://10.0.2.2:8000/upload
