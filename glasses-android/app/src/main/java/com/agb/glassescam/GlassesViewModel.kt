@@ -33,6 +33,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
 import com.meta.wearable.dat.display.views.Alignment
 import com.meta.wearable.dat.display.views.CornerRadius
+import com.meta.wearable.dat.display.views.IconName
 import com.meta.wearable.dat.display.views.ImageSize
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
@@ -86,6 +87,14 @@ data class UiState(
     val liveStatus: String = "",
     val liveImage: Bitmap? = null,  // what was last drawn on the glasses (shown on the phone too)
     val quickArmed: Boolean = false, // quick-shot mode: no stream, glasses button/gesture takes a photo
+    // Memory mode: frames go to the backend's vector database (GlassesChannel). Armed = session, inputs and
+    // display attached; streaming = 2 fps frames going up; sending = a single photo on its way.
+    val memoryArmed: Boolean = false,
+    val memoryStreaming: Boolean = false,
+    val memorySending: Boolean = false,
+    val memoryStatus: String = "",
+    val memoryConnection: String = "Disconnected",
+    val glassesMessage: GlassesMessage? = null, // the trigger message on the glasses right now
     val photos: List<java.io.File> = emptyList(), // gallery, newest first
     val message: String = "",
 )
@@ -100,7 +109,7 @@ class GlassesViewModel : ViewModel() {
     private var stream: Stream? = null
     private var streamJobs = mutableListOf<Job>()
 
-    private enum class Mode { NONE, STREAM, QUICK, SNAP, LIVE }
+    private enum class Mode { NONE, STREAM, QUICK, SNAP, LIVE, MEMORY }
 
     // Live segment: the loop, and a way to push a bitmap to the glasses display (set when a display attaches).
     private var liveJob: Job? = null
@@ -147,6 +156,7 @@ class GlassesViewModel : ViewModel() {
     private var receivedCount = 0
     private var pendingShortPress: Job? = null
     private var showOnGlasses: (suspend (String) -> Unit)? = null // set only on display glasses
+    private var renderMemoryOnGlasses: (suspend () -> Unit)? = null // memory mode's screen, ditto
 
     private var decoder: HevcDecoder? = null
     private val decoderLock = Any()
@@ -309,6 +319,7 @@ class GlassesViewModel : ViewModel() {
                         Mode.QUICK -> startQuick(s)
                         Mode.SNAP -> startSnap(s)
                         Mode.LIVE -> startSnapStream(s, live = true)
+                        Mode.MEMORY -> startMemory(s)
                         else -> startCamera(s)
                     }
                     DeviceSessionState.STOPPED -> cleanup()
@@ -439,9 +450,12 @@ class GlassesViewModel : ViewModel() {
         )
     }
 
-    private fun startGlassesInputs(s: DeviceSession) {
+    private fun startGlassesInputs(
+        s: DeviceSession,
         // CAPTURE_BUTTON: the physical button on Ray-Ban Meta etc. NEURAL_BAND: band gestures (Display glasses).
-        s.addInputs(InputsConfiguration(sources = setOf(InputSource.CAPTURE_BUTTON, InputSource.NEURAL_BAND)))
+        sources: Set<InputSource> = setOf(InputSource.CAPTURE_BUTTON, InputSource.NEURAL_BAND),
+    ) {
+        s.addInputs(InputsConfiguration(sources = sources))
             .onSuccess { inputs ->
                 streamJobs += viewModelScope.launch {
                     inputs.events.collect { handleGlassesInput(it) }
@@ -452,6 +466,7 @@ class GlassesViewModel : ViewModel() {
 
     private fun handleGlassesInput(event: InputEvent) {
         Log.i("GlassesVM", "glasses input: $event")
+        if (mode == Mode.MEMORY) return handleMemoryInput(event)
         when (event) {
             is InputEvent.Capture -> when (event.pressType) {
                 // A double press arrives as SHORT_PRESS then DOUBLE_PRESS, so wait briefly and
@@ -499,9 +514,49 @@ class GlassesViewModel : ViewModel() {
                         }
                     }
                 }
+                // Memory mode: a small icon top right while recording or sending, and the latest trigger
+                // message. Drawn again whenever one of those changes.
+                renderMemoryOnGlasses = {
+                    if (d.state.value == DisplayState.STARTED) {
+                        val ui = _ui.value
+                        d.sendContent {
+                            flexBox(direction = Direction.COLUMN, gap = 16, crossAlignment = Alignment.STRETCH) {
+                                flexBox(direction = Direction.ROW, gap = 8, alignment = Alignment.END) {
+                                    when {
+                                        ui.memoryStreaming -> {
+                                            icon(IconName.VIDEO_CAMERA)
+                                            text("REC", style = TextStyle.META)
+                                        }
+                                        ui.memorySending -> icon(IconName.PAPER_AIRPLANE)
+                                        else -> text(" ", style = TextStyle.META)
+                                    }
+                                }
+                                val message = ui.glassesMessage
+                                if (message?.type == MessageType.TRIGGER) {
+                                    // Something the backend noticed: a bell and a heading make it stand out.
+                                    flexBox(direction = Direction.ROW, gap = 8, crossAlignment = Alignment.CENTER) {
+                                        icon(IconName.BELL)
+                                        text(message.title, style = TextStyle.HEADING)
+                                    }
+                                    text(message.text, style = TextStyle.BODY)
+                                } else if (message != null) {
+                                    // A reply: the text first, the title (if any) as a small label above it.
+                                    if (message.title.isNotBlank()) text(message.title, style = TextStyle.META)
+                                    text(message.text, style = TextStyle.BODY)
+                                } else if (!ui.memoryStreaming && !ui.memorySending) {
+                                    text("Double tap: record   Tap: photo", style = TextStyle.META)
+                                }
+                            }
+                        }
+                    }
+                }
                 streamJobs += viewModelScope.launch {
                     d.state.first { it == DisplayState.STARTED }
-                    showOnGlasses?.invoke(if (mode == Mode.LIVE) "Live segment starting..." else "Ready - press to capture")
+                    when (mode) {
+                        Mode.MEMORY -> renderMemoryOnGlasses?.invoke()
+                        Mode.LIVE -> showOnGlasses?.invoke("Live segment starting...")
+                        else -> showOnGlasses?.invoke("Ready - press to capture")
+                    }
                 }
             },
             onFailure = { error, _ -> Log.i("GlassesVM", "no glasses display: ${error.description}") },
@@ -780,7 +835,8 @@ class GlassesViewModel : ViewModel() {
         }
     }
 
-    private fun handleSnapFrame(frame: VideoFrame) {
+    /** [current] is checked under the decoder lock: false drops a frame from a camera that has closed. */
+    private fun handleSnapFrame(frame: VideoFrame, current: () -> Boolean = { true }) {
         if (!frame.isCompressed) return
         val buf = frame.buffer
         val pos = buf.position()
@@ -789,6 +845,7 @@ class GlassesViewModel : ViewModel() {
         buf.position(pos)
 
         synchronized(snapLock) {
+            if (!current()) return
             val d = snapDecoder ?: SnapshotDecoder(frame.width, frame.height).also { snapDecoder = it }
             d.decode(bytes, frame.presentationTimeUs, frame.isCodecConfig)
         }
@@ -1004,6 +1061,308 @@ class GlassesViewModel : ViewModel() {
         }
     }
 
+    // ------------------------------------------------------------ memory mode
+
+    /*
+     * Memory mode sends what the glasses see to the backend's vector database (GlassesChannel), and shows the
+     * messages its triggers send back. Arming opens the session with the glasses' inputs and display but
+     * no camera. Then:
+     *  - stream: the phone button, a Neural Band (or touchpad) double tap, or a double press of the
+     *    capture button starts or stops a 2 fps video stream; every decoded frame is uploaded, one at a time.
+     *  - single photo: the phone button, one tap or one short press sends the next frame as a "single"
+     *    photo (also saved to the gallery). Without a running stream the camera opens just for it.
+     * The glasses show a camera icon top right while streaming and a paper plane while a photo is sent.
+     */
+    private val memoryChannel by lazy {
+        GlassesChannel(
+            scope = viewModelScope,
+            onStatus = { status ->
+                _ui.update { if (it.memoryArmed) it.copy(memoryConnection = status) else it }
+            },
+            onMessage = { message ->
+                viewModelScope.launch {
+                    if (_ui.value.memoryArmed) showGlassesMessage(message)
+                }
+            },
+        )
+    }
+    private var memoryLoop: Job? = null
+    private val memoryCameraJobs = mutableListOf<Job>()
+    private var memoryStreamId = ""
+    private var memorySent = 0
+    private var memoryStored = 0
+    @Volatile private var singleRequested = false // the next stream frame goes up as a single photo
+    @Volatile private var standaloneSingle = false // a photo opened the camera itself (no stream running)
+    private var memoryPhotoJob: Job? = null // that photo, so disarming cancels it
+    // Bumped (under snapLock) each time the memory camera opens or closes: a frame still being handled
+    // when the camera closes must not create a decoder that outlives it.
+    private var memoryCameraGeneration = 0
+    private var messageClearJob: Job? = null
+    private var lastSelectMs = 0L
+    private var pendingSelect: Job? = null
+
+    fun armMemory(requestPermission: suspend (Permission) -> PermissionStatus) =
+        openSession(Mode.MEMORY, requestPermission)
+
+    private fun startMemory(s: DeviceSession) {
+        if (_ui.value.memoryArmed) return
+        startGlassesInputs(
+            s,
+            setOf(InputSource.CAPTURE_BUTTON, InputSource.NEURAL_BAND, InputSource.CAPTOUCH),
+        )
+        startGlassesDisplay(s)
+        _ui.update {
+            it.copy(
+                memoryArmed = true,
+                memoryStatus = "Ready",
+            )
+        }
+        memoryChannel.start()
+        say("Memory mode armed. Double tap or double press to stream, tap or press once for one photo.")
+    }
+
+    private fun handleMemoryInput(event: InputEvent) {
+        when (event) {
+            is InputEvent.Capture -> when (event.pressType) {
+                // A double press arrives as SHORT_PRESS then DOUBLE_PRESS: hold the short press briefly.
+                CapturePressType.SHORT_PRESS -> {
+                    pendingShortPress?.cancel()
+                    pendingShortPress = viewModelScope.launch {
+                        delay(400)
+                        memoryPhoto()
+                    }
+                }
+                CapturePressType.DOUBLE_PRESS -> {
+                    pendingShortPress?.cancel()
+                    toggleMemoryStream()
+                }
+                else -> Unit
+            }
+            // The Neural Band and the touchpad only report single taps; two close together are a double tap.
+            is InputEvent.Select -> {
+                val now = SystemClock.elapsedRealtime()
+                if (now - lastSelectMs < DOUBLE_TAP_MS) {
+                    pendingSelect?.cancel()
+                    lastSelectMs = 0L
+                    toggleMemoryStream()
+                } else {
+                    lastSelectMs = now
+                    pendingSelect = viewModelScope.launch {
+                        delay(DOUBLE_TAP_MS)
+                        memoryPhoto()
+                    }
+                }
+            }
+            else -> Unit
+        }
+    }
+
+    fun toggleMemoryStream() {
+        if (_ui.value.memoryStreaming) stopMemoryStream() else startMemoryStream()
+    }
+
+    fun startMemoryStream() {
+        val s = session
+        if (mode != Mode.MEMORY || s == null || !_ui.value.memoryArmed) return say("Arm memory mode first")
+        if (_ui.value.memoryStreaming) return
+        if (!openMemoryCamera(s)) return
+        memoryStreamId = java.util.UUID.randomUUID().toString()
+        memorySent = 0
+        memoryStored = 0
+        _ui.update { it.copy(memoryStreaming = true, memoryStatus = "Streaming, waiting for video...") }
+        feedback?.started()
+        viewModelScope.launch { renderMemoryOnGlasses?.invoke() }
+        memoryLoop?.cancel()
+        memoryLoop = viewModelScope.launch {
+            while (isActive) {
+                val started = SystemClock.elapsedRealtime()
+                runCatching { memoryCycle() }.onFailure {
+                    if (it is CancellationException) throw it
+                    Log.w("GlassesVM", "memory cycle failed", it)
+                    _ui.update { ui -> ui.copy(memoryStatus = "Error: ${it.message}") }
+                }
+                delay((MEMORY_FRAME_MS - (SystemClock.elapsedRealtime() - started)).coerceAtLeast(50L))
+            }
+        }
+    }
+
+    fun stopMemoryStream() {
+        if (!_ui.value.memoryStreaming) return
+        memoryLoop?.cancel()
+        memoryLoop = null
+        // A photo asked of the stream will not come now; one that opened the camera itself closes it.
+        val dropped = singleRequested
+        singleRequested = false
+        if (!standaloneSingle) closeMemoryCamera()
+        _ui.update {
+            it.copy(
+                memoryStreaming = false,
+                memorySending = if (dropped) false else it.memorySending,
+                memoryStatus = "Stopped: $memorySent frames sent, $memoryStored stored",
+            )
+        }
+        feedback?.done()
+        viewModelScope.launch { renderMemoryOnGlasses?.invoke() }
+    }
+
+    /** One photo to the backend: the next stream frame, or (not streaming) a frame from a short-lived stream. */
+    fun memoryPhoto() {
+        val s = session
+        if (mode != Mode.MEMORY || s == null || !_ui.value.memoryArmed) return say("Arm memory mode first")
+        if (_ui.value.memorySending) return say("Busy: still sending the previous photo")
+        _ui.update { it.copy(memorySending = true) }
+        feedback?.started()
+        viewModelScope.launch { renderMemoryOnGlasses?.invoke() }
+        if (_ui.value.memoryStreaming) {
+            singleRequested = true // memoryCycle sends it and clears memorySending
+            return
+        }
+        standaloneSingle = true
+        memoryPhotoJob = viewModelScope.launch {
+            try {
+                if (!openMemoryCamera(s)) return@launch
+                _ui.update { it.copy(memoryStatus = "Opening the camera for one photo...") }
+                // The decoder appears with the first frame; the picture is clean after the first keyframe.
+                val decoder = withTimeoutOrNull(8_000) {
+                    var d: SnapshotDecoder? = null
+                    while (d == null) {
+                        d = synchronized(snapLock) { snapDecoder }
+                        if (d == null) delay(100)
+                    }
+                    d
+                }
+                if (decoder != null) delay(SINGLE_WARMUP_MS)
+                val jpeg = decoder?.let { grabFrame(it) }
+                if (!_ui.value.memoryStreaming) closeMemoryCamera()
+                if (jpeg == null) {
+                    feedback?.failed()
+                    _ui.update { it.copy(memoryStatus = "No video frame arrived for the photo") }
+                    return@launch
+                }
+                uploadFrame(jpeg, "single")
+            } finally {
+                standaloneSingle = false
+                _ui.update { it.copy(memorySending = false) }
+                renderMemoryOnGlasses?.invoke()
+            }
+        }
+    }
+
+    private fun openMemoryCamera(s: DeviceSession): Boolean {
+        if (camera != null) return true
+        // 504x896 at 2 fps: the lowest frame rate the glasses offer, enough for memories and triggers.
+        val config = StreamConfiguration(videoQuality = VideoQuality.MEDIUM, frameRate = 2, compressVideo = true)
+        var opened = false
+        s.addCamera(config).fold(
+            onSuccess = { cam ->
+                camera = cam
+                val st = cam.stream
+                stream = st
+                memoryCameraJobs += viewModelScope.launch {
+                    st.state.collect { state -> _ui.update { it.copy(streamState = "memory $state") } }
+                }
+                val generation = synchronized(snapLock) { ++memoryCameraGeneration }
+                memoryCameraJobs += viewModelScope.launch(Dispatchers.Default) {
+                    st.videoStream.collect { handleSnapFrame(it) { memoryCameraGeneration == generation } }
+                }
+                st.start().onFailure { error, _ -> say("Stream start failed: ${error.description}") }
+                opened = true
+            },
+            onFailure = { error, _ ->
+                say("Camera failed: ${error.description}")
+                _ui.update { it.copy(memoryStatus = "Camera failed: ${error.description}") }
+            },
+        )
+        return opened
+    }
+
+    /** Stops the video but keeps the session, inputs and display, so the stream can start again. */
+    private fun closeMemoryCamera() {
+        memoryCameraJobs.forEach { it.cancel() }
+        memoryCameraJobs.clear()
+        stream?.stop()
+        camera?.stop()
+        stream = null
+        camera = null
+        synchronized(snapLock) {
+            memoryCameraGeneration++ // frames still in flight from this camera are dropped
+            snapDecoder?.release()
+            snapDecoder = null
+        }
+    }
+
+    private suspend fun memoryCycle() {
+        val decoder = synchronized(snapLock) { snapDecoder }
+            ?: return _ui.update { it.copy(memoryStatus = "Streaming, waiting for video...") }
+        val jpeg = grabFrame(decoder) ?: return _ui.update { it.copy(memoryStatus = "No video frame") }
+        val single = singleRequested
+        singleRequested = false
+        try {
+            uploadFrame(jpeg, if (single) "single" else "stream")
+        } finally {
+            if (single) {
+                _ui.update { it.copy(memorySending = false) }
+                renderMemoryOnGlasses?.invoke()
+            }
+        }
+    }
+
+    private suspend fun grabFrame(decoder: SnapshotDecoder): ByteArray? =
+        withTimeoutOrNull(3_000) {
+            suspendCancellableCoroutine<ByteArray> { cont ->
+                decoder.requestSnapshot { cont.resume(it) }
+                cont.invokeOnCancellation { decoder.cancelSnapshot() }
+            }
+        } ?: run {
+            decoder.cancelSnapshot()
+            null
+        }
+
+    private suspend fun uploadFrame(jpeg: ByteArray, source: String) {
+        if (source == "single") {
+            appContext?.let { ctx ->
+                PhotoStore.saveJpeg(ctx, jpeg)
+                _ui.update { it.copy(photos = PhotoStore.list(ctx)) }
+            }
+        }
+        when (val out = memoryChannel.send(jpeg, source, if (source == "stream") memoryStreamId else "")) {
+            is FrameOutcome.Ok -> {
+                if (source == "stream") {
+                    memorySent++
+                    if (out.stored) memoryStored++
+                } else {
+                    feedback?.done()
+                }
+                val what = if (source == "stream") "$memorySent frames sent, $memoryStored stored" else
+                    if (out.stored) "Photo stored" else "Photo sent: ${out.note ?: "not stored"}"
+                _ui.update { it.copy(memoryStatus = what) }
+                out.message?.let { showGlassesMessage(it) }
+            }
+            is FrameOutcome.Fail -> {
+                if (source == "single") feedback?.failed()
+                _ui.update { it.copy(memoryStatus = "Upload failed: ${out.message}") }
+            }
+        }
+    }
+
+    private suspend fun showGlassesMessage(message: GlassesMessage) {
+        _ui.update { it.copy(glassesMessage = message) }
+        feedback?.done()
+        renderMemoryOnGlasses?.invoke()
+        messageClearJob?.cancel()
+        messageClearJob = viewModelScope.launch {
+            delay(MESSAGE_MS)
+            _ui.update { it.copy(glassesMessage = null) }
+            renderMemoryOnGlasses?.invoke()
+        }
+    }
+
+    fun dismissGlassesMessage() {
+        messageClearJob?.cancel()
+        _ui.update { it.copy(glassesMessage = null) }
+        viewModelScope.launch { renderMemoryOnGlasses?.invoke() }
+    }
+
     // ------------------------------------------------------------------ photo
 
     /**
@@ -1011,6 +1370,7 @@ class GlassesViewModel : ViewModel() {
      * saves it to the gallery, then hands it to [PhotoSink].
      */
     fun capturePhoto() {
+        if (mode == Mode.MEMORY) return memoryPhoto()
         if (mode == Mode.LIVE) return setCrosshairToObject() // in live mode the Capture button moves the crosshair
         if (mode == Mode.QUICK || mode == Mode.SNAP) return triggerCapture()
         val st = stream ?: return say("Start streaming first")
@@ -1079,7 +1439,23 @@ class GlassesViewModel : ViewModel() {
         lastLiveJpeg = null
         lastLiveResult = null
         liveFlash = null
-        _ui.update { it.copy(quickArmed = false, snapArmed = false, liveArmed = false, liveImage = null, liveStatus = "") }
+        memoryLoop?.cancel()
+        memoryLoop = null
+        memoryChannel.close()
+        memoryCameraJobs.forEach { it.cancel() }
+        memoryCameraJobs.clear()
+        messageClearJob?.cancel()
+        pendingSelect?.cancel()
+        memoryPhotoJob?.cancel()
+        memoryPhotoJob = null
+        singleRequested = false
+        renderMemoryOnGlasses = null
+        _ui.update {
+            it.copy(
+                quickArmed = false, snapArmed = false, liveArmed = false, liveImage = null, liveStatus = "",
+                memoryArmed = false, memoryStreaming = false, memorySending = false, glassesMessage = null,
+            )
+        }
         camera = null
         stream = null
         session = null // a stopped session can't be restarted; create a new one next time
@@ -1095,6 +1471,13 @@ class GlassesViewModel : ViewModel() {
     private fun say(msg: String) {
         Log.i("GlassesVM", msg)
         _ui.update { it.copy(message = msg) }
+    }
+
+    private companion object {
+        const val MEMORY_FRAME_MS = 500L // 2 frames a second
+        const val DOUBLE_TAP_MS = 450L // two taps closer than this are a double tap
+        const val SINGLE_WARMUP_MS = 1_200L // after the camera opens, before a single photo is taken
+        const val MESSAGE_MS = 10_000L // how long a trigger message stays on the glasses
     }
 
     override fun onCleared() {

@@ -5,18 +5,27 @@ Clients: the browser harness (frontend /glasses) and, later, glasses-android. Th
 /ws (app/glasses/channel.py); both call the same code in app/glasses/actions.py.
 """
 
+from datetime import datetime
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, WebSocket
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, WebSocket
 from fastapi.responses import FileResponse, Response
+from sqlmodel import col, select
 
 from app.auth import ViewerDep
 from app.db import SessionDep
-from app.glasses import actions, channel, photos, reminders, remote_memory, screens
+from app.glasses import actions, channel, frames, photos, reminders, remote_memory, screens
 from app.glasses.actions import Command, WatchResult
 from app.glasses.layout import GlassesReply
 from app.llm import Chat, Embedder, get_chat, get_embedder
-from app.models import Reminder, ReminderCreate, ReminderPublic
+from app.models import (
+    Reminder,
+    ReminderCreate,
+    ReminderPublic,
+    Trigger,
+    TriggerCreate,
+    TriggerPublic,
+)
 
 router = APIRouter(prefix="/glasses", tags=["glasses"])
 
@@ -163,3 +172,75 @@ async def watch(
     chat: ChatDep,
 ):
     return await actions.watch(session, viewer, await photo.read(photos.MAX_BYTES + 1), chat)
+
+
+@router.post("/frames", response_model=frames.FrameReply)
+async def upload_frame(
+    frame: Annotated[UploadFile, File(description="One image, usually a JPEG")],
+    session: SessionDep,
+    viewer: ViewerDep,
+    chat: ChatDep,
+    embed: EmbedderDep,
+    source: Annotated[frames.Source, Form()] = "single",
+    stream_id: Annotated[str, Form(max_length=100)] = "",
+    seen_at: Annotated[datetime | None, Form()] = None,
+):
+    """One frame from the glasses: embedded, stored as a memory in the glasses collection, and
+    checked against the triggers.
+
+    `source` is "stream" for frames of a running stream (twice a second; a frame much like the
+    last one stored from the same `stream_id` is not stored again) or "single" for a photo the
+    wearer took (always stored). Most answers carry no `message`; when a trigger fires,
+    `message` is what to show on the glasses.
+    """
+    return await actions.memory_frame(
+        session,
+        viewer,
+        await frame.read(actions.MAX_FRAME + 1),
+        chat,
+        embed,
+        source,
+        stream_id,
+        seen_at,
+    )
+
+
+@router.get("/triggers", response_model=list[TriggerPublic])
+async def list_triggers(session: SessionDep, viewer: ViewerDep):
+    query = select(Trigger).order_by(col(Trigger.id))
+    if viewer.owners is not None:
+        query = query.where(col(Trigger.owner_id).in_(viewer.owners))
+    return (await session.exec(query)).all()
+
+
+@router.post("/triggers", response_model=TriggerPublic, status_code=201)
+async def create_trigger(body: TriggerCreate, session: SessionDep, viewer: ViewerDep):
+    trigger = Trigger.model_validate(body, update={"owner_id": viewer.id})
+    session.add(trigger)
+    await session.commit()
+    await session.refresh(trigger)
+    return trigger
+
+
+@router.put("/triggers/{id}", response_model=TriggerPublic)
+async def update_trigger(id: int, body: TriggerCreate, session: SessionDep, viewer: ViewerDep):
+    trigger = await session.get(Trigger, id)
+    if trigger is None or not viewer.can_change(trigger.owner_id):
+        raise HTTPException(404, "No such trigger")
+    if body.watch_for != trigger.watch_for:
+        await frames.forget_trigger_vector(session, id)
+    trigger.sqlmodel_update(body.model_dump())
+    session.add(trigger)
+    await session.commit()
+    await session.refresh(trigger)
+    return trigger
+
+
+@router.delete("/triggers/{id}", status_code=204)
+async def delete_trigger(id: int, session: SessionDep, viewer: ViewerDep):
+    trigger = await session.get(Trigger, id)
+    if trigger is None or not viewer.can_change(trigger.owner_id):
+        raise HTTPException(404, "No such trigger")
+    await frames.forget_trigger_vector(session, id)
+    await session.delete(trigger)
+    await session.commit()

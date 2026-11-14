@@ -397,6 +397,16 @@ def test_watch_sees_nothing_when_the_object_is_absent(client):
     assert watch(client)["seen"] == []
 
 
+def test_watch_only_cools_down_the_reminder_it_shows(client):
+    for target in ("stool", "dog"):
+        client.post("/api/glasses/reminders", json={"text": f"warn me about the {target}"})
+    use_models(chat=says("1, 2"))
+
+    assert watch(client)["warning"]["speech"] == "Careful: stool ahead."
+    assert watch(client)["warning"]["speech"] == "Careful: dog ahead."
+    assert watch(client)["warning"] is None
+
+
 def test_watch_falls_back_to_the_memory_apis_description(client, monkeypatch):
     client.post("/api/glasses/reminders", json={"text": "warn me about the stool"})
     monkeypatch.setattr(remote_memory, "configured", lambda: True)

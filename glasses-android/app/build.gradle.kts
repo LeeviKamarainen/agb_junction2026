@@ -49,6 +49,15 @@ android {
             "BACKEND_URL",
             "\"${localProps.getProperty("backend.url", "")}\""
         )
+        // The Junction backend (its address, without /api) for memory mode: frames go to
+        // <glasses.api>/api/glasses/ws (see GlassesChannel.kt).
+        buildConfigField(
+            "String",
+            "GLASSES_API",
+            "\"${localProps.getProperty("glasses.api", "")}\""
+        )
+        // Optional existing app login (not the memory API token); blank creates a temporary guest.
+        buildConfigField("String", "GLASSES_TOKEN", "\"${localProps.getProperty("glasses.token", "")}\"")
     }
 
     buildFeatures {
@@ -66,6 +75,10 @@ android {
 }
 
 dependencies {
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
+    testImplementation("org.json:json:20240303")
     implementation(libs.androidx.activity.compose)
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.compose.foundation)

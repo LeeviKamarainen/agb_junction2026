@@ -8,7 +8,7 @@ import { api } from "@/lib/api/browser";
 import { nextPath } from "@/lib/session";
 
 /**
- * Starts a temporary guest account: no name or password, 30 minutes, then it and everything it
+ * Starts a temporary guest account: no name or password, 60 minutes, then it and everything it
  * added are deleted. Goes on to ?next= (or the memory lab).
  */
 export function GuestButton({
@@ -50,7 +50,7 @@ export function GuestButton({
         ) : (
           <UserRoundPlus aria-hidden="true" />
         )}
-        Start a 30-minute guest session
+        Start a 60-minute guest session
       </Button>
       {error ? (
         <p className="text-sm text-destructive" role="alert">

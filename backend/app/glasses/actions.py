@@ -18,12 +18,40 @@ from pydantic import BaseModel, Field, model_validator
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.auth import Viewer
-from app.glasses import memory, photos, reminders, remote_memory, screens
+from app.glasses import frames, memory, photos, reminders, remote_memory, screens
 from app.glasses.intents import BUTTON_ACTIONS, interpret
 from app.glasses.layout import GlassesReply
 from app.llm import Chat, Embedder, UpstreamError
 
 log = logging.getLogger(__name__)
+
+MAX_FRAME = 10 * 1024 * 1024
+
+
+async def memory_frame(
+    session: AsyncSession,
+    viewer: Viewer,
+    data: bytes,
+    chat: Chat | None,
+    embed: Embedder | None,
+    source: frames.Source = "single",
+    stream_id: str = "",
+    seen_at: datetime | None = None,
+) -> frames.FrameReply:
+    """The memory-mode upload, shared by HTTP and the Android socket."""
+    if embed is None:
+        raise HTTPException(503, "No embedding model configured: set EMBED_URL")
+    if len(data) > MAX_FRAME:
+        raise HTTPException(413, "frame is larger than 10 MB")
+    when = seen_at if seen_at is None or seen_at.tzinfo else seen_at.replace(tzinfo=UTC)
+    try:
+        return await frames.receive(
+            session, data, embed, chat, source, stream_id, when, viewer.id, viewer.owners
+        )
+    except ValueError as error:
+        raise HTTPException(415, str(error)) from error
+    except UpstreamError as error:
+        raise HTTPException(502, str(error)) from error
 
 
 class Command(BaseModel):
@@ -175,11 +203,11 @@ async def watch(
     seen = [watched[i] for i in found]
     now = datetime.now(UTC)
     due = [r for r in seen if reminders.due(r, now)]
-    for reminder in due:
-        reminder.last_warned_at = now
-        session.add(reminder)
-    await session.commit()
     first = due[0] if due else None
+    if first is not None:
+        first.last_warned_at = now
+        session.add(first)
+    await session.commit()
     return WatchResult(
         seen=[r.target for r in seen],
         warning=screens.warning(first.target, first.text) if first else None,

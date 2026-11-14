@@ -49,6 +49,8 @@ VECTOR_TABLES: dict[str, VectorTable] = {
     "memory_embedding": VectorTable(
         768, {"kind": "TEXT", "collection": "TEXT", "owner": "INTEGER"}
     ),
+    # One row per Trigger, same id: its watch_for embedding.
+    "trigger_embedding": VectorTable(768),
 }
 
 

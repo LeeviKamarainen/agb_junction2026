@@ -13,5 +13,14 @@ mwdat.clientToken=0
 segment.url=https://65-108-32-171.sslip.io/segment
 segment.token=PASTE_TOKEN_HERE
 
+# Memory mode: the Junction backend that embeds frames and answers with trigger messages (GlassesChannel.kt).
+# Its address without /api, e.g. https://<vm-ip-with-dashes>.sslip.io, or http://10.0.2.2:8000 for a
+# backend on this PC seen from the emulator (a real phone needs the PC's LAN address instead).
+glasses.api=
+# Optional token from /api/auth/login or /api/auth/guest, to share that user's memories and triggers.
+# Leave blank to create a temporary guest automatically (expires after 60 minutes).
+# This is the app login token, NOT GLASS_API_TOKEN or the segmentation token. Compiled into the APK.
+glasses.token=
+
 # Where captured photos get POSTed (see PhotoSink.kt). Emulator -> host PC is 10.0.2.2.
 backend.url=http://10.0.2.2:8000/upload

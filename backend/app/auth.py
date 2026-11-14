@@ -30,7 +30,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app import media, vectors
 from app.db import SessionDep
-from app.models import AuthSession, Memory, Reminder, User
+from app.models import AuthSession, Memory, Reminder, Trigger, User
 from app.search import (
     DEMO_OWNER,  # memories every user sees; the admin adds them with demo=true
     TABLE,
@@ -41,7 +41,7 @@ log = logging.getLogger(__name__)
 
 COOKIE = "session"
 SESSION_DAYS = 30  # the admin's logins
-GUEST_MINUTES = 30  # a guest account, its login and its memories
+GUEST_MINUTES = 60  # a guest account, its login and its memories
 USERNAME = re.compile(r"[a-z0-9][a-z0-9_.-]{2,31}")
 _SCRYPT = {"n": 2**14, "r": 8, "p": 1}  # about 50 ms and 16 MB per hash
 
@@ -141,30 +141,40 @@ async def create_guest(session: AsyncSession) -> User:
     await purge_expired_guests(session)
     now = datetime.now(UTC)
     while True:
-        name = f"guest-{secrets.token_hex(3)}"
+        name = f"guest-{secrets.token_hex(8)}"
         if (await session.exec(select(User).where(User.username == name))).first() is None:
             break
     guest = User(
         username=name,
-        password_hash="!",  # matches no password: guests cannot log in again
+        password_hash="!",  # guests return by username, never through the admin password login
         role="guest",
         created_at=now,
         expires_at=now + timedelta(minutes=GUEST_MINUTES),
     )
     session.add(guest)
+    await session.flush()
+    assert guest.id is not None
+    await anyio.to_thread.run_sync(_delete_guest_files, guest.id)
     await session.commit()
     await session.refresh(guest)
     return guest
 
 
 def _delete_files(media_files: list[str], user_ids: list[int]) -> None:
-    from app.glasses import photos  # here: app.glasses imports this module
-
     for name in media_files:
         media.delete(name)
     for user_id in user_ids:
-        shutil.rmtree(photos.photos_dir() / str(user_id), ignore_errors=True)
-        (photos.photos_dir() / f"memory-batch-{user_id}.json").unlink(missing_ok=True)
+        _delete_guest_files(user_id)
+
+
+def _delete_guest_files(user_id: int) -> None:
+    from app.glasses import photos  # here: app.glasses imports this module
+
+    try:
+        shutil.rmtree(photos.photos_dir() / str(user_id))
+    except FileNotFoundError:
+        pass
+    (photos.photos_dir() / f"memory-batch-{user_id}.json").unlink(missing_ok=True)
 
 
 async def purge_expired_guests(session: AsyncSession) -> int:
@@ -184,6 +194,9 @@ async def purge_expired_guests(session: AsyncSession) -> int:
             if memory.image_file:
                 files.append(memory.image_file)
             await session.delete(memory)
+        for trigger in await session.exec(select(Trigger).where(Trigger.owner_id == user.id)):
+            await vectors.delete(connection, "trigger_embedding", trigger.id or 0)
+            await session.delete(trigger)
         for reminder in await session.exec(select(Reminder).where(Reminder.owner_id == user.id)):
             await session.delete(reminder)
         logins = await session.exec(select(AuthSession).where(AuthSession.user_id == user.id))

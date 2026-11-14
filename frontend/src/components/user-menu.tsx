@@ -56,9 +56,9 @@ export function UserMenu({ requireLogin = false, className = "" }: Props) {
 
   const admin = user.role === "admin";
   return (
-    <span className={`inline-flex items-center gap-2 text-sm ${className}`}>
+    <span className={`inline-flex flex-wrap items-center gap-2 text-sm ${className}`}>
       <span
-        className="inline-flex items-center gap-1.5"
+        className="inline-flex flex-wrap items-center gap-1.5"
         title={
           admin
             ? "Admin: sees every user’s memories"
@@ -70,7 +70,12 @@ export function UserMenu({ requireLogin = false, className = "" }: Props) {
         ) : (
           <UserRound size={15} aria-hidden="true" />
         )}
-        <span className="font-medium">{user.username}</span>
+        <span
+          className="select-all font-medium"
+          title={admin ? undefined : "Save this username to return to your temporary account"}
+        >
+          {user.username}
+        </span>
         <span className="rounded-full border border-border px-1.5 text-xs text-muted-foreground">
           {admin ? "admin" : "guest"}
         </span>
