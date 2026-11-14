@@ -77,7 +77,7 @@ Things to try: ask "where did I leave my keys?", say "remind me about the stool"
 
 1. Pair the glasses in the Meta AI app, turn on Developer Mode, and build `glasses-android` in Android Studio (setup is in [its README](glasses-android/README.md)).
 2. Copy `local.properties.example` to `local.properties` and set `glasses.api` to the backend's address (without `/api`). Without `glasses.token` the app starts a guest account by itself.
-3. In the app press **Register**, then **Arm memory mode**. A double tap or double press of the capture button starts and stops the 2 fps stream; one tap or short press sends one photo; holding the capture button records a voice message, which is turned into text on the phone and sent as a command.
+3. In the app press **Register**, then **Arm memory mode**. A double tap or double press of the capture button starts and stops the 2 fps stream; one tap or short press sends one photo; holding the capture button records a voice message, which is turned into text on the phone and sent to Gemma as a question.
 4. Triggers and reminders now warn you on the display. Memories show up in the Memory lab.
 
 The memory service itself (embedding, the map page, deploying to the Gemma server) is described in [memory/README.md](memory/README.md).

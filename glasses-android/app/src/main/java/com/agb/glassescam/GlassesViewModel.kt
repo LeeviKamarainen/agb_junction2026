@@ -1309,7 +1309,7 @@ class GlassesViewModel : ViewModel() {
 
     /**
      * Opens the glasses' microphone (see [VoiceInput]) until [stopVoice]: a press of the capture button, a
-     * tap, or the phone's button. Only the transcript goes to the backend, as a command over the memory
+     * tap, or the phone's button. Only the transcript goes to the backend, as a question over the memory
      * WebSocket. [asQuestion]: the backend's last reply asked for a question about the photos.
      */
     fun startVoice(asQuestion: Boolean = false) {
@@ -1369,7 +1369,6 @@ class GlassesViewModel : ViewModel() {
         if (!_ui.value.voiceRecording) return
         voiceLimit?.cancel()
         voiceStoppedAtMs = SystemClock.elapsedRealtime()
-        val asQuestion = _ui.value.voiceQuestion
         val generation = voiceGeneration // the recording that is ending now
         _ui.update { it.copy(voiceRecording = false, voiceSending = true, memoryStatus = "Finishing...") }
         viewModelScope.launch {
@@ -1386,7 +1385,7 @@ class GlassesViewModel : ViewModel() {
                 }
                 _ui.update { it.copy(memoryStatus = "Sending \"$text\"") }
                 renderMemoryOnGlasses?.invoke()
-                when (val out = memoryChannel.command(text, asQuestion)) {
+                when (val out = memoryChannel.command(text)) {
                     is CommandOutcome.Ok -> {
                         _ui.update { it.copy(memoryStatus = "Sent \"$text\"") }
                         listenAgain = out.listenQuestion
