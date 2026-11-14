@@ -11,7 +11,8 @@ import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta, timezone
 
-from sqlmodel import Session, col, select
+from sqlmodel import col, select
+from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app import vectors
 from app.llm import Embedder
@@ -108,7 +109,7 @@ MOMENTS: list[Moment] = [
         "15:25",
         "Mentor",
         "Talked with a mentor wearing a green Junction lanyard about "
-        "privacy: memories stay per user and guests expire after 30 minutes.",
+        "privacy: memories stay per user and guests expire after an hour.",
     ),
     Moment(
         "16:10",
@@ -142,36 +143,36 @@ def timeline() -> list[Moment]:
     return sorted(MOMENTS, key=lambda moment: moment.at)
 
 
-def _stored(session: Session) -> list[Memory]:
+async def _stored(session: AsyncSession) -> list[Memory]:
     query = select(Memory).where(Memory.owner_id == DEMO_OWNER, Memory.collection == COLLECTION)
-    return list(session.exec(query.order_by(col(Memory.created_at), col(Memory.id))))
+    return list(await session.exec(query.order_by(col(Memory.created_at), col(Memory.id))))
 
 
 def _aware(moment: datetime) -> datetime:
     return moment if moment.tzinfo else moment.replace(tzinfo=UTC)
 
 
-def is_loaded(session: Session) -> bool:
+async def is_loaded(session: AsyncSession) -> bool:
     """Whether the stored demo memories match the dataset, so asking about them works."""
-    stored = [(_aware(memory.created_at), memory.text) for memory in _stored(session)]
+    stored = [(_aware(memory.created_at), memory.text) for memory in await _stored(session)]
     return stored == [(moment.at, moment.text) for moment in timeline()]
 
 
-def load_demo_memories(session: Session, embed: Embedder) -> bool:
+async def load_demo_memories(session: AsyncSession, embed: Embedder) -> bool:
     """Store the dataset as demo memories unless they are already there; True when it stored
     them. Replaces stale copies. Raises app.llm.UpstreamError when the embedding model fails, and
     then leaves the stored memories as they were."""
-    if is_loaded(session):
+    if await is_loaded(session):
         return False
     moments = timeline()
-    embeddings = embed([moment.text for moment in moments])  # before deleting anything
-    for memory in _stored(session):
+    embeddings = await embed([moment.text for moment in moments])  # before deleting anything
+    for memory in await _stored(session):
         assert memory.id is not None
-        vectors.delete(session.connection(), TABLE, memory.id)
-        session.delete(memory)
-    session.flush()
+        await vectors.delete(await session.connection(), TABLE, memory.id)
+        await session.delete(memory)
+    await session.flush()
     for moment, embedding in zip(moments, embeddings, strict=True):
-        add_memory(
+        await add_memory(
             session,
             "text",
             embedding,
@@ -180,6 +181,6 @@ def load_demo_memories(session: Session, embed: Embedder) -> bool:
             collection=COLLECTION,
             owner_id=DEMO_OWNER,
         )
-    session.commit()
+    await session.commit()
     log.info("Stored %d demo memories", len(moments))
     return True

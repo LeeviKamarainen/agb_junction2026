@@ -1,5 +1,6 @@
 import io
 
+import anyio
 import pytest
 from PIL import Image
 
@@ -30,7 +31,7 @@ class Scene:
         self.texts = {"a set of keys": unit(0), "a dog": unit(1)}
         self.calls = 0
 
-    def __call__(self, inputs):
+    async def __call__(self, inputs):
         self.calls += 1
         return [
             self.image if i.startswith("data:image/") else self.texts.get(i, unit(WIDTH - 1))
@@ -137,7 +138,7 @@ def test_trigger_vectors_are_embedded_once(client, scene):
 def test_the_chat_model_writes_the_message(client, scene):
     seen = []
 
-    def chat(messages, tools):
+    async def chat(messages, tools):
         seen.append(messages)
         return {"role": "assistant", "content": "Your keys are on the hall table."}
 
@@ -204,7 +205,10 @@ def test_the_seeded_example_trigger_exists(client):
 
 
 def test_a_chat_model_answering_oddly_still_shows_the_instruction(client, scene):
-    app.dependency_overrides[optional_chat] = lambda: lambda messages, tools: None  # not a dict
+    async def odd_chat(messages, tools):
+        return None
+
+    app.dependency_overrides[optional_chat] = lambda: odd_chat  # not a dict
     add_trigger(client)
 
     body = send(client).json()
@@ -216,8 +220,9 @@ def test_a_chat_model_answering_oddly_still_shows_the_instruction(client, scene)
 def test_the_trigger_is_committed_as_fired_before_the_message_is_written(client, scene):
     fired_during_chat = []
 
-    def chat(messages, tools):
-        fired_during_chat.append(client.get("/api/glasses/triggers").json()[0]["last_fired_at"])
+    async def chat(messages, tools):
+        response = await anyio.to_thread.run_sync(lambda: client.get("/api/glasses/triggers"))
+        fired_during_chat.append(response.json()[0]["last_fired_at"])
         return {"role": "assistant", "content": "Keys!"}
 
     app.dependency_overrides[optional_chat] = lambda: chat
@@ -271,10 +276,10 @@ def test_socket_memory_frames_do_not_queue_and_ping_stays_responsive(client, sce
 
     checking, release = threading.Event(), threading.Event()
 
-    def slow(inputs):
+    async def slow(inputs):
         checking.set()
-        assert release.wait(5)
-        return scene(inputs)
+        assert await anyio.to_thread.run_sync(release.wait, 5)
+        return await scene(inputs)
 
     app.dependency_overrides[optional_embedder] = lambda: slow
     with client.websocket_connect("/api/glasses/ws") as ws:
@@ -334,7 +339,7 @@ def test_an_open_socket_refuses_work_after_its_guest_expires(client, guest, scen
     class Later:
         @staticmethod
         def now(tz):
-            return datetime.now(UTC) + timedelta(minutes=31)
+            return datetime.now(UTC) + timedelta(minutes=61)
 
     with client.websocket_connect("/api/glasses/ws", headers=guest()) as ws:
         ws.send_json({"type": "ping"})

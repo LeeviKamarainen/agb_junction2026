@@ -45,7 +45,7 @@ export function DemoAsk({ collection = "demo" }: { collection?: string }) {
             Ask the glasses what they saw
           </h3>
           <p className="text-sm text-muted-foreground">
-            Start a 30-minute guest session — no sign-up — and ask Gemma about
+            Start a 60-minute guest session — no sign-up — and ask Gemma about
             the day above: where the keys went, who was at coffee, what was for
             lunch.
           </p>
@@ -55,7 +55,7 @@ export function DemoAsk({ collection = "demo" }: { collection?: string }) {
           href="/login?next=/"
           className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground"
         >
-          <LogIn size={15} aria-hidden="true" /> Log in instead
+          <LogIn size={15} aria-hidden="true" /> Have a guest username? Log in
         </Link>
       </div>
     );

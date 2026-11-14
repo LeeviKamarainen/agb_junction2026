@@ -23,8 +23,10 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
+import anyio
 from fastapi import Depends, HTTPException, Request
-from sqlmodel import Session, col, select
+from sqlmodel import col, select
+from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app import media, vectors
 from app.db import SessionDep
@@ -39,11 +41,12 @@ log = logging.getLogger(__name__)
 
 COOKIE = "session"
 SESSION_DAYS = 30  # the admin's logins
-GUEST_MINUTES = 30  # a guest account, its login and its memories
+GUEST_MINUTES = 60  # a guest account, its login and its memories
 USERNAME = re.compile(r"[a-z0-9][a-z0-9_.-]{2,31}")
 _SCRYPT = {"n": 2**14, "r": 8, "p": 1}  # about 50 ms and 16 MB per hash
 
 
+# scrypt is CPU work on purpose (about 50 ms): the async helpers run it off the event loop.
 def hash_password(password: str) -> str:
     salt = secrets.token_bytes(16)
     digest = hashlib.scrypt(password.encode(), salt=salt, dklen=32, **_SCRYPT)
@@ -60,6 +63,14 @@ def verify_password(password: str, stored: str) -> bool:
     except ValueError:
         return False
     return hmac.compare_digest(got, expected)
+
+
+async def hash_password_async(password: str) -> str:
+    return await anyio.to_thread.run_sync(hash_password, password)
+
+
+async def verify_password_async(password: str, stored: str) -> bool:
+    return await anyio.to_thread.run_sync(verify_password, password, stored)
 
 
 def clean_username(name: str) -> str:
@@ -80,7 +91,7 @@ def _aware(moment: datetime) -> datetime:
     return moment if moment.tzinfo else moment.replace(tzinfo=UTC)  # SQLite drops the offset
 
 
-def start_session(session: Session, user: User) -> str:
+def start_session(session: AsyncSession, user: User) -> str:
     """A new login for `user`, ending when a guest account does; returns the token. The caller
     commits."""
     assert user.id is not None
@@ -93,10 +104,10 @@ def start_session(session: Session, user: User) -> str:
     return token
 
 
-def end_session(session: Session, token: str) -> None:
-    row = session.get(AuthSession, _token_hash(token))
+async def end_session(session: AsyncSession, token: str) -> None:
+    row = await session.get(AuthSession, _token_hash(token))
     if row is not None:
-        session.delete(row)
+        await session.delete(row)
 
 
 def token_of(request: Request) -> str | None:
@@ -106,81 +117,97 @@ def token_of(request: Request) -> str | None:
     return request.cookies.get(COOKIE)
 
 
-def user_for(session: Session, token: str | None) -> User | None:
+async def user_for(session: AsyncSession, token: str | None) -> User | None:
     if not token:
         return None
-    row = session.get(AuthSession, _token_hash(token))
+    row = await session.get(AuthSession, _token_hash(token))
     if row is None:
         return None
     now = datetime.now(UTC)
     if _aware(row.expires_at) <= now:
-        session.delete(row)
-        session.commit()
+        await session.delete(row)
+        await session.commit()
         return None
-    user = session.get(User, row.user_id)
+    user = await session.get(User, row.user_id)
     if user is not None and user.expires_at is not None and _aware(user.expires_at) <= now:
-        purge_expired_guests(session)
+        await purge_expired_guests(session)
         return None
     return user
 
 
-def create_guest(session: Session) -> User:
+async def create_guest(session: AsyncSession) -> User:
     """A new temporary guest: a generated name, no password, GUEST_MINUTES to live. Deletes the
     guests that already expired first. Commits."""
-    purge_expired_guests(session)
+    await purge_expired_guests(session)
     now = datetime.now(UTC)
     while True:
-        name = f"guest-{secrets.token_hex(3)}"
-        if session.exec(select(User).where(User.username == name)).first() is None:
+        name = f"guest-{secrets.token_hex(8)}"
+        if (await session.exec(select(User).where(User.username == name))).first() is None:
             break
     guest = User(
         username=name,
-        password_hash="!",  # matches no password: guests cannot log in again
+        password_hash="!",  # guests return by username, never through the admin password login
         role="guest",
         created_at=now,
         expires_at=now + timedelta(minutes=GUEST_MINUTES),
     )
     session.add(guest)
-    session.commit()
-    session.refresh(guest)
+    await session.flush()
+    assert guest.id is not None
+    await anyio.to_thread.run_sync(_delete_guest_files, guest.id)
+    await session.commit()
+    await session.refresh(guest)
     return guest
 
 
-def purge_expired_guests(session: Session) -> int:
-    """Deletes every expired guest with its logins, memories (and their image files), reminders,
-    glasses photos and memory-API batch. Returns how many. Commits."""
+def _delete_files(media_files: list[str], user_ids: list[int]) -> None:
+    for name in media_files:
+        media.delete(name)
+    for user_id in user_ids:
+        _delete_guest_files(user_id)
+
+
+def _delete_guest_files(user_id: int) -> None:
     from app.glasses import photos  # here: app.glasses imports this module
 
+    try:
+        shutil.rmtree(photos.photos_dir() / str(user_id))
+    except FileNotFoundError:
+        pass
+    (photos.photos_dir() / f"memory-batch-{user_id}.json").unlink(missing_ok=True)
+
+
+async def purge_expired_guests(session: AsyncSession) -> int:
+    """Deletes every expired guest with its logins, memories (and their image files), reminders,
+    glasses photos and memory-API batch. Returns how many. Commits."""
     now = datetime.now(UTC)
-    expired = [
-        user
-        for user in session.exec(
-            select(User).where(User.role == "guest", col(User.expires_at).is_not(None))
-        )
-        if user.expires_at is not None and _aware(user.expires_at) <= now
-    ]
+    guests = await session.exec(
+        select(User).where(User.role == "guest", col(User.expires_at).is_not(None))
+    )
+    expired = [u for u in guests if u.expires_at is not None and _aware(u.expires_at) <= now]
     files: list[str] = []
+    connection = await session.connection()
     for user in expired:
         assert user.id is not None
-        for memory in session.exec(select(Memory).where(Memory.owner_id == user.id)):
-            vectors.delete(session.connection(), TABLE, memory.id or 0)
+        for memory in await session.exec(select(Memory).where(Memory.owner_id == user.id)):
+            await vectors.delete(connection, TABLE, memory.id or 0)
             if memory.image_file:
                 files.append(memory.image_file)
-            session.delete(memory)
-        for trigger in session.exec(select(Trigger).where(Trigger.owner_id == user.id)):
-            vectors.delete(session.connection(), "trigger_embedding", trigger.id or 0)
-            session.delete(trigger)
-        for reminder in session.exec(select(Reminder).where(Reminder.owner_id == user.id)):
-            session.delete(reminder)
-        for login in session.exec(select(AuthSession).where(AuthSession.user_id == user.id)):
-            session.delete(login)
-        session.delete(user)
-    session.commit()
-    for name in files:  # after the commit: a failed delete never leaves rows without files
-        media.delete(name)
-    for user in expired:
-        shutil.rmtree(photos.photos_dir() / str(user.id), ignore_errors=True)
-        (photos.photos_dir() / f"memory-batch-{user.id}.json").unlink(missing_ok=True)
+            await session.delete(memory)
+        for trigger in await session.exec(select(Trigger).where(Trigger.owner_id == user.id)):
+            await vectors.delete(connection, "trigger_embedding", trigger.id or 0)
+            await session.delete(trigger)
+        for reminder in await session.exec(select(Reminder).where(Reminder.owner_id == user.id)):
+            await session.delete(reminder)
+        logins = await session.exec(select(AuthSession).where(AuthSession.user_id == user.id))
+        for login in logins:
+            await session.delete(login)
+        await session.delete(user)
+    await session.commit()
+    # After the commit, so a failed delete never leaves rows without files; off the event loop,
+    # since a guest's photo folder can hold many files.
+    ids = [user.id for user in expired if user.id is not None]
+    await anyio.to_thread.run_sync(_delete_files, files, ids)
     if expired:
         log.info("Deleted %d expired guest account(s)", len(expired))
     return len(expired)
@@ -214,8 +241,8 @@ class Viewer:
         return self.is_admin or owner_id == self.id
 
 
-def optional_viewer(request: Request, session: SessionDep) -> Viewer | None:
-    user = user_for(session, token_of(request))
+async def optional_viewer(request: Request, session: SessionDep) -> Viewer | None:
+    user = await user_for(session, token_of(request))
     return Viewer(user) if user else None
 
 
@@ -229,18 +256,18 @@ ViewerDep = Annotated[Viewer, Depends(viewer)]
 OptionalViewerDep = Annotated[Viewer | None, Depends(optional_viewer)]
 
 
-def ensure_admin(session: Session) -> None:
+async def ensure_admin(session: AsyncSession) -> None:
     """Create the admin account, or reset its password to ADMIN_PASSWORD, on every start."""
     settings = get_settings()
     name = clean_username(settings.admin_username)
-    admin = session.exec(select(User).where(User.username == name)).first()
+    admin = (await session.exec(select(User).where(User.username == name))).first()
     password = settings.admin_password
     if admin is not None:
-        if password and not verify_password(password, admin.password_hash):
-            admin.password_hash = hash_password(password)
+        if password and not await verify_password_async(password, admin.password_hash):
+            admin.password_hash = await hash_password_async(password)
         admin.role = "admin"
         session.add(admin)
-        session.commit()
+        await session.commit()
         return
     if not password:
         password = secrets.token_urlsafe(12)
@@ -252,9 +279,9 @@ def ensure_admin(session: Session) -> None:
         )
     admin = User(
         username=name,
-        password_hash=hash_password(password),
+        password_hash=await hash_password_async(password),
         role="admin",
         created_at=datetime.now(UTC),
     )
     session.add(admin)
-    session.commit()
+    await session.commit()

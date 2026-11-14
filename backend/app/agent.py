@@ -13,12 +13,13 @@ parser that matches the model (memory/docs/backend-requirements.md).
 
 import json
 import time
-from collections.abc import Iterator
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from typing import Any, Literal
 
+import anyio
 from pydantic import BaseModel, Field, ValidationError
-from sqlmodel import Session
+from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app import media
 from app.llm import Chat, Embedder
@@ -92,15 +93,15 @@ def error_line(message: str) -> str:
     return Step(type="error", round=0, elapsed_ms=0, content=message).model_dump_json() + "\n"
 
 
-def run(
-    session: Session,
+async def run(
+    session: AsyncSession,
     question: str,
     chat: Chat,
     embed: Embedder,
     owners: list[int] | None,
     now: datetime | None = None,
     collections: list[str] | None = None,
-) -> Iterator[Step]:
+) -> AsyncIterator[Step]:
     """Answer `question`, yielding each step; the last one is the answer.
 
     `owners` is whose memories the model may reach (app.auth.Viewer.owners; None for all): every
@@ -125,7 +126,7 @@ def run(
     for round in range(1, MAX_ROUNDS + 1):
         last = round == MAX_ROUNDS
         yield step("model_call", round, tools_offered=not last, images_sent=images_pending)
-        message = chat(messages, None if last else [VECTOR_SEARCH_TOOL])
+        message = await chat(messages, None if last else [VECTOR_SEARCH_TOOL])
         calls = message.get("tool_calls") or []
         text = (message.get("content") or "").strip()
         if not calls or last:
@@ -152,7 +153,7 @@ def run(
                     content = json.dumps({"error": problems}, default=str)
                     yield step("tool_error", round, call_id=call_id, content=content)
                 else:
-                    results = vector_search(session, args, embed, owners)
+                    results = await vector_search(session, args, embed, owners)
                     yield step("tool_result", round, call_id=call_id, results=results)
                     for result in results:
                         if result.image_url and result.id not in shown:
@@ -167,21 +168,21 @@ def run(
         if images:
             parts: list[dict[str, Any]] = [{"type": "text", "text": "The images found:"}]
             for result in images:
-                memory = session.get(Memory, result.id)
+                memory = await session.get(Memory, result.id)
                 if memory is None or memory.image_file is None:
                     continue
                 if owners is not None and memory.owner_id not in owners:
                     continue  # never happens through vector_search; checked again all the same
                 seen = result.created_at.isoformat(timespec="seconds")
                 parts.append({"type": "text", "text": f"Memory {result.id}, seen at {seen}:"})
-                url = media.data_url(memory.image_file)
+                url = await anyio.to_thread.run_sync(media.data_url, memory.image_file)
                 parts.append({"type": "image_url", "image_url": {"url": url}})
                 images_pending += 1
             messages.append({"role": "user", "content": parts})
 
 
-def answer(
-    session: Session,
+async def answer(
+    session: AsyncSession,
     question: str,
     chat: Chat,
     embed: Embedder,
@@ -189,7 +190,7 @@ def answer(
     now: datetime | None = None,
     collections: list[str] | None = None,
 ) -> Answer:
-    steps = list(run(session, question, chat, embed, owners, now, collections))
+    steps = [s async for s in run(session, question, chat, embed, owners, now, collections)]
     searches: list[VectorSearchArgs] = []
     sources: dict[int, SearchResult] = {}
     for step in steps:

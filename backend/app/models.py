@@ -96,7 +96,7 @@ class ReminderCreate(SQLModel):
 
 
 # Accounts: one admin, who sees everything, and temporary guests, who see the demo memories and
-# their own. A guest has no password and expires after 30 minutes, with everything it added.
+# their own. A guest has no password and expires after 60 minutes, with everything it added.
 # app/auth.py hashes passwords, checks sessions and deletes expired guests.
 
 
@@ -121,6 +121,12 @@ class UserPublic(SQLModel):
     username: str
     role: str
     expires_at: datetime | None = None  # when a guest account and its memories are deleted
+
+
+class GuestLogin(SQLModel):
+    """Reopen an unexpired temporary account using its generated username."""
+
+    username: str = Field(min_length=1, max_length=64)
 
 
 class Credentials(SQLModel):

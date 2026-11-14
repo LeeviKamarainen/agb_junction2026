@@ -9,7 +9,8 @@ most once a minute per reminder.
 import re
 from datetime import UTC, datetime, timedelta
 
-from sqlmodel import Session, select
+from sqlmodel import select
+from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.glasses import memory, remote_memory
 from app.llm import Chat, UpstreamError
@@ -59,11 +60,11 @@ TARGET_PROMPT = (
 )
 
 
-def target_of(text: str, chat: Chat | None) -> str | None:
+async def target_of(text: str, chat: Chat | None) -> str | None:
     """The chat model's reading of the object, falling back to the rule."""
     if chat is not None:
         try:
-            reply = chat([{"role": "user", "content": TARGET_PROMPT.format(text=text)}], None)
+            reply = await chat([{"role": "user", "content": TARGET_PROMPT.format(text=text)}], None)
             answer = _words(reply.get("content") or "")
             if answer and len(answer.split()) <= 3:
                 return answer
@@ -72,26 +73,26 @@ def target_of(text: str, chat: Chat | None) -> str | None:
     return target_from(text)
 
 
-def add(session: Session, text: str, chat: Chat | None, owner: int) -> Reminder | None:
+async def add(session: AsyncSession, text: str, chat: Chat | None, owner: int) -> Reminder | None:
     """Stores `owner`'s reminder, or returns None when no object could be found in `text`."""
-    target = target_of(text, chat)
+    target = await target_of(text, chat)
     if not target:
         return None
     reminder = Reminder(
         text=text.strip(), target=target, created_at=datetime.now(UTC), owner_id=owner
     )
     session.add(reminder)
-    session.commit()
-    session.refresh(reminder)
+    await session.commit()
+    await session.refresh(reminder)
     return reminder
 
 
-def active(session: Session, owner: int | None) -> list[Reminder]:
+async def active(session: AsyncSession, owner: int | None) -> list[Reminder]:
     """`owner`'s reminders, oldest first; None for everyone's."""
     query = select(Reminder).order_by(Reminder.id)  # type: ignore[arg-type]
     if owner is not None:
         query = query.where(Reminder.owner_id == owner)
-    return list(session.exec(query))
+    return list(await session.exec(query))
 
 
 DETECT_PROMPT = (
@@ -114,14 +115,14 @@ class Unavailable(Exception):
     """Neither the chat model nor the glass-memory API can look at the frame."""
 
 
-def detect(jpeg: bytes, targets: list[str], chat: Chat | None) -> tuple[list[int], str]:
+async def detect(jpeg: bytes, targets: list[str], chat: Chat | None) -> tuple[list[int], str]:
     """Indexes into `targets` of the objects in view, and how that was decided."""
     if not targets:
         return [], "no reminders"
     if chat is not None:
         items = "\n".join(f"{i}. {t}" for i, t in enumerate(targets, start=1))
         try:
-            reply = chat(
+            reply = await chat(
                 [
                     {
                         "role": "user",
@@ -140,7 +141,7 @@ def detect(jpeg: bytes, targets: list[str], chat: Chat | None) -> tuple[list[int
                 raise Unavailable("the chat model is unreachable") from None
     if remote_memory.configured():
         try:
-            description = remote_memory.describe(jpeg, "watch.jpg")
+            description = await remote_memory.describe(jpeg, "watch.jpg")
         except remote_memory.Unavailable as error:
             raise Unavailable(str(error)) from error
         found = [i for i, t in enumerate(targets) if mentions(description, t)]

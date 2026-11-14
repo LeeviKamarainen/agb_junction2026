@@ -43,7 +43,7 @@ export function YourSpace() {
         <p className="max-w-2xl text-sm text-muted-foreground">
           {user.role === "admin"
             ? "You are the admin: everything here is also in the Memory lab."
-            : "Your guest session keeps what you add for 30 minutes, then deletes it."}
+            : "Your guest session keeps what you add for 60 minutes, then deletes it."}
         </p>
       </div>
       <ul className="grid gap-4 md:grid-cols-3">

@@ -16,8 +16,10 @@ from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Literal
 
+import anyio
 from pydantic import BaseModel
-from sqlmodel import Session, col, select
+from sqlmodel import col, select
+from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app import media, vectors
 from app.llm import Chat, Embedder, UpstreamError
@@ -90,29 +92,31 @@ def _should_store(
     return "similar to the last frame stored from this stream"
 
 
-def _trigger_vectors(session: Session, triggers: list[Trigger], embed: Embedder) -> dict:
+async def _trigger_vectors(session: AsyncSession, triggers: list[Trigger], embed: Embedder) -> dict:
     """Each trigger's watch_for vector, embedding the ones that have none yet."""
-    connection = session.connection()
+    connection = await session.connection()
     ids = [t.id for t in triggers if t.id is not None]
-    stored = vectors.stored(connection, TRIGGER_TABLE, ids)
+    stored = await vectors.stored(connection, TRIGGER_TABLE, ids)
     missing = [t for t in triggers if t.id not in stored]
     if missing:
-        for trigger, vector in zip(missing, embed([t.watch_for for t in missing]), strict=True):
+        for trigger, vector in zip(
+            missing, await embed([t.watch_for for t in missing]), strict=True
+        ):
             assert trigger.id is not None
-            vectors.upsert(connection, TRIGGER_TABLE, trigger.id, vector)
+            await vectors.upsert(connection, TRIGGER_TABLE, trigger.id, vector)
             stored[trigger.id] = vector
     return stored
 
 
-def forget_trigger_vector(session: Session, trigger_id: int) -> None:
+async def forget_trigger_vector(session: AsyncSession, trigger_id: int) -> None:
     """Call when a trigger's watch_for changes or it is deleted; it is embedded again on use."""
-    vectors.delete(session.connection(), TRIGGER_TABLE, trigger_id)
+    await vectors.delete(await session.connection(), TRIGGER_TABLE, trigger_id)
 
 
-def _message(chat: Chat | None, trigger: Trigger, jpeg_name: str) -> str:
+async def _message(chat: Chat | None, trigger: Trigger, jpeg_name: str) -> str:
     if chat is not None:
         try:
-            reply = chat(
+            reply = await chat(
                 [
                     {"role": "system", "content": MESSAGE_SYSTEM},
                     {
@@ -123,7 +127,12 @@ def _message(chat: Chat | None, trigger: Trigger, jpeg_name: str) -> str:
                                 "text": f"The glasses just saw this ({trigger.watch_for}). "
                                 f"{trigger.instruction}",
                             },
-                            {"type": "image_url", "image_url": {"url": media.data_url(jpeg_name)}},
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": await anyio.to_thread.run_sync(media.data_url, jpeg_name)
+                                },
+                            },
                         ],
                     },
                 ],
@@ -138,8 +147,8 @@ def _message(chat: Chat | None, trigger: Trigger, jpeg_name: str) -> str:
     return trigger.instruction
 
 
-def receive(
-    session: Session,
+async def receive(
+    session: AsyncSession,
     jpeg: bytes,
     embed: Embedder,
     chat: Chat | None,
@@ -153,10 +162,10 @@ def receive(
 
     Raises ValueError for data that is not an image and UpstreamError when embedding fails.
     """
-    name = media.save_image(jpeg)  # shrinks it; raises ValueError for what is not an image
+    name = await anyio.to_thread.run_sync(media.save_image, jpeg)
     keep = False
     try:
-        (vector,) = embed([media.data_url(name)])
+        (vector,) = await embed([await anyio.to_thread.run_sync(media.data_url, name)])
         if problem := width_error(len(vector)):
             raise UpstreamError(problem)
         now = time.monotonic()
@@ -167,7 +176,7 @@ def receive(
         reply = FrameReply(stored=False)
 
         if (why_not := _should_store(source, (owner_id, stream_id), vector, now)) is None:
-            memory = add_memory(
+            memory = await add_memory(
                 session, "image", vector, moment, "", name, collection=COLLECTION, owner_id=owner_id
             )
             reply.stored, reply.memory_id = True, memory.id
@@ -178,10 +187,10 @@ def receive(
         query = select(Trigger).where(col(Trigger.enabled))
         if owners is not None:
             query = query.where(col(Trigger.owner_id).in_(owners))
-        triggers = list(session.exec(query))
+        triggers = list(await session.exec(query))
         if triggers:
             try:
-                trigger_vectors = _trigger_vectors(session, triggers, embed)
+                trigger_vectors = await _trigger_vectors(session, triggers, embed)
             except UpstreamError as error:
                 reply.note = f"triggers not checked: {error}"
                 trigger_vectors = {}
@@ -217,7 +226,7 @@ def receive(
         # Commit before asking the chat model, which can take a while: SQLite allows one writer, so
         # holding the transaction open would lock out every other write, and another frame could
         # fire the same trigger again meanwhile.
-        session.commit()
+        await session.commit()
         keep = reply.stored
         if reply.stored and source == "stream":
             with _lock:
@@ -227,13 +236,13 @@ def receive(
             reply.message = GlassesMessage(
                 type="trigger",
                 title=fired.name,
-                text=_message(chat, fired, name),
+                text=await _message(chat, fired, name),
                 trigger_id=fired.id,
             )
         return reply
     finally:
         if not keep:
-            media.delete(name)
+            await anyio.to_thread.run_sync(media.delete, name)
 
 
 def _aware(moment: datetime) -> datetime:

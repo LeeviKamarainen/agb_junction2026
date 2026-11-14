@@ -1,6 +1,6 @@
 """What the glasses' commands, photos and watched frames do, shared by the HTTP routes
-(app/routes/glasses.py) and the WebSocket (channel.py). Each takes its own database session and
-blocks on the models, so the socket runs them in a worker thread.
+(app/routes/glasses.py) and the WebSocket (channel.py). All are coroutines: the database and the
+model calls are awaited, so neither path ties up a thread while a model thinks.
 
 Memory is the backend's own (app/routes/memories.py): photos become image memories, questions go
 through the same question loop as /api/ask. When those models are not set or not reachable, the
@@ -12,9 +12,10 @@ import logging
 from datetime import UTC, datetime
 from typing import Self
 
+import anyio
 from fastapi import HTTPException
 from pydantic import BaseModel, Field, model_validator
-from sqlmodel import Session
+from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.auth import Viewer
 from app.glasses import frames, memory, photos, reminders, remote_memory, screens
@@ -27,8 +28,8 @@ log = logging.getLogger(__name__)
 MAX_FRAME = 10 * 1024 * 1024
 
 
-def memory_frame(
-    session: Session,
+async def memory_frame(
+    session: AsyncSession,
     viewer: Viewer,
     data: bytes,
     chat: Chat | None,
@@ -44,7 +45,7 @@ def memory_frame(
         raise HTTPException(413, "frame is larger than 10 MB")
     when = seen_at if seen_at is None or seen_at.tzinfo else seen_at.replace(tzinfo=UTC)
     try:
-        return frames.receive(
+        return await frames.receive(
             session, data, embed, chat, source, stream_id, when, viewer.id, viewer.owners
         )
     except ValueError as error:
@@ -78,8 +79,8 @@ class WatchResult(BaseModel):
     note: str
 
 
-def command(
-    session: Session, viewer: Viewer, body: Command, chat: Chat | None, embed: Embedder | None
+async def command(
+    session: AsyncSession, viewer: Viewer, body: Command, chat: Chat | None, embed: Embedder | None
 ) -> GlassesReply:
     """What `viewer` said or pressed; everything it reaches is scoped to them (app/auth.py)."""
     if body.question is not None:
@@ -87,8 +88,8 @@ def command(
         if not question:
             return screens.home()
         if reminders.is_reminder(question):
-            return _remind(session, question, chat, viewer)
-        return _ask(session, question, chat, embed, viewer)
+            return await _remind(session, question, chat, viewer)
+        return await _ask(session, question, chat, embed, viewer)
     if body.action is not None:
         if body.action not in BUTTON_ACTIONS:
             raise HTTPException(422, f"unknown action {body.action!r}")
@@ -108,25 +109,27 @@ def command(
     if name == "gallery":
         return screens.gallery(viewer.owners)
     if name == "ask_memory":
-        return _ask(session, text, chat, embed, viewer)
+        return await _ask(session, text, chat, embed, viewer)
     if name == "remind":
-        return _remind(session, text, chat, viewer)
+        return await _remind(session, text, chat, viewer)
     return screens.unknown(text)
 
 
-def _remind(session: Session, text: str, chat: Chat | None, viewer: Viewer) -> GlassesReply:
-    reminder = reminders.add(session, text, chat, viewer.id)
+async def _remind(
+    session: AsyncSession, text: str, chat: Chat | None, viewer: Viewer
+) -> GlassesReply:
+    reminder = await reminders.add(session, text, chat, viewer.id)
     if reminder is None:
         return screens.reminder_unclear(text)
     return screens.reminder_added(reminder.target, reminder.text)
 
 
-def _ask(
-    session: Session, question: str, chat: Chat | None, embed: Embedder | None, viewer: Viewer
+async def _ask(
+    session: AsyncSession, question: str, chat: Chat | None, embed: Embedder | None, viewer: Viewer
 ) -> GlassesReply:
     if chat is not None and embed is not None:
         try:
-            answer = memory.ask(session, question, chat, embed, viewer.owners)
+            answer = await memory.ask(session, question, chat, embed, viewer.owners)
             said = answer.answer or "I couldn’t find that in your memories."
             return screens.memory_answer(question, said)
         except UpstreamError as error:
@@ -135,7 +138,7 @@ def _ask(
                 return screens.memory_problem(question, "I can’t reach the memory right now.")
     if remote_memory.configured():
         try:
-            said, _stills = remote_memory.ask(question, viewer.id, viewer.owners)
+            said, _stills = await remote_memory.ask(question, viewer.id, viewer.owners)
         except remote_memory.Unavailable:
             return screens.memory_problem(question, "I can’t reach the memory right now.")
         return screens.memory_answer(question, said)
@@ -150,29 +153,29 @@ def check_jpeg(data: bytes, what: str) -> None:
         raise HTTPException(415, f"{what} must be a JPEG")
 
 
-def photo(
-    session: Session, viewer: Viewer, data: bytes, chat: Chat | None, embed: Embedder | None
+async def photo(
+    session: AsyncSession, viewer: Viewer, data: bytes, chat: Chat | None, embed: Embedder | None
 ) -> GlassesReply:
     """Saves the still, describes it with the chat model and stores it as an image memory."""
     check_jpeg(data, "photo")
-    name = photos.save(data, viewer.id)
+    name = await anyio.to_thread.run_sync(photos.save, data, viewer.id)
 
     description, problems, stored = "", [], False
     if chat is not None:
         try:
-            description = memory.describe(chat, data)
+            description = await memory.describe(chat, data)
         except UpstreamError as error:
             log.warning("Describing a photo failed: %s", error)
     if not description and remote_memory.configured():
         try:
-            description = remote_memory.describe(data, name)
+            description = await remote_memory.describe(data, name)
         except remote_memory.Unavailable:
             pass
     if not description and (chat is not None or remote_memory.configured()):
         problems.append("couldn’t describe it")
     if embed is not None:
         try:
-            memory.remember(session, embed, data, description, viewer.id)
+            await memory.remember(session, embed, data, description, viewer.id)
             stored = True
         except UpstreamError as error:
             log.warning("Storing a photo as a memory failed: %s", error)
@@ -184,12 +187,14 @@ def photo(
     return screens.photo_saved(name, note)
 
 
-def watch(session: Session, viewer: Viewer, data: bytes, chat: Chat | None) -> WatchResult:
+async def watch(
+    session: AsyncSession, viewer: Viewer, data: bytes, chat: Chat | None
+) -> WatchResult:
     """Checks one frame for every reminder's object; never raises for a model's failure."""
     check_jpeg(data, "frame")
-    watched = reminders.active(session, viewer.id)  # your own, even for the admin
+    watched = await reminders.active(session, viewer.id)  # your own, even for the admin
     try:
-        found, note = reminders.detect(data, [r.target for r in watched], chat)
+        found, note = await reminders.detect(data, [r.target for r in watched], chat)
     except reminders.Unavailable as error:
         return WatchResult(seen=[], note=str(error))
     except Exception as error:  # a frame a second: one bad answer must not break the loop
@@ -202,7 +207,7 @@ def watch(session: Session, viewer: Viewer, data: bytes, chat: Chat | None) -> W
     if first is not None:
         first.last_warned_at = now
         session.add(first)
-    session.commit()
+    await session.commit()
     return WatchResult(
         seen=[r.target for r in seen],
         warning=screens.warning(first.target, first.text) if first else None,

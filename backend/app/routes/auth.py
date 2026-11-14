@@ -8,7 +8,7 @@ from sqlmodel import select
 from app import auth
 from app.auth import OptionalViewerDep, ViewerDep
 from app.db import SessionDep
-from app.models import Credentials, LoginResult, User, UserPublic
+from app.models import Credentials, GuestLogin, LoginResult, User, UserPublic
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -27,9 +27,9 @@ def _seconds_left(user: User) -> int:
     return max(0, int((expires - datetime.now(UTC)).total_seconds()))
 
 
-def _logged_in(request: Request, response: Response, session, user: User) -> LoginResult:
+async def _logged_in(request: Request, response: Response, session, user: User) -> LoginResult:
     token = auth.start_session(session, user)
-    session.commit()
+    await session.commit()
     # Secure behind HTTPS; Caddy says so in X-Forwarded-Proto. Plain http://localhost works too.
     https = request.headers.get("x-forwarded-proto", request.url.scheme) == "https"
     response.set_cookie(
@@ -45,38 +45,56 @@ def _logged_in(request: Request, response: Response, session, user: User) -> Log
 
 
 @router.post("/guest", response_model=LoginResult, status_code=201)
-def guest(request: Request, response: Response, session: SessionDep):
+async def guest(request: Request, response: Response, session: SessionDep):
     """A new temporary guest account, logged in: a generated name, no password. It and everything
-    it adds are deleted after 30 minutes (auth.GUEST_MINUTES)."""
-    return _logged_in(request, response, session, auth.create_guest(session))
+    it adds are deleted after 60 minutes (auth.GUEST_MINUTES)."""
+    return await _logged_in(request, response, session, await auth.create_guest(session))
+
+
+@router.post("/guest/login", response_model=LoginResult)
+async def guest_login(body: GuestLogin, request: Request, response: Response, session: SessionDep):
+    """Reopen a guest by username while it is active. Keeps its original expiry; an unknown,
+    expired or non-guest account gets the same 401."""
+    await auth.purge_expired_guests(session)
+    name = body.username.strip().lower()
+    user = (
+        await session.exec(select(User).where(User.username == name, User.role == "guest"))
+    ).first()
+    if user is None or user.expires_at is None or _seconds_left(user) == 0:
+        raise HTTPException(401, "Guest account not found or expired")
+    return await _logged_in(request, response, session, user)
 
 
 @router.post("/login", response_model=LoginResult)
-def login(body: Credentials, request: Request, response: Response, session: SessionDep):
+async def login(body: Credentials, request: Request, response: Response, session: SessionDep):
     """The admin's login (guests have no password). 401 for a wrong username or password,
     without saying which."""
     name = body.username.strip().lower()
-    user = session.exec(select(User).where(User.username == name)).first()
-    if user is None or not auth.verify_password(body.password, user.password_hash):
+    user = (await session.exec(select(User).where(User.username == name))).first()
+    if (
+        user is None
+        or user.role != "admin"
+        or not await auth.verify_password_async(body.password, user.password_hash)
+    ):
         raise HTTPException(401, "Wrong username or password")
-    return _logged_in(request, response, session, user)
+    return await _logged_in(request, response, session, user)
 
 
 @router.post("/logout", status_code=204)
-def logout(request: Request, response: Response, session: SessionDep):
+async def logout(request: Request, response: Response, session: SessionDep):
     if token := auth.token_of(request):
-        auth.end_session(session, token)
-        session.commit()
+        await auth.end_session(session, token)
+        await session.commit()
     response.delete_cookie(auth.COOKIE, path="/")
 
 
 @router.get("/me", response_model=UserPublic)
-def me(viewer: ViewerDep):
+async def me(viewer: ViewerDep):
     """The logged-in user; 401 when nobody is."""
     return _public(viewer.user)
 
 
 @router.get("/session", response_model=UserPublic | None)
-def current(viewer: OptionalViewerDep):
+async def current(viewer: OptionalViewerDep):
     """The logged-in user, or null: for pages that show a login link instead of failing."""
     return _public(viewer.user) if viewer else None

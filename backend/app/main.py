@@ -3,10 +3,9 @@ import logging
 from contextlib import asynccontextmanager
 
 from fastapi import APIRouter, FastAPI
-from sqlmodel import Session
 
 from app import auth, demo
-from app.db import get_engine, init_db
+from app.db import get_engine, init_db, new_session
 from app.llm import get_embedder
 from app.routes import auth as auth_routes
 from app.routes import demo as demo_routes
@@ -19,18 +18,19 @@ SWEEP_EVERY_S = 300
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    init_db()
-    with Session(get_engine()) as session:
-        auth.ensure_admin(session)
-        auth.purge_expired_guests(session)
+    await init_db()
+    async with new_session() as session:
+        await auth.ensure_admin(session)
+        await auth.purge_expired_guests(session)
     sweeper = asyncio.create_task(_sweep_guests())
-    loader = asyncio.create_task(asyncio.to_thread(_load_demo))
+    loader = asyncio.create_task(_load_demo())
     yield
     sweeper.cancel()
     loader.cancel()
+    await get_engine().dispose()
 
 
-def _load_demo() -> None:
+async def _load_demo() -> None:
     """Embed and store the demo dataset (app/demo.py) when it is not stored yet. In the
     background, so a slow or missing embedding model never holds up the start; the timeline works
     without it, only asking about the demo waits for it."""
@@ -38,15 +38,10 @@ def _load_demo() -> None:
         log.warning("No EMBED_URL: the demo dataset is not stored, so asking finds nothing")
         return
     try:
-        with Session(get_engine()) as session:
-            demo.load_demo_memories(session, get_embedder())
+        async with new_session() as session:
+            await demo.load_demo_memories(session, get_embedder())
     except Exception:
         log.exception("Storing the demo dataset failed; it is tried again on the next start")
-
-
-def _purge() -> None:
-    with Session(get_engine()) as session:
-        auth.purge_expired_guests(session)
 
 
 async def _sweep_guests() -> None:
@@ -54,7 +49,8 @@ async def _sweep_guests() -> None:
     while True:
         await asyncio.sleep(SWEEP_EVERY_S)
         try:
-            await asyncio.to_thread(_purge)
+            async with new_session() as session:
+                await auth.purge_expired_guests(session)
         except Exception:
             log.exception("Deleting expired guests failed")
 

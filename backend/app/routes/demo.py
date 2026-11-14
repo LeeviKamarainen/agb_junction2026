@@ -27,11 +27,11 @@ class DemoTimeline(SQLModel):
 
 
 @router.get("/timeline", response_model=DemoTimeline)
-def timeline(session: SessionDep):
+async def timeline(session: SessionDep):
     """The demo dataset's moments, earliest first. No login needed."""
     return DemoTimeline(
         collection=demo.COLLECTION,
-        searchable=demo.is_loaded(session),
+        searchable=await demo.is_loaded(session),
         moments=[
             DemoMoment(index=index, time=moment.at, place=moment.place, text=moment.text)
             for index, moment in enumerate(demo.timeline())

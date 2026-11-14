@@ -1,6 +1,7 @@
 import io
 import threading
 
+import anyio
 import pytest
 from fastapi import WebSocketDisconnect
 from PIL import Image
@@ -43,16 +44,29 @@ def use_models(chat=None, embed=None):
         app.dependency_overrides[optional_embedder] = lambda: embed
 
 
-def fake_embed(texts):
+async def fake_embed(texts):
     return [[1.0] + [0.0] * (WIDTH - 1) for _ in texts]
 
 
 def says(text):
     """A chat model that always answers `text`, without calling tools."""
-    return lambda _messages, _tools: {"role": "assistant", "content": text}
+
+    async def chat(_messages, _tools):
+        return {"role": "assistant", "content": text}
+
+    return chat
 
 
-def broken(*_args):
+def returns(value):
+    """A stand-in coroutine function that ignores its arguments and returns `value`."""
+
+    async def stub(*_args):
+        return value
+
+    return stub
+
+
+async def broken(*_args):
     raise UpstreamError("the model server is down")
 
 
@@ -241,7 +255,7 @@ def test_unreachable_memory_is_spoken_not_raised(client):
 def test_photo_falls_back_to_the_memory_api(client, monkeypatch):
     use_models(chat=broken)
     monkeypatch.setattr(remote_memory, "configured", lambda: True)
-    monkeypatch.setattr(remote_memory, "describe", lambda jpeg, name: "A watering can.")
+    monkeypatch.setattr(remote_memory, "describe", returns("A watering can."))
 
     reply = client.post("/api/glasses/photos", files={"photo": ("a.jpg", JPEG, "image/jpeg")})
 
@@ -254,9 +268,7 @@ def test_question_falls_back_to_the_memory_api(client, monkeypatch):
     use_models(chat=broken, embed=fake_embed)
     monkeypatch.setattr(remote_memory, "configured", lambda: True)
     url = "/api/glasses/memory/20261114T120000000000/keyframes/a.jpg"
-    monkeypatch.setattr(
-        remote_memory, "ask", lambda question, user, owners: ("By the door.", [url])
-    )
+    monkeypatch.setattr(remote_memory, "ask", returns(("By the door.", [url])))
 
     reply = client.post("/api/glasses/command", json={"text": "where is the can?"}).json()
 
@@ -278,13 +290,13 @@ def test_memory_api_batch_holds_every_photo(client, monkeypatch):
     posted = []
 
     class FakeClient:
-        def __enter__(self):
+        async def __aenter__(self):
             return self
 
-        def __exit__(self, *_):
+        async def __aexit__(self, *_):
             return False
 
-        def post(self, path, **kwargs):
+        async def post(self, path, **kwargs):
             class Reply:
                 def raise_for_status(self):
                     pass
@@ -303,8 +315,8 @@ def test_memory_api_batch_holds_every_photo(client, monkeypatch):
         client.post("/api/glasses/photos", files={"photo": ("a.jpg", JPEG, "image/jpeg")})
     posted.clear()  # the two one-photo batches that described them
 
-    assert remote_memory.ask("where?", 1, None)[0] == "On the table."
-    assert remote_memory.ask("again?", 1, None)[0] == "On the table."
+    assert client.portal.call(remote_memory.ask, "where?", 1, None)[0] == "On the table."
+    assert client.portal.call(remote_memory.ask, "again?", 1, None)[0] == "On the table."
     assert posted == [2]  # one batch with both photos, reused for the second question
 
 
@@ -398,7 +410,7 @@ def test_watch_only_cools_down_the_reminder_it_shows(client):
 def test_watch_falls_back_to_the_memory_apis_description(client, monkeypatch):
     client.post("/api/glasses/reminders", json={"text": "warn me about the stool"})
     monkeypatch.setattr(remote_memory, "configured", lambda: True)
-    monkeypatch.setattr(remote_memory, "describe", lambda jpeg, name: "Two stools by a counter.")
+    monkeypatch.setattr(remote_memory, "describe", returns("Two stools by a counter."))
 
     result = watch(client)
 
@@ -418,7 +430,7 @@ def test_watch_without_a_vision_model_says_so(client):
 def test_watch_reports_an_unexpected_failure_instead_of_500(client, monkeypatch):
     client.post("/api/glasses/reminders", json={"text": "warn me about the stool"})
 
-    def odd_model(_messages, _tools):
+    async def odd_model(_messages, _tools):
         raise KeyError("choices")
 
     use_models(chat=odd_model)
@@ -518,10 +530,10 @@ def test_socket_checks_only_the_latest_frame(client):
     client.post("/api/glasses/reminders", json={"text": "warn me about the stool"})
     checking, release, checks = threading.Event(), threading.Event(), []
 
-    def slow_model(_messages, _tools):
+    async def slow_model(_messages, _tools):
         checks.append(1)
         checking.set()
-        assert release.wait(5)
+        assert await anyio.to_thread.run_sync(release.wait, 5)  # the test thread sets it
         return {"role": "assistant", "content": "none"}
 
     use_models(chat=slow_model)

@@ -18,7 +18,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import or_
-from sqlmodel import Session, col, select
+from sqlmodel import col, select
+from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app import vectors
 from app.llm import Embedder, UpstreamError
@@ -166,8 +167,8 @@ def public(memory: Memory, usernames: dict[int, str] | None = None) -> MemoryPub
     )
 
 
-def add_memory(
-    session: Session,
+async def add_memory(
+    session: AsyncSession,
     kind: MemoryKind,
     embedding: Sequence[float],
     created_at: datetime | None = None,
@@ -197,10 +198,10 @@ def add_memory(
         owner_id=owner_id,
     )
     session.add(memory)
-    session.flush()  # assigns the id
+    await session.flush()  # assigns the id
     assert memory.id is not None
-    vectors.upsert(
-        session.connection(),
+    await vectors.upsert(
+        await session.connection(),
         TABLE,
         memory.id,
         embedding,
@@ -221,8 +222,8 @@ def _collections(args: VectorSearchArgs) -> list[str]:
     return list(dict.fromkeys(names))
 
 
-def _keyword_ranking(
-    session: Session, args: VectorSearchArgs, candidates: int, owners: list[int] | None
+async def _keyword_ranking(
+    session: AsyncSession, args: VectorSearchArgs, candidates: int, owners: list[int] | None
 ) -> tuple[list[int], dict[int, list[str]]]:
     """Ids of memories whose text holds a keyword, most keywords first, then newest first."""
     keywords = list(dict.fromkeys(k.strip() for k in args.keywords if k.strip()))
@@ -249,7 +250,7 @@ def _keyword_ranking(
 
     matched: dict[int, list[str]] = {}
     newest: dict[int, datetime] = {}
-    for id, text, created_at in session.exec(query):
+    for id, text, created_at in await session.exec(query):
         lowered = text.casefold()
         matched[id] = [k for k in keywords if k.casefold() in lowered]
         newest[id] = created_at
@@ -268,8 +269,8 @@ def width_error(got: int) -> str | None:
     )
 
 
-def vector_search(
-    session: Session, args: VectorSearchArgs, embed: Embedder, owners: list[int] | None
+async def vector_search(
+    session: AsyncSession, args: VectorSearchArgs, embed: Embedder, owners: list[int] | None
 ) -> list[SearchResult]:
     """Run one vector_search call: the best `args.limit` memories, best first.
 
@@ -292,16 +293,16 @@ def vector_search(
 
     rankings: list[list[int]] = []
     best_distance: dict[int, float] = {}
-    connection = session.connection()
-    for vector in embed(queries) if queries else []:
+    connection = await session.connection()
+    for vector in await embed(queries) if queries else []:
         if problem := width_error(len(vector)):
             raise UpstreamError(problem)
-        hits = vectors.nearest(connection, TABLE, vector, candidates, since, until, where)
+        hits = await vectors.nearest(connection, TABLE, vector, candidates, since, until, where)
         rankings.append([hit.id for hit in hits])
         for hit in hits:
             best_distance[hit.id] = min(hit.distance, best_distance.get(hit.id, hit.distance))
 
-    keyword_ids, matched = _keyword_ranking(session, args, candidates, owners)
+    keyword_ids, matched = await _keyword_ranking(session, args, candidates, owners)
     rankings.append(keyword_ids)
 
     scores: dict[int, float] = defaultdict(float)
@@ -310,7 +311,8 @@ def vector_search(
             scores[id] += 1 / (RRF_K + rank + 1)
     top = sorted(scores, key=lambda id: -scores[id])[: args.limit]
 
-    memories = {m.id: m for m in session.exec(select(Memory).where(col(Memory.id).in_(top)))}
+    found = await session.exec(select(Memory).where(col(Memory.id).in_(top)))
+    memories = {m.id: m for m in found}
     return [
         SearchResult(
             id=id,

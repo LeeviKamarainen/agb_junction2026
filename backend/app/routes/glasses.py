@@ -57,15 +57,15 @@ async def socket(websocket: WebSocket, chat: ChatDep, embed: EmbedderDep):
 
 
 @router.get("/home", response_model=GlassesReply)
-def home():
+async def home():
     return screens.home()
 
 
 @router.post("/command", response_model=GlassesReply)
-def command(
+async def command(
     body: Command, session: SessionDep, viewer: ViewerDep, chat: ChatDep, embed: EmbedderDep
 ):
-    return actions.command(session, viewer, body, chat, embed)
+    return await actions.command(session, viewer, body, chat, embed)
 
 
 @router.post(
@@ -77,14 +77,15 @@ def command(
         "also becomes an image memory, captioned with that description."
     ),
 )
-def upload_photo(
+async def upload_photo(
     photo: Annotated[UploadFile, File(description="One JPEG still")],
     session: SessionDep,
     viewer: ViewerDep,
     chat: ChatDep,
     embed: EmbedderDep,
 ):
-    return actions.photo(session, viewer, photo.file.read(photos.MAX_BYTES + 1), chat, embed)
+    data = await photo.read(photos.MAX_BYTES + 1)
+    return await actions.photo(session, viewer, data, chat, embed)
 
 
 @router.get(
@@ -92,7 +93,7 @@ def upload_photo(
     response_class=FileResponse,
     responses={200: {"content": {"image/jpeg": {}}}, 404: {}},
 )
-def get_photo(name: str, viewer: ViewerDep):
+async def get_photo(name: str, viewer: ViewerDep):
     """Your own photos only (the admin's: everyone's); 404 for anyone else's."""
     file = photos.path(name, viewer.owners)
     if file is None:
@@ -105,13 +106,13 @@ def get_photo(name: str, viewer: ViewerDep):
     response_class=Response,
     responses={200: {"content": {"image/jpeg": {}}}, 404: {}, 502: {}},
 )
-def get_memory_keyframe(batch: str, name: str, viewer: ViewerDep):
+async def get_memory_keyframe(batch: str, name: str, viewer: ViewerDep):
     """A still from the glass-memory API, fetched with the backend's token: only from your own
     batch (the admin: any)."""
     if not viewer.is_admin and batch != remote_memory.current_batch(viewer.id):
         raise HTTPException(404, "no such keyframe")
     try:
-        data = remote_memory.keyframe(batch, name)
+        data = await remote_memory.keyframe(batch, name)
     except remote_memory.Unavailable:
         raise HTTPException(502, "the memory API is unreachable") from None
     if data is None:
@@ -120,28 +121,28 @@ def get_memory_keyframe(batch: str, name: str, viewer: ViewerDep):
 
 
 @router.get("/reminders", response_model=list[ReminderPublic])
-def list_reminders(session: SessionDep, viewer: ViewerDep):
+async def list_reminders(session: SessionDep, viewer: ViewerDep):
     """Your reminders; the admin's list holds everyone's."""
-    return reminders.active(session, None if viewer.is_admin else viewer.id)
+    return await reminders.active(session, None if viewer.is_admin else viewer.id)
 
 
 @router.post("/reminders", response_model=ReminderPublic, status_code=201)
-def add_reminder(body: ReminderCreate, session: SessionDep, viewer: ViewerDep, chat: ChatDep):
+async def add_reminder(body: ReminderCreate, session: SessionDep, viewer: ViewerDep, chat: ChatDep):
     """What the wearer would say, e.g. "remind me not to trip over the stool"; 422 when no
     object can be found in it."""
-    reminder = reminders.add(session, body.text, chat, viewer.id)
+    reminder = await reminders.add(session, body.text, chat, viewer.id)
     if reminder is None:
         raise HTTPException(422, "no object to watch for in that text")
     return reminder
 
 
 @router.delete("/reminders/{reminder_id}", status_code=204)
-def delete_reminder(reminder_id: int, session: SessionDep, viewer: ViewerDep):
-    reminder = session.get(Reminder, reminder_id)
+async def delete_reminder(reminder_id: int, session: SessionDep, viewer: ViewerDep):
+    reminder = await session.get(Reminder, reminder_id)
     if reminder is None or not viewer.can_change(reminder.owner_id):
         raise HTTPException(404, "no such reminder")
-    session.delete(reminder)
-    session.commit()
+    await session.delete(reminder)
+    await session.commit()
 
 
 @router.post(
@@ -149,8 +150,8 @@ def delete_reminder(reminder_id: int, session: SessionDep, viewer: ViewerDep):
     response_model=GlassesReply,
     description="The warning as if the object were in view, for testing without a vision model.",
 )
-def trigger_reminder(reminder_id: int, session: SessionDep, viewer: ViewerDep):
-    reminder = session.get(Reminder, reminder_id)
+async def trigger_reminder(reminder_id: int, session: SessionDep, viewer: ViewerDep):
+    reminder = await session.get(Reminder, reminder_id)
     if reminder is None or not viewer.can_change(reminder.owner_id):
         raise HTTPException(404, "no such reminder")
     return screens.warning(reminder.target, reminder.text)
@@ -164,17 +165,17 @@ def trigger_reminder(reminder_id: int, session: SessionDep, viewer: ViewerDep):
         "view gives a warning, at most once a minute per reminder."
     ),
 )
-def watch(
+async def watch(
     photo: Annotated[UploadFile, File(description="One JPEG frame")],
     session: SessionDep,
     viewer: ViewerDep,
     chat: ChatDep,
 ):
-    return actions.watch(session, viewer, photo.file.read(photos.MAX_BYTES + 1), chat)
+    return await actions.watch(session, viewer, await photo.read(photos.MAX_BYTES + 1), chat)
 
 
 @router.post("/frames", response_model=frames.FrameReply)
-def upload_frame(
+async def upload_frame(
     frame: Annotated[UploadFile, File(description="One image, usually a JPEG")],
     session: SessionDep,
     viewer: ViewerDep,
@@ -192,10 +193,10 @@ def upload_frame(
     wearer took (always stored). Most answers carry no `message`; when a trigger fires,
     `message` is what to show on the glasses.
     """
-    return actions.memory_frame(
+    return await actions.memory_frame(
         session,
         viewer,
-        frame.file.read(actions.MAX_FRAME + 1),
+        await frame.read(actions.MAX_FRAME + 1),
         chat,
         embed,
         source,
@@ -205,41 +206,41 @@ def upload_frame(
 
 
 @router.get("/triggers", response_model=list[TriggerPublic])
-def list_triggers(session: SessionDep, viewer: ViewerDep):
+async def list_triggers(session: SessionDep, viewer: ViewerDep):
     query = select(Trigger).order_by(col(Trigger.id))
     if viewer.owners is not None:
         query = query.where(col(Trigger.owner_id).in_(viewer.owners))
-    return session.exec(query).all()
+    return (await session.exec(query)).all()
 
 
 @router.post("/triggers", response_model=TriggerPublic, status_code=201)
-def create_trigger(body: TriggerCreate, session: SessionDep, viewer: ViewerDep):
+async def create_trigger(body: TriggerCreate, session: SessionDep, viewer: ViewerDep):
     trigger = Trigger.model_validate(body, update={"owner_id": viewer.id})
     session.add(trigger)
-    session.commit()
-    session.refresh(trigger)
+    await session.commit()
+    await session.refresh(trigger)
     return trigger
 
 
 @router.put("/triggers/{id}", response_model=TriggerPublic)
-def update_trigger(id: int, body: TriggerCreate, session: SessionDep, viewer: ViewerDep):
-    trigger = session.get(Trigger, id)
+async def update_trigger(id: int, body: TriggerCreate, session: SessionDep, viewer: ViewerDep):
+    trigger = await session.get(Trigger, id)
     if trigger is None or not viewer.can_change(trigger.owner_id):
         raise HTTPException(404, "No such trigger")
     if body.watch_for != trigger.watch_for:
-        frames.forget_trigger_vector(session, id)
+        await frames.forget_trigger_vector(session, id)
     trigger.sqlmodel_update(body.model_dump())
     session.add(trigger)
-    session.commit()
-    session.refresh(trigger)
+    await session.commit()
+    await session.refresh(trigger)
     return trigger
 
 
 @router.delete("/triggers/{id}", status_code=204)
-def delete_trigger(id: int, session: SessionDep, viewer: ViewerDep):
-    trigger = session.get(Trigger, id)
+async def delete_trigger(id: int, session: SessionDep, viewer: ViewerDep):
+    trigger = await session.get(Trigger, id)
     if trigger is None or not viewer.can_change(trigger.owner_id):
         raise HTTPException(404, "No such trigger")
-    frames.forget_trigger_vector(session, id)
-    session.delete(trigger)
-    session.commit()
+    await frames.forget_trigger_vector(session, id)
+    await session.delete(trigger)
+    await session.commit()
