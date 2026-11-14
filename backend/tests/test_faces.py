@@ -1,5 +1,5 @@
 """The face anonymiser (app/faces.py) on its own, and on the way in: every image the backend
-receives, over HTTP or the glasses' WebSocket, has its faces filled before it is stored, embedded
+receives, over HTTP or the glasses' WebSocket, has its faces blurred before it is stored, embedded
 or shown to the chat model."""
 
 import base64
@@ -286,14 +286,14 @@ def test_a_watched_frame_that_is_not_an_image_is_refused(client, models, how):
     assert not models.shown
 
 
-def test_uploaded_demo_images_have_their_faces_filled(client):
+def test_uploaded_demo_images_have_their_faces_blurred(client):
     clip = client.post("/api/demo/clips", json={"title": "Portrait"}).json()
     uploaded = client.post(
         f"/api/demo/clips/{clip['id']}/media",
         files={"files": ("portrait.jpg", PORTRAIT, "image/jpeg")},
     )
     assert uploaded.status_code == 200, uploaded.text
-    assert face_filled(picture(client.get(uploaded.json()["assets"][0]["url"]).content))
+    assert face_blurred(picture(client.get(uploaded.json()["assets"][0]["url"]).content))
 
 
 def test_every_upload_route_is_one_of_those_tested_here():
