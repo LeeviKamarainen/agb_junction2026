@@ -68,11 +68,25 @@ test("a refit from the previous axes after a few rows changed holds as much", ()
   assert.ok(held(coords).reduce((a, b) => a + b) >= 0.97 * BEST);
 });
 
-test("one or two memories give finite coordinates", () => {
-  for (const rows of [ROWS.slice(0, 1), ROWS.slice(0, 2)]) {
-    const { coords, explained } = pca(rows);
-    assert.ok(coords.flat().every(Number.isFinite));
-    assert.ok(explained.every((share) => share >= 0 && share <= 1 + 1e-9));
+/** Finite coordinates, axes of unit length or zero at right angles, shares adding up to at most
+ * the whole. */
+function assertWellFormed({ coords, explained, axes }: ReturnType<typeof pca>, rows: number) {
+  assert.ok(coords.flat().every(Number.isFinite));
+  axes.forEach((a, i) => {
+    const length = dot(a, a);
+    assert.ok(length === 0 || Math.abs(length - 1) < 1e-9, `${rows} rows: axis ${i} is ${length}`);
+    axes.slice(i + 1).forEach((b) => assert.ok(Math.abs(dot(a, b)) < 1e-9));
+  });
+  assert.ok(explained.reduce((sum, share) => sum + share, 0) <= 1 + 1e-9);
+}
+
+test("a few or repeated memories give well-formed axes, refit or not", () => {
+  // Their centred data span fewer directions than there are axes.
+  const [a, b] = ROWS;
+  for (const rows of [ROWS.slice(0, 1), ROWS.slice(0, 2), ROWS.slice(0, 3), [a, b, a, b, a, b, a]]) {
+    const first = pca(rows);
+    assertWellFormed(first, rows.length);
+    assertWellFormed(pca(rows, first.axes), rows.length);
   }
 });
 

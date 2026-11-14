@@ -19,6 +19,11 @@ const OVERSAMPLE = 5; // the low end of the 5 to 10 Halko et al. advise
 const POWER_ITERATIONS = 3;
 // From the previous fit's axes no power iteration is needed: a refit after 10 of 2000 vectors
 // changed held 99.7% or more, in about 35 ms, and every refit refines the axes further.
+// An axis along which the data vary less than this share of the first is zero, not a unit vector:
+// with 3 or fewer memories, or repeated ones, the data span fewer directions than there are axes,
+// and such an axis holds only rounding noise, which would point anywhere. A real spread that small
+// (1e-5 of the first axis') would not show on the map anyway.
+const NEGLIGIBLE = 1e-10;
 
 export type Components = {
   coords: number[][]; // each row's coordinate on each axis
@@ -64,12 +69,18 @@ export function pca(rows: Float32Array[], start: Float64Array[] = [], k = 3): Co
     for (let c = 0; c < width; c++) gram[r * width + c] = dot(b[r], b[c]);
   }
   const turn = eigenvectors(gram, width);
-  const axes = Array.from({ length: Math.min(k, width) }, (_, c) => {
+  const unscaled = Array.from({ length: Math.min(k, width) }, (_, c) => {
     const axis = new Float64Array(d);
     for (let r = 0; r < width; r++) axpy(turn[r * width + c], b[r], axis);
-    const norm = Math.sqrt(dot(axis, axis));
-    return norm > 0 ? axis.map((value) => value / norm) : axis;
+    return axis;
   });
+  const variances = unscaled.map((axis) => dot(axis, axis)); // B^T u's squared length is u's eigenvalue
+  const largest = Math.max(0, ...variances);
+  const axes = unscaled.map((axis, c) =>
+    variances[c] > NEGLIGIBLE * largest
+      ? axis.map((value) => value / Math.sqrt(variances[c]))
+      : new Float64Array(d),
+  );
 
   const columns = times(x, n, d, axes);
   columns.forEach((column, c) => {
