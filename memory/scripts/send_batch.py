@@ -30,7 +30,7 @@ def main():
         headers={"Authorization": f"Bearer {os.environ['GLASS_API_TOKEN']}"},
         files=[("frames", (path.name, path.read_bytes(), "image/jpeg")) for path in frames],
         data={"every_s": args.every},
-        timeout=600,  # CLIP on every frame, then Gemma's summary
+        timeout=600,  # EmbeddingGemma 2 on every frame, then Gemma's summary
     )
     if response.is_error:
         sys.exit(f"HTTP {response.status_code}: {response.text}")

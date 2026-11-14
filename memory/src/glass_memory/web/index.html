@@ -13,7 +13,7 @@
     select, input, button { font: inherit; padding: 6px 8px; max-width: 100%; }
     #summary, #answer { white-space: pre-wrap; }
     #status { min-height: 1.4em; font-weight: 600; }
-    form { display: flex; gap: 8px; margin: 12px 0; }
+    form { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 12px 0; }
     #question { flex: 1; min-width: 0; }
     #retrieved { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
     #retrieved img { height: 72px; border-radius: 6px; cursor: pointer; }
@@ -34,11 +34,14 @@
   <h1>Memory map</h1>
   <p>One point per memory of a batch: similar stills sit close together, and the colour is the
     time. Point at a memory, or tap it, to see its still. A question rings the memories it
-    retrieved, and Gemma answers from their stills.</p>
+    retrieved, and Gemma answers from their stills, or from its own stored image vectors of them
+    when the box is ticked.</p>
   <label>Batch <select id="batch"></select></label>
+  <label><input type="checkbox" id="compare"> compare with the map of Gemma's image vectors</label>
   <p id="summary"></p>
   <form id="ask">
     <input id="question" aria-label="Question" placeholder="Ask about this batch" required autocomplete="off">
+    <label><input type="checkbox" id="vectors"> from stored vectors</label>
     <button id="send">Ask</button>
   </form>
   <p id="status" role="status"></p>
@@ -47,7 +50,13 @@
   <main>
     <figure>
       <canvas id="map"></canvas>
-      <figcaption id="legend"><span id="start"></span><span id="ramp"></span><span id="end"></span></figcaption>
+      <figcaption id="legend">
+        <span>EmbeddingGemma 2 embeddings ·</span><span id="start"></span><span id="ramp"></span><span id="end"></span>
+      </figcaption>
+    </figure>
+    <figure hidden>
+      <canvas id="map2"></canvas>
+      <figcaption>Gemma's image vectors, one point per still (the mean over its tokens)</figcaption>
     </figure>
     <figure>
       <img id="still" alt="">
@@ -57,7 +66,13 @@
   <script>
     "use strict";
     const $ = (id) => document.getElementById(id);
-    const canvas = $("map"), statusLine = $("status");
+    const statusLine = $("status");
+    // The embedding map and, when compared, the map of Gemma's image vectors. `at` is where each of
+    // `points` was last drawn on the canvas, in the same order.
+    const views = [
+      { canvas: $("map"), x: "x", y: "y", at: [] },
+      { canvas: $("map2"), x: "gx", y: "gy", at: [] },
+    ];
     const TOKEN_KEY = "glass-memory-token";
     const SURFACE = "#1a1a19"; // the canvas background, also the gap drawn around each point
     // One hue from dark to light: early memories are dark, late ones light.
@@ -69,7 +84,7 @@
 
     let token = readToken();
     let batches = [];          // GET /batches
-    let points = [];           // the chosen batch's map; draw() adds px, py and color
+    let points = [];           // the chosen batch's map; gx, gy once compared; draw() adds color
     let chosen = null;         // the point whose still is shown
     let retrieved = new Set(); // keyframe names the last question retrieved
     const stills = new Map();  // keyframe name -> promise of a blob URL, least recently used first
@@ -159,6 +174,22 @@
       points = map;
       draw();
       statusLine.textContent = `${points.length} memories.`;
+      await compare();
+    }
+
+    // Shows the second map when its box is ticked, fetching the batch's places on it once. The
+    // server lays that map out the first time it is asked for, which can take a while.
+    async function compare() {
+      const name = $("batch").value, wanted = $("compare").checked;
+      $("map2").parentElement.hidden = !wanted;
+      if (wanted && points.length && points[0].gx === undefined) {
+        statusLine.textContent = "Laying out Gemma's image vectors…";
+        const map = await (await api(`${batchPath()}/map?vectors=true`)).json();
+        if ($("batch").value !== name) return; // another batch was chosen meanwhile
+        map.forEach((m, i) => { points[i].gx = m.x; points[i].gy = m.y; });
+        statusLine.textContent = `${points.length} memories, on both maps.`;
+      }
+      draw();
     }
 
     function extent(key) {
@@ -171,46 +202,54 @@
       return `rgb(${RAMP[i].map((c, k) => Math.round(c + (at - i) * (RAMP[i + 1][k] - c)))})`;
     }
 
-    function dot(context, point, radius, ring, line) {
+    function dot(context, [px, py], fill, radius, ring, line) {
       context.beginPath();
-      context.arc(point.px, point.py, radius, 0, 2 * Math.PI);
-      context.fillStyle = point.color;
+      context.arc(px, py, radius, 0, 2 * Math.PI);
+      context.fillStyle = fill;
       context.fill();
       context.lineWidth = line;
       context.strokeStyle = ring;
       context.stroke();
     }
 
-    // The map stretched to the canvas. Retrieved memories are larger with an orange ring; the
-    // chosen one has a white ring.
+    // Each map stretched to its canvas, with the same colours and rings on both: retrieved
+    // memories are larger with an orange ring, the chosen one has a white ring.
     function draw() {
+      const [t0, t1] = extent("t_s");
+      for (const p of points) p.color = color(unit(p.t_s, t0, t1));
+      views.forEach(drawView);
+      $("start").textContent = points.length ? clock(t0) : "";
+      $("end").textContent = points.length ? clock(t1) : "";
+    }
+
+    function drawView(view) {
+      const { canvas } = view;
       const scale = window.devicePixelRatio || 1, width = canvas.clientWidth, height = canvas.clientHeight;
       canvas.width = width * scale;
       canvas.height = height * scale;
       const context = canvas.getContext("2d");
       context.scale(scale, scale);
-      const [x0, x1] = extent("x"), [y0, y1] = extent("y"), [t0, t1] = extent("t_s");
-      const pad = 3 * RADIUS;
-      for (const p of points) {
-        p.px = pad + unit(p.x, x0, x1) * (width - 2 * pad);
-        p.py = height - pad - unit(p.y, y0, y1) * (height - 2 * pad);
-        p.color = color(unit(p.t_s, t0, t1));
-        dot(context, p, RADIUS, SURFACE, 1.5);
-      }
-      for (const p of points) if (retrieved.has(p.keyframe)) dot(context, p, RADIUS + 3, "#d95926", 3);
-      if (chosen) dot(context, chosen, RADIUS + 4, "#fff", 3);
-      $("start").textContent = points.length ? clock(t0) : "";
-      $("end").textContent = points.length ? clock(t1) : "";
+      const [x0, x1] = extent(view.x), [y0, y1] = extent(view.y);
+      const pad = 3 * RADIUS, placed = width && points.length && points[0][view.x] !== undefined;
+      view.at = !placed ? [] : points.map((p) => [
+        pad + unit(p[view.x], x0, x1) * (width - 2 * pad),
+        height - pad - unit(p[view.y], y0, y1) * (height - 2 * pad),
+      ]);
+      view.at.forEach((at, i) => dot(context, at, points[i].color, RADIUS, SURFACE, 1.5));
+      view.at.forEach((at, i) => {
+        if (retrieved.has(points[i].keyframe)) dot(context, at, points[i].color, RADIUS + 3, "#d95926", 3);
+      });
+      if (chosen && view.at.length) dot(context, view.at[points.indexOf(chosen)], chosen.color, RADIUS + 4, "#fff", 3);
     }
 
-    function nearest(event) {
-      const box = canvas.getBoundingClientRect();
+    function nearest(event, view) {
+      const box = view.canvas.getBoundingClientRect();
       const x = event.clientX - box.left, y = event.clientY - box.top;
       let best = null, bestDistance = REACH;
-      for (const p of points) {
-        const distance = Math.hypot(p.px - x, p.py - y);
-        if (distance < bestDistance) { best = p; bestDistance = distance; }
-      }
+      view.at.forEach(([px, py], i) => {
+        const distance = Math.hypot(px - x, py - y);
+        if (distance < bestDistance) { best = points[i]; bestDistance = distance; }
+      });
       return best;
     }
 
@@ -248,7 +287,7 @@
       try {
         const response = await api(`${batchPath()}/ask`, {
           method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ question: $("question").value }),
+          body: JSON.stringify({ question: $("question").value, vectors: $("vectors").checked }),
         });
         const { answer, keyframes } = await response.json();
         if ($("batch").value !== name) return; // another batch was chosen meanwhile
@@ -262,14 +301,19 @@
       }
     }
 
-    // A mouse chooses the point under it; a finger the point tapped or dragged over.
-    for (const type of ["pointerdown", "pointermove"]) {
-      canvas.addEventListener(type, (event) => choose(nearest(event)));
+    // A mouse chooses the point under it; a finger the point tapped or dragged over. A point
+    // chosen on one map is ringed on both.
+    const resized = new ResizeObserver(draw); // also the first draw, and when the second map shows
+    for (const view of views) {
+      for (const type of ["pointerdown", "pointermove"]) {
+        view.canvas.addEventListener(type, (event) => choose(nearest(event, view)));
+      }
+      resized.observe(view.canvas);
     }
+    $("compare").addEventListener("change", () => compare().catch(report));
     $("batch").addEventListener("change", () => loadBatch().catch(report));
     $("ask").addEventListener("submit", ask);
     addEventListener("hashchange", () => location.reload()); // a new link opened in this tab
-    new ResizeObserver(draw).observe(canvas); // also the first draw
     $("ramp").style.background = `linear-gradient(to right, ${RAMP.map((c) => `rgb(${c})`).join(", ")})`;
     loadBatches().catch(report);
   </script>

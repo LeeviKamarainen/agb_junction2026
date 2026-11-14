@@ -1,4 +1,4 @@
-"""embed.store and embed.load with a fake embedder: CLIP is never loaded here."""
+"""embed.store and embed.load with a fake embedder: the embedding model is never loaded here."""
 
 import numpy as np
 import polars as pl
@@ -17,9 +17,11 @@ def fake_vectors(paths, batch=32):
 
 
 @pytest.fixture(autouse=True)
-def no_clip(monkeypatch):
+def no_encoder(monkeypatch):
     monkeypatch.setattr(embed, "embed_images", fake_vectors)
-    monkeypatch.setattr(embed, "clip", lambda: pytest.fail("the test loaded CLIP"))
+    monkeypatch.setattr(
+        embed, "encoder", lambda: pytest.fail("the test loaded the embedding model")
+    )
 
 
 def stills(out_dir, numbers):

@@ -63,12 +63,12 @@ All checked on VM2 on 2026-11-14, on one 92.4 s test video.
 5. **Proactive memory.** Not started; the idea is part 5 of `README.md`. In order:
    1. **Object memories with a held-in-hand flag.** One memory per tracked object: its crop
       embedding, where and when it was last seen, whether it has been in a hand. Boxes per
-      keyframe, each crop embedded with CLIP; crops linked into tracks by cosine similarity;
+      keyframe, each crop embedded with EmbeddingGemma 2; crops linked into tracks by cosine similarity;
       hand detection (MediaPipe), and a track whose box overlapped a hand gets the flag. Next
       step: check whether the SAM 3 already running on VM1 can give the boxes (its API takes a
       point or a grid of points today) before picking another detector.
    2. **Nudge when something is left behind.** Cluster the scene embeddings into places; at a
-      transition list the held objects last seen in the place being left; drop junk with a CLIP
+      transition list the held objects last seen in the place being left; drop junk with an EmbeddingGemma 2
       text-prompt score ("a personal item people carry with them"); give Gemma the rest as text
       (object, minutes since put down, place) for a yes or no and one sentence. At most one
       nudge per transition. Without Gemma: the score with a threshold and a fixed sentence.
