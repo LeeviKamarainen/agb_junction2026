@@ -19,11 +19,11 @@ class Settings(BaseSettings):
     llm_model: str = "google/gemma-4-31B-it"
 
     # Turns search queries into vectors through an OpenAI-style /v1/embeddings server. It must be
-    # the model that embedded the stored memories (CLIP ViT-B/32 text tower for the images), or the
-    # distances mean nothing. Optional: without it /api/search and /api/ask answer 503.
+    # the model that embedded the stored memories (EmbeddingGemma 2, as the memory API serves it),
+    # or the distances mean nothing. Optional: without it /api/search and /api/ask answer 503.
     embed_url: str | None = None  # base URL, without /v1
     embed_api_key: str | None = None
-    embed_model: str = "ViT-B-32"
+    embed_model: str = "google/embeddinggemma-2"
 
 
 @lru_cache

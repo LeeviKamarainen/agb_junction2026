@@ -8,7 +8,7 @@ covers it, so changing a dimension or a column rebuilds the database like any ot
 (docs/adr/0001-disposable-database.md).
 
 Search is exact (brute force over every vector that passes the filters), which is fine up to some
-hundreds of thousands of vectors: a 512-wide float32 vector is 2 KB.
+hundreds of thousands of vectors: a 768-wide float32 vector is 3 KB.
 """
 
 from collections.abc import Mapping, Sequence
@@ -36,13 +36,13 @@ class Hit:
     metadata: dict[str, Any]  # the extra columns only
 
 
-# 512 is what CLIP ViT-B/32 produces (see memory/docs/decisions.md). note_embedding is for the
+# 768 is what EmbeddingGemma 2 produces (see memory/docs/decisions.md). note_embedding is for the
 # example Note feature, so delete it together with Note. To keep more than a timestamp, declare it,
-# e.g. VectorTable(512, {"source": "TEXT", "frame": "INTEGER"}).
+# e.g. VectorTable(768, {"source": "TEXT", "frame": "INTEGER"}).
 VECTOR_TABLES: dict[str, VectorTable] = {
-    "note_embedding": VectorTable(512),
+    "note_embedding": VectorTable(768),
     # One row per Memory (app/models.py), same id. kind is copied here so a search can filter on it.
-    "memory_embedding": VectorTable(512, {"kind": "TEXT"}),
+    "memory_embedding": VectorTable(768, {"kind": "TEXT"}),
 }
 
 

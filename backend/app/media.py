@@ -13,7 +13,7 @@ from PIL import Image, ImageOps, UnidentifiedImageError
 
 from app.settings import get_settings
 
-MAX_SIDE = 1024  # Gemma and CLIP both downscale further, so bigger only costs bytes
+MAX_SIDE = 1024  # Gemma and the embedding model both downscale further, so bigger only costs bytes
 QUALITY = 85
 
 
