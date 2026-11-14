@@ -14,16 +14,26 @@ from sqlmodel import col, select
 
 from app.auth import ViewerDep
 from app.db import SessionDep
-from app.glasses import actions, channel, frames, photos, reminders, remote_memory, screens
+from app.glasses import (
+    actions,
+    channel,
+    frames,
+    photos,
+    reminders,
+    remote_memory,
+    screens,
+    triggers,
+)
 from app.glasses.actions import Command, WatchResult
 from app.glasses.layout import GlassesReply
-from app.llm import Chat, Embedder, get_chat, get_embedder
+from app.llm import Chat, Embedder, UpstreamError, get_chat, get_embedder
 from app.models import (
     Reminder,
     ReminderCreate,
     ReminderPublic,
     Trigger,
     TriggerCreate,
+    TriggerGoal,
     TriggerPublic,
 )
 
@@ -222,6 +232,27 @@ async def create_trigger(body: TriggerCreate, session: SessionDep, viewer: Viewe
     return trigger
 
 
+@router.post("/triggers/generate", response_model=list[TriggerPublic], status_code=201)
+async def generate_triggers(
+    body: TriggerGoal, session: SessionDep, viewer: ViewerDep, chat: ChatDep
+):
+    """Gemma writes the triggers for what the wearer wants watched ("tell me when my bus comes")
+    and they are saved, enabled. 503 without a chat model; 502 when it fails or its answer holds
+    no trigger."""
+    if chat is None:
+        raise HTTPException(503, "No chat model configured: set LLM_URL (and LLM_API_KEY)")
+    try:
+        written = await triggers.write(chat, body.goal)
+    except (UpstreamError, ValueError) as error:
+        raise HTTPException(502, str(error)) from error
+    made = [Trigger.model_validate(trigger, update={"owner_id": viewer.id}) for trigger in written]
+    session.add_all(made)
+    await session.commit()
+    for trigger in made:
+        await session.refresh(trigger)
+    return made
+
+
 @router.put("/triggers/{id}", response_model=TriggerPublic)
 async def update_trigger(id: int, body: TriggerCreate, session: SessionDep, viewer: ViewerDep):
     trigger = await session.get(Trigger, id)
@@ -229,6 +260,8 @@ async def update_trigger(id: int, body: TriggerCreate, session: SessionDep, view
         raise HTTPException(404, "No such trigger")
     if body.watch_for != trigger.watch_for:
         await frames.forget_trigger_vector(session, id)
+    if (body.watch_for, body.sigmas) != (trigger.watch_for, trigger.sigmas):
+        trigger.level = None  # measured again on the next stream
     trigger.sqlmodel_update(body.model_dump())
     session.add(trigger)
     await session.commit()
