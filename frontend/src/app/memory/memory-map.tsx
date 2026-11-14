@@ -29,7 +29,8 @@ import {
 type ColorBy = "time" | "collection" | "kind";
 type ViewMode = "2d" | "3d" | "both";
 type Point = { memory: MemoryVector; pos: [number, number, number] };
-type Projection = { points: Point[]; explained: number[] };
+type Projection = { points: Point[]; explained: number[]; axes: Float64Array[] };
+const EMPTY: Projection = { points: [], explained: [], axes: [] };
 
 // One hue from dark to light: early memories are dark, late ones light (as in memory/'s map).
 const RAMP = [
@@ -60,9 +61,13 @@ const RADIUS = 5; // of a point, in CSS pixels
 const REACH = 32; // how far from a point the pointer may be and still pick it
 const TAP = 6; // pixels a pointer may move and still count as a tap, not a drag
 
-function project(memories: MemoryVector[]): Projection {
-  if (memories.length === 0) return { points: [], explained: [] };
-  const { coords, explained } = pca(memories.map((m) => decode(m.embedding)));
+/** The memories on the map; `start` is the axes of an earlier map of mostly the same ones. */
+function project(memories: MemoryVector[], start: Float64Array[]): Projection {
+  if (memories.length === 0) return EMPTY;
+  const { coords, explained, axes } = pca(
+    memories.map((m) => decode(m.embedding)),
+    start,
+  );
   // Scale into the unit ball, keeping the proportions between the axes.
   const radius = Math.max(1e-9, ...coords.map((c) => Math.hypot(...c)));
   return {
@@ -71,6 +76,7 @@ function project(memories: MemoryVector[]): Projection {
       pos: [0, 1, 2].map((a) => (coords[i][a] ?? 0) / radius) as Point["pos"],
     })),
     explained,
+    axes,
   };
 }
 
@@ -417,7 +423,10 @@ export function MemoryMap({
   found: number[];
 }) {
   const [shown, setShown] = useState<string[]>([]);
-  const [memories, setMemories] = useState<MemoryVector[] | null>(null);
+  const [projection, setProjection] = useState<Projection | null>(null);
+  // The last map's axes and the collections it showed: the next map of the same collections
+  // starts from them (pca.ts), so a refresh while streaming costs one pass over the vectors.
+  const fitted = useRef<{ key: string; axes: Float64Array[] } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [reload, setReload] = useState(0);
@@ -447,7 +456,11 @@ export function MemoryMap({
         if (!current) return;
         if (problem || !data)
           throw new Error(errorText(problem, "Could not load the vectors"));
-        setMemories(data);
+        const start =
+          fitted.current?.key === activeKey ? fitted.current.axes : [];
+        const next = project(data, start);
+        fitted.current = { key: activeKey, axes: next.axes };
+        setProjection(next);
         setError(null);
       })
       .catch((problem: unknown) => {
@@ -467,8 +480,7 @@ export function MemoryMap({
     };
   }, [activeKey, version, reload]);
 
-  const projection = useMemo(() => project(memories ?? []), [memories]);
-  const { points, explained } = projection;
+  const { points, explained } = projection ?? EMPTY;
 
   // Each collection keeps its colour, whatever the counts or the filter: by name, alphabetically.
   const collectionColors = useMemo(() => {
@@ -557,7 +569,7 @@ export function MemoryMap({
           <h2 id="map-title" className="font-semibold">
             Memory map{" "}
             <span className="text-sm font-normal text-muted-foreground">
-              {memories ? `${points.length} vectors` : ""}
+              {projection ? `${points.length} vectors` : ""}
             </span>
           </h2>
           <p className="text-xs text-muted-foreground">
@@ -618,7 +630,7 @@ export function MemoryMap({
           {error}
         </p>
       )}
-      {memories && points.length < 2 && !error && (
+      {projection && points.length < 2 && !error && (
         <p className="text-sm text-muted-foreground">
           The map needs at least two memories with embeddings. Add some above.
         </p>

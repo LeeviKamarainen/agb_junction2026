@@ -36,7 +36,7 @@ check-backend:
 	cd backend && uv run ruff format --check && uv run ruff check && uv run pytest -q
 
 check-frontend: frontend/node_modules
-	cd frontend && npm run lint && BACKEND_URL=$(LOCAL_BACKEND_URL) npm run typecheck
+	cd frontend && npm run lint && BACKEND_URL=$(LOCAL_BACKEND_URL) npm run typecheck && npm test
 
 # Regenerate frontend/src/lib/api/schema.d.ts from FastAPI's OpenAPI schema.
 api-types: frontend/node_modules

@@ -5,7 +5,7 @@ FastAPI backend (`backend/`: uv, SQLModel on SQLite) and Next.js frontend (`fron
 ## Commands
 
 - `make dev`: backend on :8000 and frontend on :3000, both auto-reloading. Open http://localhost:3000; API docs at http://localhost:3000/api/docs.
-- `make check`: the same checks CI runs (ruff, pytest, ESLint, typecheck).
+- `make check`: the same checks CI runs (ruff, pytest, ESLint, typecheck, and the frontend's `*.test.ts` files with `node --test`).
 - `make api-types`: regenerate `frontend/src/lib/api/schema.d.ts` after changing backend models or routes, and commit the result.
 - `make up`: the production stack in Docker at http://localhost.
 - `make reset-db`: delete the local database.
