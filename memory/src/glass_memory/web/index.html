@@ -281,6 +281,7 @@
     async function ask(event) {
       event.preventDefault();
       const name = $("batch").value;
+      if (!name) return void (statusLine.textContent = "No batches stored yet.");
       $("send").disabled = true;
       statusLine.textContent = "Asking Gemma…";
       try {

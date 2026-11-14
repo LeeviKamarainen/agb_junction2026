@@ -51,7 +51,8 @@ the repo root. `uv sync` creates `.venv` (Python 3.14, torch and the models' lib
 - Video to memories: `.venv/bin/python -m glass_memory.embed VIDEO` writes keyframes, embeddings
   and an index to `res/items/EMB-1/<video name>/`.
 - Memory map notebook: `uv run --env-file .env marimo run notebooks/VIZ-1/map.py` (`.env` holds
-  `GEMMA_API_KEY`; `GEMMA_URL` and `GEMMA_MODEL` are optional, see `src/glass_memory/ask.py`).
+  `GEMMA_URL` and `GEMMA_API_KEY` when an API serves Gemma; `GEMMA_MODEL` is optional, see
+  `src/glass_memory/ask.py`).
 - Deploying the API to VM2: the `make memory-*` targets, listed in the header of
   `deploy/deploy.sh`. They read `VM2_IP` from `memory/.env`.
 - Recorded clips and everything made from them go under `res/` (ignored by git). The folder

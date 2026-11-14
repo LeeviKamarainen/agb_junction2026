@@ -87,9 +87,9 @@ case ${1:-deploy} in
     setup) setup ;;
     logs) ssh "$vm" "$sudo journalctl -u glass-memory -f -n 100" ;;
     ssh) ssh "$vm" ;;
-    # The page's address with the token in it, to open on a phone or share. The only place the
-    # token is printed.
+    # The token alone, for an API client. This and `link` are the only places it is printed.
     token) token ;;
+    # The page's address with the token in it, to open on a phone or share.
     link)
         token=$(token)
         echo "https://$host/#token=$token" ;;

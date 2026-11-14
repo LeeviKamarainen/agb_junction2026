@@ -184,9 +184,8 @@ class Question(BaseModel):
 @batches.post("/{batch}/ask")
 def answer(folder: Folder, body: Question):
     """Gemma's answer from the k memories whose embeddings are closest to the question: from
-    their stills,
-    or with `vectors` from its stored image vectors of them. They are given, and their keyframes
-    named, in time order."""
+    their stills, or with `vectors` from its stored image vectors of them. They are given, and
+    their keyframes named, in time order."""
     if body.vectors:
         _own_gemma()
     index, embeddings = embed.load(folder)
