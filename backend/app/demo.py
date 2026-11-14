@@ -171,7 +171,8 @@ async def load_demo_memories(session: AsyncSession, embed: Embedder) -> bool:
     if await is_loaded(session):
         return False
     moments = timeline()
-    embeddings = await embed([moment.text for moment in moments])  # before deleting anything
+    # Before deleting anything. As documents: captions are what searches find, like notes.
+    embeddings = await embed([moment.text for moment in moments], input_type="document")
     for memory in await _stored(session):
         assert memory.id is not None
         await vectors.delete(await session.connection(), TABLE, memory.id)

@@ -9,11 +9,11 @@ from app.search import DEMO_OWNER, add_memory
 WIDTH = 768
 
 
-async def embed_all(texts):
+async def embed_all(texts, input_type="query"):
     return [[1.0] + [0.0] * (WIDTH - 1) for _ in texts]
 
 
-async def broken(_texts):
+async def broken(_texts, input_type="query"):
     raise UpstreamError("down")
 
 
@@ -59,6 +59,18 @@ def test_loading_stores_demo_memories_once(anonymous, db):
     assert len(found) == len(demo.MOMENTS)
     assert set(found) == {DEMO_OWNER}
     assert anonymous.get("/api/demo/timeline").json()["searchable"] is True
+
+
+def test_the_captions_are_embedded_as_documents(anonymous, db):
+    """A search embeds its question as a query, and the captions are what it finds, as notes are."""
+    asked = []
+
+    async def recording(texts, input_type="query"):
+        asked.append(input_type)
+        return await embed_all(texts)
+
+    assert load(db, recording) is True
+    assert asked == ["document"]
 
 
 def test_guests_see_the_demo_memories(anonymous, db, guest):
