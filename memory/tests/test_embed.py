@@ -95,7 +95,7 @@ def test_text_gets_the_model_cards_prompt_for_its_side_of_a_search(monkeypatch):
     assert np.allclose(question, [0.6, 0.8])  # unit length
 
 
-def test_keyframes_are_kept_with_their_faces_filled(tmp_path, monkeypatch):
+def test_keyframes_are_kept_with_their_faces_blurred(tmp_path, monkeypatch):
     """A fake detector finds one face in the middle of every frame of a small checkerboard clip."""
     rows, columns = np.indices((64, 64))
     board = np.stack([((rows // 4 + columns // 4) % 2 * 255).astype(np.uint8)] * 3, axis=-1)
@@ -113,5 +113,5 @@ def test_keyframes_are_kept_with_their_faces_filled(tmp_path, monkeypatch):
     assert len(saved) >= 2
     for _, name in saved:
         still = np.asarray(Image.open(tmp_path / "keyframes" / name).convert("L"), float)
-        assert still[24:40, 24:40].std() < 3  # the face, filled
+        assert still[24:40, 24:40].std() < 3  # the face, blurred
         assert still[:8, :8].std() > 50  # a corner, still squares

@@ -38,7 +38,7 @@ async def memory_frame(
     seen_at: datetime | None = None,
 ) -> frames.FrameReply:
     """The memory-mode upload, shared by HTTP and the Android socket. Every face in the frame is
-    filled first, so nothing stores, embeds or shows one."""
+    blurred first, so nothing stores, embeds or shows one."""
     if embed is None:
         raise HTTPException(503, "No embedding model configured: set EMBED_URL")
     if len(data) > MAX_FRAME:
@@ -136,7 +136,7 @@ async def watch(
     session: AsyncSession, viewer: Viewer, data: bytes, chat: Chat | None
 ) -> WatchResult:
     """Checks one frame for every reminder's object; never raises for a model's failure. Every
-    face in the frame is filled before the chat model sees it."""
+    face in the frame is blurred before the chat model sees it."""
     check_jpeg(data, "frame")
     try:
         data = await anyio.to_thread.run_sync(faces.anonymise, data)

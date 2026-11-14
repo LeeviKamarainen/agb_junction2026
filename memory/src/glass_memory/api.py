@@ -114,7 +114,7 @@ def store_batch(
     every_s: Annotated[float, Form(gt=0, allow_inf_nan=False)] = 1.0,
 ):
     """Store the frames (JPEGs in time order, `every_s` seconds apart, 1000 at most: the form
-    parser's limit), every face in them filled first, as one batch of memories, with Gemma's
+    parser's limit), every face in them blurred first, as one batch of memories, with Gemma's
     image vectors of each. If Gemma fails the batch is still stored, with an empty summary."""
     stills = [frame.file.read() for frame in frames]
     if not all(still.startswith(b"\xff\xd8") for still in stills):
@@ -215,7 +215,7 @@ class Texts(BaseModel):
 def embeddings(body: Texts):
     """OpenAI-style embeddings in the stills' embedding space, for another service's search. An
     input that starts with `data:image/` is a base64 image and is embedded as one, its faces
-    filled first; every other input is embedded as text, as a query or a document by
+    blurred first; every other input is embedded as text, as a query or a document by
     `input_type`."""
     if body.model != embed.MODEL:
         raise HTTPException(400, f"only {embed.MODEL} is served")

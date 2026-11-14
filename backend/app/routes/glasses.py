@@ -113,7 +113,7 @@ async def trigger_reminder(reminder_id: int, session: SessionDep, viewer: Viewer
     response_model=WatchResult,
     description=(
         "One frame from the camera while the glasses watch for reminders, with every face in it "
-        "filled before the chat model sees it. Not stored. A target in view gives a warning, at "
+        "blurred before the chat model sees it. Not stored. A target in view gives a warning, at "
         "most once a minute per reminder."
     ),
 )
@@ -137,7 +137,7 @@ async def upload_frame(
     stream_id: Annotated[str, Form(max_length=100)] = "",
     seen_at: Annotated[datetime | None, Form()] = None,
 ):
-    """One frame from the glasses, with every face in it filled first: embedded, stored as a
+    """One frame from the glasses, with every face in it blurred first: embedded, stored as a
     memory in the glasses collection, and checked against the triggers.
 
     `source` is "stream" for frames of a running stream (twice a second; a frame much like the
