@@ -1,6 +1,13 @@
 "use client";
 
-import { LoaderCircle, Save, Sparkles, Trash2, Zap } from "lucide-react";
+import {
+  History,
+  LoaderCircle,
+  Save,
+  Sparkles,
+  Trash2,
+  Zap,
+} from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -15,6 +22,14 @@ type Draft = components["schemas"]["TriggerDraft"];
 /** A trigger's score on the latest stream frame, and the level it has to reach. */
 export type Match = { score: number | null; level: number | null };
 
+export type GlassesReply = components["schemas"]["GlassesReply"];
+
+const RECALL_PROMPT = "Where have I seen this one?";
+// The same questions the backend takes for déjà vu: a copy of _ASKS in
+// backend/app/glasses/dejavu.py, so change the two together.
+const RECALL =
+  /deja vu|déjà vu|\b(know|remember|recogni[sz]e|seen|see) (this|that)( one| thing| place)?( before| already| from( somewhere| before)?)?\W*$/i;
+
 const field =
   "w-full rounded-md border border-border bg-background px-2 py-1.5 text-sm outline-none focus-visible:border-primary disabled:opacity-60";
 
@@ -28,16 +43,20 @@ const EDITED: (keyof Draft)[] = ["name", "watch_for", "sigmas"];
  * on and off and removed together. `lastMatches` (trigger id -> score and level on the latest
  * frame) shows how close each is. The list reloads on a new `firedCount`, so "last fired" and
  * the measured levels stay current, and each time it becomes `visible`, since Gemma may have
- * removed a goal in the chat meanwhile.
+ * removed a goal in the chat meanwhile. A déjà vu question ("where have I seen this one?") asked
+ * here goes to the glasses instead, and their reply to `onRecall`.
  */
 export function TriggerEditor({
   lastMatches,
   firedCount = 0,
   visible = true,
+  onRecall,
 }: {
   lastMatches: Map<number, Match>;
   firedCount?: number;
   visible?: boolean;
+  /** The glasses' reply to a déjà vu question, for the glasses view to show. */
+  onRecall: (reply: GlassesReply) => void;
 }) {
   const [goals, setGoals] = useState<Goal[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -63,7 +82,27 @@ export function TriggerEditor({
     if (visible) void load();
   }, [load, firedCount, visible]);
 
+  /** Déjà vu: asks, as the glasses would, where the newest stream frame was seen before. */
+  async function recall(question: string) {
+    setError(null);
+    setWriting(true);
+    try {
+      const { data, error: problem } = await api.POST("/api/glasses/command", {
+        body: { question },
+      });
+      if (problem || !data)
+        return setError(errorText(problem, "Could not ask the glasses"));
+      onRecall(data);
+      setText("");
+    } catch {
+      setError("Could not reach the backend");
+    } finally {
+      setWriting(false);
+    }
+  }
+
   async function generate() {
+    if (RECALL.test(text)) return recall(text.trim());
     setError(null);
     setWriting(true);
     try {
@@ -117,7 +156,10 @@ export function TriggerEditor({
           message for the glasses, or finds a false alarm, says nothing and
           raises the level. After a message the stream is quiet for 5 seconds,
           so it can be read; after a false alarm for 2. To drop a goal, remove
-          it here or ask Gemma to stop watching for it.
+          it here or ask Gemma to stop watching for it. Asking where you have
+          seen this one instead looks up the newest stream frame among your
+          earlier stills, and Gemma says whether any shows the same thing; the
+          answer appears in the glasses view above.
         </p>
       </div>
       <form
@@ -149,7 +191,18 @@ export function TriggerEditor({
           ) : (
             <Sparkles aria-hidden="true" />
           )}
-          {writing ? "Gemma is writing triggers…" : "Ask Gemma for triggers"}
+          {writing ? "Gemma is working…" : "Ask Gemma for triggers"}
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="w-fit"
+          disabled={writing}
+          title="Looks up the newest stream frame among your earlier stills"
+          onClick={() => void recall(RECALL_PROMPT)}
+        >
+          <History aria-hidden="true" /> {RECALL_PROMPT}
         </Button>
       </form>
       {error && (

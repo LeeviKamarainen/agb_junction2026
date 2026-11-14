@@ -1,7 +1,7 @@
 "use client";
 
 import { Glasses, MessageSquareText, Video } from "lucide-react";
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { GlassesHarness } from "../glasses/harness";
 import { AskChat } from "./ask-chat";
@@ -9,7 +9,7 @@ import { useCollections } from "./collections";
 import { GlassesStream } from "./glasses-stream";
 import { MemoryLibrary } from "./memory-library";
 import { MemoryMap } from "./memory-map";
-import { type Match, TriggerEditor } from "./trigger-editor";
+import { type GlassesReply, type Match, TriggerEditor } from "./trigger-editor";
 
 type Tab = "ask" | "glasses" | "stream";
 
@@ -38,6 +38,10 @@ export function MemoryLab() {
   const [matches, setMatches] = useState<Map<number, Match>>(new Map());
   const lastRefresh = useRef(0);
   const [fired, setFired] = useState(0); // triggers fired, to refresh "last fired" and levels
+  // The reply to a déjà vu question, on the glasses view for as long as the glasses would show it.
+  const [recalled, setRecalled] = useState<GlassesReply | null>(null);
+  const recallTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  useEffect(() => () => clearTimeout(recallTimer.current), []);
 
   return (
     <>
@@ -88,6 +92,7 @@ export function MemoryLab() {
             className={tab === "stream" ? "flex flex-col gap-4" : "hidden"}
           >
             <GlassesStream
+              recalled={recalled}
               onReply={(reply) => {
                 setMatches(
                   new Map(
@@ -114,6 +119,17 @@ export function MemoryLab() {
               lastMatches={matches}
               firedCount={fired}
               visible={tab === "stream"}
+              onRecall={(reply) => {
+                setRecalled(reply);
+                clearTimeout(recallTimer.current);
+                recallTimer.current = setTimeout(
+                  () => setRecalled(null),
+                  (reply.dismiss_after_s ?? 10) * 1000,
+                );
+                document
+                  .getElementById("stream-title")
+                  ?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+              }}
             />
           </div>
           <div
