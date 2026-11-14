@@ -164,7 +164,9 @@ async def test_a_list_in_where_matches_any_of_its_values(db_path, monkeypatch):
         )
         none = await vectors.nearest(connection, "frame_embedding", unit(0), where={"source": []})
         stored = await vectors.stored(connection, "frame_embedding", {2, 3})
+        no_ids = await vectors.stored(connection, "frame_embedding", set())
 
     assert sorted(hit.id for hit in some) == [1, 3]
     assert none == []
     assert stored.keys() == {2, 3} and stored[2] == pytest.approx(unit(0))
+    assert no_ids == {}
