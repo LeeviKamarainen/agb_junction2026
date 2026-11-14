@@ -732,12 +732,11 @@ export interface components {
         };
         /**
          * Command
-         * @description Exactly one of: what the wearer said (`text`), the action of the button they pressed, or
-         *     the question they asked after pressing Ask (`question`, always a question about the photos).
+         * @description Exactly one of: the action of a button or gesture (`action`), or what the wearer said
+         *     (`question`). What they said goes to the memory as it is, unless it starts "remind me…" or
+         *     "warn me…", which makes it a reminder (reminders.py).
          */
         Command: {
-            /** Text */
-            text?: string | null;
             /** Action */
             action?: string | null;
             /** Question */
