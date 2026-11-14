@@ -334,7 +334,7 @@ def test_an_open_socket_refuses_work_after_its_guest_expires(client, guest, scen
     class Later:
         @staticmethod
         def now(tz):
-            return datetime.now(UTC) + timedelta(minutes=31)
+            return datetime.now(UTC) + timedelta(minutes=61)
 
     with client.websocket_connect("/api/glasses/ws", headers=guest()) as ws:
         ws.send_json({"type": "ping"})

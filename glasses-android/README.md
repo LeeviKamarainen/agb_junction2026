@@ -62,7 +62,7 @@ Set `glasses.api` in `local.properties` to the backend's HTTP(S) address without
 `POST /api/auth/login` or `POST /api/auth/guest` to use that account's memories and triggers. This is an app
 session token, separate from the Memory API and segmentation tokens. Keep it in the ignored `local.properties`;
 it is compiled into the APK. With no token the app starts a temporary guest, reuses it across reconnects and
-rearming, and starts another after it expires (30 minutes; the old guest's data is deleted).
+rearming, and starts another after it expires (60 minutes; the old guest's data is deleted).
 
 The phone shows the connection state. The socket stays open while memory mode is armed, including while the
 camera is stopped, so pushed text warnings can still arrive. Disarming closes it and cancels pending uploads.

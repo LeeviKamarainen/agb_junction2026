@@ -7,7 +7,7 @@ import { GuestButton } from "@/components/guest-button";
 export const metadata: Metadata = {
   title: "Try it as a guest — Junction / 26",
   description:
-    "A 30-minute guest session: no sign-up, see the demo pictures and add your own.",
+    "A 60-minute guest session: no sign-up, see the demo pictures and add your own.",
 };
 
 export default function GuestPage() {
@@ -19,18 +19,21 @@ export default function GuestPage() {
         </h1>
         <p className="text-sm text-muted-foreground">
           No name or password. You see the demo pictures and whatever you add
-          yourself; nobody else sees yours, and Gemma only searches the demo
-          pictures and yours when you ask. After 30 minutes the guest account
-          and everything you added are deleted.
+          yourself. Gemma searches those memories when you ask. After 60 minutes
+          the guest account and everything you added are deleted.
         </p>
         <GuestButton />
         <p className="text-sm text-muted-foreground">
-          The admin?{" "}
+          Save your guest username to return on another device. Keep it private;
+          it opens your temporary account without a password.
+        </p>
+        <p className="text-sm text-muted-foreground">
+          Already have a guest account?{" "}
           <Link
             href="/login"
             className="text-primary underline-offset-4 hover:underline"
           >
-            Log in
+            Return with your username
           </Link>
         </p>
       </section>

@@ -33,9 +33,30 @@ export interface paths {
         /**
          * Guest
          * @description A new temporary guest account, logged in: a generated name, no password. It and everything
-         *     it adds are deleted after 30 minutes (auth.GUEST_MINUTES).
+         *     it adds are deleted after 60 minutes (auth.GUEST_MINUTES).
          */
         post: operations["guest_api_auth_guest_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/auth/guest/login": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Guest Login
+         * @description Reopen a guest by username while it is active. Keeps its original expiry; an unknown,
+         *     expired or non-guest account gets the same 401.
+         */
+        post: operations["guest_login_api_auth_guest_login_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -800,6 +821,14 @@ export interface components {
             /** Dismiss After S */
             dismiss_after_s?: number | null;
         };
+        /**
+         * GuestLogin
+         * @description Reopen an unexpired temporary account using its generated username.
+         */
+        GuestLogin: {
+            /** Username */
+            username: string;
+        };
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
@@ -1189,6 +1218,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["LoginResult"];
+                };
+            };
+        };
+    };
+    guest_login_api_auth_guest_login_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GuestLogin"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LoginResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

@@ -18,7 +18,7 @@ segment.token=PASTE_TOKEN_HERE
 # backend on this PC seen from the emulator (a real phone needs the PC's LAN address instead).
 glasses.api=
 # Optional token from /api/auth/login or /api/auth/guest, to share that user's memories and triggers.
-# Leave blank to create a temporary guest automatically (expires after 30 minutes).
+# Leave blank to create a temporary guest automatically (expires after 60 minutes).
 # This is the app login token, NOT GLASS_API_TOKEN or the segmentation token. Compiled into the APK.
 glasses.token=
 

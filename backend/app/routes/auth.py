@@ -8,7 +8,7 @@ from sqlmodel import select
 from app import auth
 from app.auth import OptionalViewerDep, ViewerDep
 from app.db import SessionDep
-from app.models import Credentials, LoginResult, User, UserPublic
+from app.models import Credentials, GuestLogin, LoginResult, User, UserPublic
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -47,8 +47,20 @@ def _logged_in(request: Request, response: Response, session, user: User) -> Log
 @router.post("/guest", response_model=LoginResult, status_code=201)
 def guest(request: Request, response: Response, session: SessionDep):
     """A new temporary guest account, logged in: a generated name, no password. It and everything
-    it adds are deleted after 30 minutes (auth.GUEST_MINUTES)."""
+    it adds are deleted after 60 minutes (auth.GUEST_MINUTES)."""
     return _logged_in(request, response, session, auth.create_guest(session))
+
+
+@router.post("/guest/login", response_model=LoginResult)
+def guest_login(body: GuestLogin, request: Request, response: Response, session: SessionDep):
+    """Reopen a guest by username while it is active. Keeps its original expiry; an unknown,
+    expired or non-guest account gets the same 401."""
+    auth.purge_expired_guests(session)
+    name = body.username.strip().lower()
+    user = session.exec(select(User).where(User.username == name, User.role == "guest")).first()
+    if user is None or user.expires_at is None or _seconds_left(user) == 0:
+        raise HTTPException(401, "Guest account not found or expired")
+    return _logged_in(request, response, session, user)
 
 
 @router.post("/login", response_model=LoginResult)
@@ -57,7 +69,11 @@ def login(body: Credentials, request: Request, response: Response, session: Sess
     without saying which."""
     name = body.username.strip().lower()
     user = session.exec(select(User).where(User.username == name)).first()
-    if user is None or not auth.verify_password(body.password, user.password_hash):
+    if (
+        user is None
+        or user.role != "admin"
+        or not auth.verify_password(body.password, user.password_hash)
+    ):
         raise HTTPException(401, "Wrong username or password")
     return _logged_in(request, response, session, user)
 

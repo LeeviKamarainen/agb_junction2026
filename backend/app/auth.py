@@ -39,7 +39,7 @@ log = logging.getLogger(__name__)
 
 COOKIE = "session"
 SESSION_DAYS = 30  # the admin's logins
-GUEST_MINUTES = 30  # a guest account, its login and its memories
+GUEST_MINUTES = 60  # a guest account, its login and its memories
 USERNAME = re.compile(r"[a-z0-9][a-z0-9_.-]{2,31}")
 _SCRYPT = {"n": 2**14, "r": 8, "p": 1}  # about 50 ms and 16 MB per hash
 
@@ -130,27 +130,41 @@ def create_guest(session: Session) -> User:
     purge_expired_guests(session)
     now = datetime.now(UTC)
     while True:
-        name = f"guest-{secrets.token_hex(3)}"
+        # The username also lets the wearer reopen this temporary account on another device.
+        name = f"guest-{secrets.token_hex(8)}"
         if session.exec(select(User).where(User.username == name)).first() is None:
             break
     guest = User(
         username=name,
-        password_hash="!",  # matches no password: guests cannot log in again
+        password_hash="!",  # guests return by username, never through the admin password login
         role="guest",
         created_at=now,
         expires_at=now + timedelta(minutes=GUEST_MINUTES),
     )
     session.add(guest)
+    session.flush()
+    assert guest.id is not None
+    # Photos outlive database rebuilds, which restart integer IDs. A new guest cannot own
+    # files already on disk under its newly assigned ID.
+    _delete_guest_files(guest.id)
     session.commit()
     session.refresh(guest)
     return guest
 
 
+def _delete_guest_files(user_id: int) -> None:
+    from app.glasses import photos  # here: app.glasses imports this module
+
+    try:
+        shutil.rmtree(photos.photos_dir() / str(user_id))
+    except FileNotFoundError:
+        pass
+    (photos.photos_dir() / f"memory-batch-{user_id}.json").unlink(missing_ok=True)
+
+
 def purge_expired_guests(session: Session) -> int:
     """Deletes every expired guest with its logins, memories (and their image files), reminders,
     glasses photos and memory-API batch. Returns how many. Commits."""
-    from app.glasses import photos  # here: app.glasses imports this module
-
     now = datetime.now(UTC)
     expired = [
         user
@@ -179,8 +193,8 @@ def purge_expired_guests(session: Session) -> int:
     for name in files:  # after the commit: a failed delete never leaves rows without files
         media.delete(name)
     for user in expired:
-        shutil.rmtree(photos.photos_dir() / str(user.id), ignore_errors=True)
-        (photos.photos_dir() / f"memory-batch-{user.id}.json").unlink(missing_ok=True)
+        assert user.id is not None
+        _delete_guest_files(user.id)
     if expired:
         log.info("Deleted %d expired guest account(s)", len(expired))
     return len(expired)

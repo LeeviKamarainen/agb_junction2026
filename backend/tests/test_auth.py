@@ -65,9 +65,9 @@ def test_a_guest_session_needs_no_name_or_password(anonymous):
     body = reply.json()
     assert body["username"].startswith("guest-") and body["role"] == "guest"
     left = datetime.fromisoformat(body["expires_at"]) - datetime.now(UTC)
-    assert timedelta(minutes=29) < left <= timedelta(minutes=30)
+    assert timedelta(minutes=59) < left <= timedelta(minutes=60)
     assert anonymous.get("/api/auth/me").json()["username"] == body["username"]  # the cookie
-    assert "Max-Age=1" in reply.headers["set-cookie"]  # ~1800 s, as long as the account
+    assert "Max-Age=3" in reply.headers["set-cookie"]  # ~3600 s, as long as the account
 
 
 def test_every_guest_is_a_new_account(anonymous):
@@ -77,7 +77,27 @@ def test_every_guest_is_a_new_account(anonymous):
     assert first["username"] != second["username"]
 
 
-def test_there_is_no_register_and_guests_cannot_log_in_again(anonymous):
+def test_a_new_guest_cannot_inherit_files_from_a_recycled_user_id(anonymous):
+    with Session(get_engine()) as session:
+        next_id = max(user.id for user in session.exec(select(User))) + 1
+    name = photos.save(jpeg(), next_id)
+    old_photo = photos.photos_dir() / str(next_id) / name
+    old_batch = photos.photos_dir() / f"memory-batch-{next_id}.json"
+    old_batch.write_text(json.dumps({"batch": "a" * 32, "photos": [name]}))
+    legacy_photo = photos.photos_dir() / name
+    legacy_photo.write_bytes(jpeg())
+
+    created = anonymous.post("/api/auth/guest").json()
+
+    assert created["id"] == next_id
+    assert not old_photo.exists() and not old_batch.exists()
+    assert legacy_photo.exists()  # legacy photos remain available to the admin
+    assert anonymous.get(photos.url(name)).status_code == 404
+    gallery = anonymous.post("/api/glasses/command", json={"action": "gallery"}).json()
+    assert name not in json.dumps(gallery)
+
+
+def test_there_is_no_register_and_guests_cannot_use_the_admin_login(anonymous):
     name = anonymous.post("/api/auth/guest").json()["username"]
     body = {"username": "someone", "password": "long enough"}
 
@@ -85,6 +105,58 @@ def test_there_is_no_register_and_guests_cannot_log_in_again(anonymous):
     for password in ["", "!", "anything"]:
         attempt = {"username": name, "password": password}
         assert anonymous.post("/api/auth/login", json=attempt).status_code in (401, 422)
+
+
+def test_a_guest_can_return_by_username_with_the_same_memories_and_expiry(anonymous):
+    original = anonymous.post("/api/auth/guest").json()
+    note = add_text(anonymous, "My keys are on the desk").json()
+    # Time already spent in the account is not added back when it is reopened.
+    expires = datetime.now(UTC) + timedelta(minutes=20)
+    with Session(get_engine()) as session:
+        user = session.get(User, original["id"])
+        user.expires_at = expires
+        session.add(user)
+        session.commit()
+    anonymous.post("/api/auth/logout")
+
+    response = anonymous.post(
+        "/api/auth/guest/login", json={"username": f"  {original['username'].upper()}  "}
+    )
+
+    assert response.status_code == 200, response.text
+    returned = response.json()
+    assert returned["id"] == original["id"] and returned["role"] == "guest"
+    assert returned["token"] != original["token"]
+    assert datetime.fromisoformat(returned["expires_at"]).replace(tzinfo=UTC) == expires
+    assert "Max-Age=1" in response.headers["set-cookie"]  # only the remaining ~1200 s
+    assert anonymous.get("/api/auth/me").json()["id"] == original["id"]
+    assert [m["id"] for m in anonymous.get("/api/memories").json()] == [note["id"]]
+    anonymous.cookies.clear()
+    assert (
+        anonymous.get(
+            "/api/auth/me", headers={"Authorization": f"Bearer {returned['token']}"}
+        ).json()["id"]
+        == original["id"]
+    )
+
+
+def test_guest_username_login_rejects_unknown_expired_and_admin_accounts(anonymous):
+    original = anonymous.post("/api/auth/guest").json()
+    expire_guests()
+    anonymous.cookies.clear()
+    for username in (original["username"], "guest-unknown", "admin", "   "):
+        response = anonymous.post("/api/auth/guest/login", json={"username": username})
+        assert response.status_code == 401
+        assert response.json() == {"detail": "Guest account not found or expired"}
+        assert "set-cookie" not in response.headers
+    assert anonymous.get("/api/auth/me").status_code == 401
+    with Session(get_engine()) as session:
+        assert session.exec(select(User).where(User.role == "guest")).first() is None
+
+
+def test_guest_username_login_validates_its_input(anonymous):
+    for body in ({}, {"username": ""}, {"username": "x" * 65}):
+        assert anonymous.post("/api/auth/guest/login", json=body).status_code == 422
 
 
 def test_logout(anonymous):
