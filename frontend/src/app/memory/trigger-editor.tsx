@@ -72,9 +72,11 @@ export function TriggerEditor({
   }
 
   async function remove(id: number) {
-    await api.DELETE("/api/glasses/triggers/{id}", {
+    setError(null);
+    const { error: problem } = await api.DELETE("/api/glasses/triggers/{id}", {
       params: { path: { id } },
     });
+    if (problem) setError(errorText(problem, "Could not delete the trigger"));
     await load();
   }
 

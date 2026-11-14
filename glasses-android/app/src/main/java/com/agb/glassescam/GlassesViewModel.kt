@@ -834,7 +834,8 @@ class GlassesViewModel : ViewModel() {
         }
     }
 
-    private fun handleSnapFrame(frame: VideoFrame) {
+    /** [current] is checked under the decoder lock: false drops a frame from a camera that has closed. */
+    private fun handleSnapFrame(frame: VideoFrame, current: () -> Boolean = { true }) {
         if (!frame.isCompressed) return
         val buf = frame.buffer
         val pos = buf.position()
@@ -843,6 +844,7 @@ class GlassesViewModel : ViewModel() {
         buf.position(pos)
 
         synchronized(snapLock) {
+            if (!current()) return
             val d = snapDecoder ?: SnapshotDecoder(frame.width, frame.height).also { snapDecoder = it }
             d.decode(bytes, frame.presentationTimeUs, frame.isCodecConfig)
         }
@@ -1077,6 +1079,10 @@ class GlassesViewModel : ViewModel() {
     private var memoryStored = 0
     @Volatile private var singleRequested = false // the next stream frame goes up as a single photo
     @Volatile private var standaloneSingle = false // a photo opened the camera itself (no stream running)
+    private var memoryPhotoJob: Job? = null // that photo, so disarming cancels it
+    // Bumped (under snapLock) each time the memory camera opens or closes: a frame still being handled
+    // when the camera closes must not create a decoder that outlives it.
+    private var memoryCameraGeneration = 0
     private var messageClearJob: Job? = null
     private var lastSelectMs = 0L
     private var pendingSelect: Job? = null
@@ -1197,7 +1203,7 @@ class GlassesViewModel : ViewModel() {
             return
         }
         standaloneSingle = true
-        viewModelScope.launch {
+        memoryPhotoJob = viewModelScope.launch {
             try {
                 if (!openMemoryCamera(s)) return@launch
                 _ui.update { it.copy(memoryStatus = "Opening the camera for one photo...") }
@@ -1240,8 +1246,9 @@ class GlassesViewModel : ViewModel() {
                 memoryCameraJobs += viewModelScope.launch {
                     st.state.collect { state -> _ui.update { it.copy(streamState = "memory $state") } }
                 }
+                val generation = synchronized(snapLock) { ++memoryCameraGeneration }
                 memoryCameraJobs += viewModelScope.launch(Dispatchers.Default) {
-                    st.videoStream.collect { handleSnapFrame(it) }
+                    st.videoStream.collect { handleSnapFrame(it) { memoryCameraGeneration == generation } }
                 }
                 st.start().onFailure { error, _ -> say("Stream start failed: ${error.description}") }
                 opened = true
@@ -1262,7 +1269,11 @@ class GlassesViewModel : ViewModel() {
         camera?.stop()
         stream = null
         camera = null
-        releaseSnapDecoder()
+        synchronized(snapLock) {
+            memoryCameraGeneration++ // frames still in flight from this camera are dropped
+            snapDecoder?.release()
+            snapDecoder = null
+        }
     }
 
     private suspend fun memoryCycle() {
@@ -1419,6 +1430,8 @@ class GlassesViewModel : ViewModel() {
         memoryCameraJobs.clear()
         messageClearJob?.cancel()
         pendingSelect?.cancel()
+        memoryPhotoJob?.cancel()
+        memoryPhotoJob = null
         singleRequested = false
         renderMemoryOnGlasses = null
         _ui.update {

@@ -65,11 +65,14 @@ object FrameApi {
                     setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")
                     setFixedLengthStreamingMode(body.size)
                 }
-                conn.outputStream.use { it.write(body) }
-                val code = conn.responseCode
-                val text = (if (code in 200..299) conn.inputStream else conn.errorStream)
-                    ?.bufferedReader()?.use { it.readText() }.orEmpty()
-                conn.disconnect()
+                val (code, text) = try {
+                    conn.outputStream.use { it.write(body) }
+                    val code = conn.responseCode
+                    code to (if (code in 200..299) conn.inputStream else conn.errorStream)
+                        ?.bufferedReader()?.use { it.readText() }.orEmpty()
+                } finally {
+                    conn.disconnect()
+                }
                 if (code !in 200..299) {
                     val detail = runCatching { JSONObject(text).optString("detail") }.getOrNull()
                     return@withContext FrameOutcome.Fail("HTTP $code${if (!detail.isNullOrBlank()) ": $detail" else ""}")

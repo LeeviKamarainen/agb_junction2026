@@ -45,6 +45,7 @@ export function GlassesStream({
   const videoRef = useRef<HTMLVideoElement>(null);
   const cameraRef = useRef<MediaStream | null>(null);
   const busy = useRef(false); // one request at a time; frames due meanwhile are skipped
+  const singlePending = useRef(false); // a photo asked for while streaming
   const streamId = useRef("");
   const lastTap = useRef(0);
   const singleTap = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -100,7 +101,10 @@ export function GlassesStream({
   async function send(source: "stream" | "single") {
     if (busy.current) return;
     busy.current = true;
-    if (source === "single") setSending(true);
+    if (source === "single") {
+      singlePending.current = false;
+      setSending(true);
+    }
     try {
       const blob = await grab();
       if (!blob) return;
@@ -139,7 +143,10 @@ export function GlassesStream({
     }
   }
 
-  const tick = useEffectEvent(() => void send("stream"));
+  // A photo asked for while streaming goes as the next frame, like the phone app does.
+  const tick = useEffectEvent(
+    () => void send(singlePending.current ? "single" : "stream"),
+  );
 
   useEffect(() => {
     if (!streaming) return;
@@ -162,13 +169,25 @@ export function GlassesStream({
   useEffect(() => () => release(), []);
 
   async function toggleStream() {
-    if (streaming) return setStreaming(false);
+    if (streaming) {
+      if (singlePending.current) {
+        singlePending.current = false; // the frame it waited for will not come now
+        setSending(false);
+      }
+      return setStreaming(false);
+    }
     if (!(await startCamera())) return;
     streamId.current = crypto.randomUUID();
     setStreaming(true);
   }
 
   async function single() {
+    if (streaming) {
+      // A stream frame is usually uploading right now; send the photo as the next frame instead.
+      singlePending.current = true;
+      setSending(true);
+      return;
+    }
     if (!(await startCamera())) return;
     await send("single");
   }

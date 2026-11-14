@@ -201,3 +201,27 @@ def test_frames_need_an_image_and_an_embedding_model(client, scene):
 def test_the_seeded_example_trigger_exists(client):
     names = [t["name"] for t in client.get("/api/glasses/triggers").json()]
     assert names == ["Keys"]
+
+
+def test_a_chat_model_answering_oddly_still_shows_the_instruction(client, scene):
+    app.dependency_overrides[optional_chat] = lambda: lambda messages, tools: None  # not a dict
+    add_trigger(client)
+
+    body = send(client).json()
+
+    assert body["message"]["text"] == "Say where the keys are."
+    assert body["stored"] is True
+
+
+def test_the_trigger_is_committed_as_fired_before_the_message_is_written(client, scene):
+    fired_during_chat = []
+
+    def chat(messages, tools):
+        fired_during_chat.append(client.get("/api/glasses/triggers").json()[0]["last_fired_at"])
+        return {"role": "assistant", "content": "Keys!"}
+
+    app.dependency_overrides[optional_chat] = lambda: chat
+    add_trigger(client)
+
+    assert send(client).json()["message"]["text"] == "Keys!"
+    assert fired_during_chat[0] is not None

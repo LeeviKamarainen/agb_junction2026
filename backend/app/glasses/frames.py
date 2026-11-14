@@ -130,7 +130,8 @@ def _message(chat: Chat | None, trigger: Trigger, jpeg_name: str) -> str:
             text = (reply.get("content") or "").strip()
             if text:
                 return text
-        except UpstreamError:
+        # A server that fails, or answers in an unexpected shape: the instruction still gets shown.
+        except (UpstreamError, KeyError, IndexError, TypeError, AttributeError):
             pass
     return trigger.instruction
 
@@ -155,19 +156,19 @@ def receive(
         if problem := width_error(len(vector)):
             raise UpstreamError(problem)
         now = time.monotonic()
+        # The client's time dates the memory; the server's paces the triggers, so clients whose
+        # clocks disagree share one cooldown.
         moment = seen_at or datetime.now(UTC)
+        server_now = datetime.now(UTC)
         reply = FrameReply(stored=False)
 
         if (why_not := _should_store(source, stream_id, vector, now)) is None:
             memory = add_memory(session, "image", vector, moment, "", name, collection=COLLECTION)
-            keep = True
             reply.stored, reply.memory_id = True, memory.id
-            if source == "stream":
-                with _lock:
-                    _last_stored[stream_id] = (vector, now)
         else:
             reply.note = why_not
 
+        fired: Trigger | None = None
         triggers = list(session.exec(select(Trigger).where(col(Trigger.enabled))))
         if triggers:
             try:
@@ -183,11 +184,10 @@ def receive(
                 ),
                 key=lambda pair: pair[0],
             )
-            fired: Trigger | None = None
             for distance, trigger in ranked:
                 cooled = (
                     trigger.last_fired_at is None
-                    or (moment - _aware(trigger.last_fired_at)).total_seconds()
+                    or (server_now - _aware(trigger.last_fired_at)).total_seconds()
                     >= trigger.cooldown_s
                 )
                 if fired is None and distance <= trigger.max_distance and cooled:
@@ -202,16 +202,25 @@ def receive(
                     )
                 )
             if fired is not None:
-                assert fired.id is not None
-                fired.last_fired_at = moment
+                fired.last_fired_at = server_now
                 session.add(fired)
-                reply.message = GlassesMessage(
-                    type="trigger",
-                    title=fired.name,
-                    text=_message(chat, fired, name),
-                    trigger_id=fired.id,
-                )
+
+        # Commit before asking the chat model, which can take a while: SQLite allows one writer, so
+        # holding the transaction open would lock out every other write, and another frame could
+        # fire the same trigger again meanwhile.
         session.commit()
+        keep = reply.stored
+        if reply.stored and source == "stream":
+            with _lock:
+                _last_stored[stream_id] = (vector, now)
+        if fired is not None:
+            assert fired.id is not None
+            reply.message = GlassesMessage(
+                type="trigger",
+                title=fired.name,
+                text=_message(chat, fired, name),
+                trigger_id=fired.id,
+            )
         return reply
     finally:
         if not keep:
