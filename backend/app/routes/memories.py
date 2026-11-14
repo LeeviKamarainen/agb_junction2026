@@ -214,13 +214,16 @@ async def add_text(
 
 
 @router.get("/memories/{id}/image", response_class=FileResponse)
-async def memory_image(id: int, session: SessionDep, viewer: ViewerDep):
-    """404, not 403, for someone else's image: nobody learns which ids exist."""
+async def memory_image(id: int, session: SessionDep, viewer: ViewerDep, file: str | None = None):
+    """404, not 403, for someone else's image: nobody learns which ids exist. `file`, as in a
+    memory's image_url, must be the memory's own file: an address from before the database was
+    rebuilt then gives 404, not the new image of the same id."""
     memory = await session.get(Memory, id)
     if (
         memory is None
         or not viewer.can_see(memory.owner_id)
         or memory.image_file is None
+        or (file is not None and file != memory.image_file)
         or not media.path(memory.image_file).exists()
     ):
         raise HTTPException(404, "No image for this memory")

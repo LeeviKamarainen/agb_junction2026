@@ -84,7 +84,7 @@ def test_closest_memory_comes_first(memories, search):
 
     assert results[0].id == memories[0]
     assert results[0].distance == pytest.approx(0.0, abs=1e-6)
-    assert results[0].image_url == f"/api/memories/{memories[0]}/image"
+    assert results[0].image_url.startswith(f"/api/memories/{memories[0]}/image?file=")
     assert results[0].created_at == NOON - timedelta(hours=3)
 
 
@@ -318,6 +318,30 @@ def test_upload_list_fetch_and_delete_an_image(client):
     assert client.get("/api/memories").json() == []
     assert client.get(memory["image_url"]).status_code == 404
     assert list(media.media_dir().iterdir()) == []
+
+
+def test_an_image_address_is_never_reused_for_another_image(client):
+    """Ids come again after the database is rebuilt (here: the newest memory is deleted, and
+    SQLite gives its id to the next), so an address that named only the id would let a browser
+    show the old image for the new memory."""
+    app.dependency_overrides[get_embedder] = lambda: fake_embed
+    try:
+
+        def upload(colour):
+            files = {"file": ("p.jpg", jpeg(colour), "image/jpeg")}
+            return client.post("/api/memories/image", files=files).json()
+
+        old = upload("red")
+        assert client.delete(f"/api/memories/{old['id']}").status_code == 204
+        new = upload("blue")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert new["id"] == old["id"]  # the id came again
+    assert new["image_url"] != old["image_url"]
+    assert client.get(old["image_url"]).status_code == 404  # never the new image
+    blue = Image.open(io.BytesIO(client.get(new["image_url"]).content)).convert("RGB")
+    assert blue.getpixel((5, 5))[2] > 200
 
 
 def test_upload_rejects_what_is_not_an_image_and_keeps_no_file(client):

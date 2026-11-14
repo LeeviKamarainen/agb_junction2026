@@ -297,7 +297,9 @@ export interface paths {
         };
         /**
          * Memory Image
-         * @description 404, not 403, for someone else's image: nobody learns which ids exist.
+         * @description 404, not 403, for someone else's image: nobody learns which ids exist. `file`, as in a
+         *     memory's image_url, must be the memory's own file: an address from before the database was
+         *     rebuilt then gives 404, not the new image of the same id.
          */
         get: operations["memory_image_api_memories__id__image_get"];
         put?: never;
@@ -1623,7 +1625,9 @@ export interface operations {
     };
     memory_image_api_memories__id__image_get: {
         parameters: {
-            query?: never;
+            query?: {
+                file?: string | null;
+            };
             header?: never;
             path: {
                 id: number;

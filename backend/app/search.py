@@ -176,7 +176,12 @@ def clean_collection(name: str | None) -> str:
 
 
 def image_url(memory: Memory) -> str | None:
-    return f"/api/memories/{memory.id}/image" if memory.image_file else None
+    """The image's address for the browser. It names the file as well as the memory: ids come
+    again after the database is rebuilt, and a cache keyed by the address would otherwise show
+    the old image of that id. File names are random and never reused (app/media.py)."""
+    if not memory.image_file:
+        return None
+    return f"/api/memories/{memory.id}/image?file={memory.image_file}"
 
 
 def public(memory: Memory, usernames: dict[int, str] | None = None) -> MemoryPublic:
