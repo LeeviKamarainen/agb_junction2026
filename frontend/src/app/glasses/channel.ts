@@ -7,7 +7,7 @@ import type { GlassesReply, WatchResult } from "./types";
  */
 export type ClientMessage =
   | ({ type: "command"; id: number } & (
-      { text: string } | { action: string } | { question: string }
+      { action: string } | { question: string }
     ))
   | { type: "photo"; id: number }
   | { type: "frame"; id: number }

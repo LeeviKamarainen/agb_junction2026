@@ -265,7 +265,7 @@ export function GlassesHarness({
   }
 
   function command(
-    body: { text: string } | { action: string } | { question: string },
+    body: { action: string } | { question: string },
     request: string,
   ) {
     send({ type: "command", id: nextMessageId.current++, ...body }, request);
@@ -548,10 +548,10 @@ export function GlassesHarness({
   }
 
   /**
-   * "command": hold to talk, the words are a command. "question": after Ask, the mic closes on
-   * a pause and the words go to the memory as a question; silence goes back home.
+   * Either way the words go to the memory as a question. "hold": hold to talk, sent on release.
+   * "question": after a double tap, the mic closes on a pause; silence goes back home.
    */
-  function startListening(mode: "command" | "question" = "command") {
+  function startListening(mode: "hold" | "question" = "hold") {
     if (recognitionRef.current) return;
     const Recognition = recognitionConstructor();
     if (!Recognition) {
@@ -561,7 +561,7 @@ export function GlassesHarness({
     }
     const recognition = new Recognition();
     recognition.lang = "en-US";
-    recognition.continuous = mode === "command";
+    recognition.continuous = mode === "hold";
     recognition.interimResults = true;
     finalRef.current = "";
     recognition.onresult = (event) => {
@@ -597,7 +597,7 @@ export function GlassesHarness({
         if (!questionRef.current || blocked) return;
         questionRef.current = false;
         void command({ question: text }, `asked “${text}”`);
-      } else if (text) void command({ text }, `said “${text}”`);
+      } else if (text) void command({ question: text }, `said “${text}”`);
     };
     recognitionRef.current = recognition;
     setMicError(null);
@@ -617,10 +617,11 @@ export function GlassesHarness({
     if (!text) return;
     setTyped("");
     if (questionRef.current) {
+      // Typed instead of spoken after a double tap: the open microphone is no longer needed.
       questionRef.current = false;
       recognitionRef.current?.abort();
-      void command({ question: text }, `asked “${text}” (typed)`);
-    } else void command({ text }, `said “${text}” (typed)`);
+    }
+    void command({ question: text }, `asked “${text}” (typed)`);
   }
 
   // One socket per harness, reconnecting with backoff. The browser sends the login cookie with

@@ -18,7 +18,6 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.auth import Viewer
 from app.glasses import frames, memory, photos, reminders, screens
-from app.glasses.intents import BUTTON_ACTIONS, interpret
 from app.glasses.layout import GlassesReply
 from app.llm import Chat, Embedder, UpstreamError
 
@@ -53,19 +52,25 @@ async def memory_frame(
         raise HTTPException(502, str(error)) from error
 
 
+# The wearer's buttons and gestures: the glasses' capture button takes a photo, "gallery" shows the
+# newest ones, and the Neural Band's double index-finger tap ("double_tap", or "ask") opens the
+# microphone for a question.
+ACTIONS = {"take_photo", "gallery", "ask", "double_tap"}
+
+
 class Command(BaseModel):
-    """Exactly one of: what the wearer said (`text`), the action of the button they pressed, or
-    the question they asked after pressing Ask (`question`, always a question about the photos).
+    """Exactly one of: the action of a button or gesture (`action`), or what the wearer said
+    (`question`). What they said goes to the memory as it is, unless it starts "remind me…" or
+    "warn me…", which makes it a reminder (reminders.py).
     """
 
-    text: str | None = Field(default=None, max_length=500)
     action: str | None = Field(default=None, max_length=100)
     question: str | None = Field(default=None, max_length=500)
 
     @model_validator(mode="after")
     def one_of(self) -> Self:
-        if sum(field is not None for field in (self.text, self.action, self.question)) != 1:
-            raise ValueError("send exactly one of text, action or question")
+        if (self.action is None) == (self.question is None):
+            raise ValueError("send exactly one of action or question")
         return self
 
 
@@ -82,36 +87,20 @@ async def command(
     session: AsyncSession, viewer: Viewer, body: Command, chat: Chat | None, embed: Embedder | None
 ) -> GlassesReply:
     """What `viewer` said or pressed; everything it reaches is scoped to them (app/auth.py)."""
-    if body.question is not None:
-        question = body.question.strip()
-        if not question:
-            return screens.home()
-        if reminders.is_reminder(question):
-            return await _remind(session, question, chat, viewer)
-        return await _ask(session, question, chat, embed, viewer)
     if body.action is not None:
-        if body.action not in BUTTON_ACTIONS:
+        if body.action not in ACTIONS:
             raise HTTPException(422, f"unknown action {body.action!r}")
-        name, text = ("ask" if body.action == "double_tap" else body.action), ""
-    else:
-        intent = interpret(body.text or "")
-        name, text = intent.name, intent.text
-
-    if name == "home":
-        return screens.home()
-    if name == "help":
-        return screens.help_()
-    if name == "take_photo":
-        return screens.capture()
-    if name == "ask":
+        if body.action == "take_photo":
+            return screens.capture()
+        if body.action == "gallery":
+            return screens.gallery(viewer.owners)
         return screens.listen()
-    if name == "gallery":
-        return screens.gallery(viewer.owners)
-    if name == "ask_memory":
-        return await _ask(session, text, chat, embed, viewer)
-    if name == "remind":
-        return await _remind(session, text, chat, viewer)
-    return screens.unknown(text)
+    question = (body.question or "").strip()
+    if not question:
+        return screens.home()
+    if reminders.is_reminder(question):
+        return await _remind(session, question, chat, viewer)
+    return await _ask(session, question, chat, embed, viewer)
 
 
 async def _remind(

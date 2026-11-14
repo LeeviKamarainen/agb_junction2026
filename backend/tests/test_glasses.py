@@ -8,7 +8,6 @@ from PIL import Image
 
 from app import vectors
 from app.glasses import reminders
-from app.glasses.intents import interpret
 from app.llm import UpstreamError
 from app.main import app
 from app.routes.glasses import optional_chat, optional_embedder
@@ -73,29 +72,6 @@ def texts(node: dict) -> str:
     return " ".join(texts(child) for child in node.get("children", []))
 
 
-@pytest.mark.parametrize(
-    ("said", "intent"),
-    [
-        ("Take a photo", "take_photo"),
-        ("What am I looking at?", "take_photo"),
-        ("describe this", "take_photo"),
-        ("snap a picture please", "take_photo"),
-        ("Show my photos", "gallery"),
-        ("open the gallery", "gallery"),
-        ("Where did I leave my keys?", "ask_memory"),
-        ("what was on the table", "ask_memory"),
-        ("go back", "home"),
-        ("help", "help"),
-        ("Remind me not to trip over the stool", "remind"),
-        ("remind me to take a photo of the bill", "remind"),
-        ("banana", "unknown"),
-        ("   ", "unknown"),
-    ],
-)
-def test_interpret(said, intent):
-    assert interpret(said).name == intent
-
-
 def test_home_is_an_empty_display(client):
     reply = client.get("/api/glasses/home").json()
 
@@ -106,12 +82,11 @@ def test_no_screen_has_buttons(client):
     """The wearer acts through the glasses and the Neural Band, never on the display."""
     client.post("/api/glasses/photos", files={"photo": ("a.jpg", JPEG, "image/jpeg")})
     for body in [
-        {"action": "help"},
         {"action": "gallery"},
         {"action": "ask"},
         {"question": "where are my keys?"},
         {"question": "remind me about the stool"},
-        {"text": "banana"},
+        {"question": "banana"},
     ]:
         reply = client.post("/api/glasses/command", json=body).json()
         assert buttons(reply["screen"]) == [], body
@@ -130,7 +105,9 @@ def test_ask_opens_the_microphone(client):
     assert reply["client_action"] == "listen_question"
 
 
-@pytest.mark.parametrize("asked", ["what's this", "take a photo of my keys", "keys"])
+@pytest.mark.parametrize(
+    "asked", ["what's this", "take a photo of my keys", "keys", "I can't find my wallet"]
+)
 def test_a_question_always_asks_the_memory(client, asked):
     reply = client.post("/api/glasses/command", json={"question": asked}).json()
 
@@ -143,23 +120,24 @@ def test_an_empty_question_goes_home(client):
     assert reply["intent"] == "home"
 
 
-def test_saying_take_a_photo_asks_the_client_to_capture(client):
-    reply = client.post("/api/glasses/command", json={"text": "take a picture"}).json()
+def test_the_capture_button_asks_the_client_to_capture(client):
+    reply = client.post("/api/glasses/command", json={"action": "take_photo"}).json()
 
     assert reply["intent"] == "take_photo"
     assert reply["client_action"] == "capture_photo"
 
 
-def test_a_button_does_what_its_words_do(client):
-    by_button = client.post("/api/glasses/command", json={"action": "help"}).json()
-    by_voice = client.post("/api/glasses/command", json={"text": "help"}).json()
-
-    assert by_button == by_voice
-
-
 @pytest.mark.parametrize(
     "body",
-    [{}, {"text": "help", "action": "help"}, {"text": "a", "question": "b"}, {"action": "explode"}],
+    [
+        {},
+        {"action": "ask", "question": "where?"},
+        {"action": "explode"},
+        # Words come as a question and go to the memory; nothing interprets them as commands.
+        {"text": "where are my keys"},
+        {"action": "help"},
+        {"action": "home"},
+    ],
 )
 def test_bad_commands_are_rejected(client, body):
     assert client.post("/api/glasses/command", json=body).status_code == 422
@@ -171,7 +149,7 @@ def test_uploaded_photo_is_shown_and_listed(client):
     assert upload.status_code == 201
     assert "Photo saved" in texts(upload.json()["screen"])
 
-    gallery = client.post("/api/glasses/command", json={"text": "show my photos"}).json()
+    gallery = client.post("/api/glasses/command", json={"action": "gallery"}).json()
     assert "Latest 1 photos" in texts(gallery["screen"])
     image = gallery["screen"]["children"][1]["children"][0]
     fetched = client.get(image["src"])
@@ -217,7 +195,7 @@ def test_unknown_photo_is_404(client, name):
 
 
 def test_question_without_models_says_so(client):
-    reply = client.post("/api/glasses/command", json={"text": "where are my keys?"}).json()
+    reply = client.post("/api/glasses/command", json={"question": "where are my keys?"}).json()
 
     assert reply["intent"] == "ask_memory"
     assert "isn’t set up" in reply["speech"]
@@ -226,7 +204,7 @@ def test_question_without_models_says_so(client):
 def test_question_goes_through_the_question_loop(client):
     use_models(chat=says("On the kitchen table, at 09:12."), embed=fake_embed)
 
-    reply = client.post("/api/glasses/command", json={"text": "Where are my keys?"}).json()
+    reply = client.post("/api/glasses/command", json={"question": "Where are my keys?"}).json()
 
     assert reply["intent"] == "ask_memory"
     assert reply["speech"] == "On the kitchen table, at 09:12."
@@ -236,7 +214,7 @@ def test_question_goes_through_the_question_loop(client):
 def test_unreachable_memory_is_spoken_not_raised(client):
     use_models(chat=broken, embed=fake_embed)
 
-    reply = client.post("/api/glasses/command", json={"text": "where is the remote?"})
+    reply = client.post("/api/glasses/command", json={"question": "where is the remote?"})
 
     assert reply.status_code == 200
     assert "can’t reach" in reply.json()["speech"]
@@ -282,7 +260,7 @@ def test_saying_remind_me_adds_a_reminder(client):
 
 
 def test_reminder_without_an_object_asks_again(client):
-    reply = client.post("/api/glasses/command", json={"text": "remind me"}).json()
+    reply = client.post("/api/glasses/command", json={"question": "remind me"}).json()
 
     assert reply["intent"] == "remind"
     assert client.get("/api/glasses/reminders").json() == []
@@ -375,7 +353,9 @@ def test_socket_answers_ping_and_commands(client):
         assert message["type"] == "reply" and message["id"] == 2
         assert message["reply"]["client_action"] == "listen_question"
 
-        ws.send_json({"type": "command", "id": 3, "text": "remind me not to trip over the stool"})
+        ws.send_json(
+            {"type": "command", "id": 3, "question": "remind me not to trip over the stool"}
+        )
         assert ws.receive_json()["reply"]["intent"] == "remind"
     assert [r["target"] for r in client.get("/api/glasses/reminders").json()] == ["stool"]
 
@@ -384,7 +364,7 @@ def test_socket_answers_ping_and_commands(client):
     "message",
     [
         {"type": "command", "id": 4, "action": "self_destruct"},
-        {"type": "command", "id": 4, "text": "hi", "action": "home"},
+        {"type": "command", "id": 4, "question": "hi", "action": "ask"},
         {"type": "nonsense", "id": 4},
     ],
 )
@@ -411,7 +391,7 @@ def test_socket_takes_photos_as_binary_frames(client):
             "status": 415,
             "detail": "photo must be a JPEG",
         }
-        ws.send_json({"type": "command", "id": 7, "text": "show my photos"})
+        ws.send_json({"type": "command", "id": 7, "action": "gallery"})
         assert "Latest 1 photos" in texts(ws.receive_json()["reply"]["screen"])
 
 

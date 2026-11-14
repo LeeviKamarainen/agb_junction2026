@@ -45,20 +45,6 @@ def listen() -> GlassesReply:
     return GlassesReply(intent="ask", screen=FlexBox(), client_action="listen_question")
 
 
-def help_() -> GlassesReply:
-    text = "Press the capture button for a photo. Double tap to ask about your photos."
-    return GlassesReply(
-        intent="help",
-        screen=_screen(
-            _title("help", "Help"),
-            Text(value="Capture button: take a photo"),
-            Text(value="Double tap: ask about your photos"),
-        ),
-        speech=text,
-        dismiss_after_s=10,
-    )
-
-
 def capture() -> GlassesReply:
     return GlassesReply(intent="take_photo", screen=FlexBox(), client_action="capture_photo")
 
@@ -189,16 +175,4 @@ def memory_problem(question: str, problem: str) -> GlassesReply:
         ),
         speech=problem,
         dismiss_after_s=5,
-    )
-
-
-def unknown(heard: str) -> GlassesReply:
-    return GlassesReply(
-        intent="unknown",
-        screen=_screen(
-            _title("mic", "Didn’t catch that"),
-            Text(value=f"Heard: “{heard}”" if heard else "Heard nothing.", style="CAPTION"),
-        ),
-        speech="Sorry, I didn't catch that.",
-        dismiss_after_s=4,
     )

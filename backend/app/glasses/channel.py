@@ -5,8 +5,8 @@ per-request overhead. The HTTP routes do the same work one request at a time.
 Messages are JSON text frames with a `type`. A photo or frame is a small JSON header followed by
 the JPEG as the next, binary, frame. Client to server:
 
-- `command`: `text`, `action` or `question`, exactly as POST /api/glasses/command; answered with a
-  `reply` carrying the same `id`.
+- `command`: `action` or `question`, exactly as POST /api/glasses/command; answered with a `reply`
+  carrying the same `id`.
 - `photo` + JPEG: as POST /api/glasses/photos; answered with a `reply`.
 - `memory_frame` + JPEG: as POST /api/glasses/frames, with `source` (stream/single),
   `stream_id` and optional `seen_at`; answered with `memory_result` containing a FrameReply.
@@ -315,7 +315,7 @@ class Channel:
                 await self.send(ReplyMessage(id=None, reply=result.warning))
 
     async def run_command(self, message: CommandMessage) -> None:
-        body = Command(text=message.text, action=message.action, question=message.question)
+        body = Command(action=message.action, question=message.question)
         reply = await self.work(
             message.id, actions.command, self.viewer, body, self.chat, self.embed
         )
