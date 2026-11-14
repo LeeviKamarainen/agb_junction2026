@@ -21,6 +21,126 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/auth/guest": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Guest
+         * @description A new temporary guest account, logged in: a generated name, no password. It and everything
+         *     it adds are deleted after 60 minutes (auth.GUEST_MINUTES).
+         */
+        post: operations["guest_api_auth_guest_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/auth/guest/login": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Guest Login
+         * @description Reopen a guest by username while it is active. Keeps its original expiry; an unknown,
+         *     expired or non-guest account gets the same 401.
+         */
+        post: operations["guest_login_api_auth_guest_login_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/auth/login": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Login
+         * @description The admin's login (guests have no password). 401 for a wrong username or password,
+         *     without saying which.
+         */
+        post: operations["login_api_auth_login_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/auth/logout": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Logout */
+        post: operations["logout_api_auth_logout_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/auth/me": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Me
+         * @description The logged-in user; 401 when nobody is.
+         */
+        get: operations["me_api_auth_me_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/auth/session": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Current
+         * @description The logged-in user, or null: for pages that show a login link instead of failing.
+         */
+        get: operations["current_api_auth_session_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/notes": {
         parameters: {
             query?: never;
@@ -48,7 +168,8 @@ export interface paths {
         };
         /**
          * List Memories
-         * @description The newest 500 memories, newest first.
+         * @description The newest 500 memories you may see, newest first: a guest sees the demo memories and
+         *     their own, the admin everything.
          */
         get: operations["list_memories_api_memories_get"];
         put?: never;
@@ -68,7 +189,7 @@ export interface paths {
         };
         /**
          * List Collections
-         * @description Every collection that holds a memory, with how many, largest first.
+         * @description Every collection that holds a memory you may see, with how many, largest first.
          */
         get: operations["list_collections_api_memories_collections_get"];
         put?: never;
@@ -115,7 +236,8 @@ export interface paths {
          * Add Image
          * @description Store one image: shrink it, embed it with the image model, keep an optional caption.
          *
-         *     collection groups it, e.g. "glasses" for stills from the glasses (default "manual").
+         *     collection groups it, e.g. "glasses" for stills from the glasses (default "manual"). It is
+         *     yours; with demo=true (admin only) every user sees it.
          */
         post: operations["add_image_api_memories_image_post"];
         delete?: never;
@@ -135,7 +257,7 @@ export interface paths {
         put?: never;
         /**
          * Add Text
-         * @description Store a text memory, embedded with the text model.
+         * @description Store a text memory, embedded with the text model. demo=true (admin only) shares it.
          */
         post: operations["add_text_api_memories_text_post"];
         delete?: never;
@@ -151,7 +273,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Memory Image */
+        /**
+         * Memory Image
+         * @description 404, not 403, for someone else's image: nobody learns which ids exist.
+         */
         get: operations["memory_image_api_memories__id__image_get"];
         put?: never;
         post?: never;
@@ -171,7 +296,10 @@ export interface paths {
         get?: never;
         put?: never;
         post?: never;
-        /** Delete Memory */
+        /**
+         * Delete Memory
+         * @description Your own memories; the admin's any. A guest gets 403 for a demo memory.
+         */
         delete: operations["delete_memory_api_memories__id__delete"];
         options?: never;
         head?: never;
@@ -189,7 +317,8 @@ export interface paths {
         put?: never;
         /**
          * Search
-         * @description Run the vector_search tool directly, with the arguments the chat model would send.
+         * @description Run the vector_search tool directly, with the arguments the chat model would send, over
+         *     the memories you may see.
          */
         post: operations["search_api_search_post"];
         delete?: never;
@@ -209,7 +338,8 @@ export interface paths {
         put?: never;
         /**
          * Ask
-         * @description Answer a question from the memories: the chat model searches them, then answers.
+         * @description Answer a question from the memories you may see: the chat model searches them, then
+         *     answers.
          */
         post: operations["ask_api_ask_post"];
         delete?: never;
@@ -301,7 +431,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Get Photo */
+        /**
+         * Get Photo
+         * @description Your own photos only (the admin's: everyone's); 404 for anyone else's.
+         */
         get: operations["get_photo_api_glasses_photos__name__get"];
         put?: never;
         post?: never;
@@ -320,11 +453,94 @@ export interface paths {
         };
         /**
          * Get Memory Keyframe
-         * @description A still from the glass-memory API, fetched with the backend's token.
+         * @description A still from the glass-memory API, fetched with the backend's token: only from your own
+         *     batch (the admin: any).
          */
         get: operations["get_memory_keyframe_api_glasses_memory__batch__keyframes__name__get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/glasses/reminders": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Reminders
+         * @description Your reminders; the admin's list holds everyone's.
+         */
+        get: operations["list_reminders_api_glasses_reminders_get"];
+        put?: never;
+        /**
+         * Add Reminder
+         * @description What the wearer would say, e.g. "remind me not to trip over the stool"; 422 when no
+         *     object can be found in it.
+         */
+        post: operations["add_reminder_api_glasses_reminders_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/glasses/reminders/{reminder_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete Reminder */
+        delete: operations["delete_reminder_api_glasses_reminders__reminder_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/glasses/reminders/{reminder_id}/trigger": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Trigger Reminder
+         * @description The warning as if the object were in view, for testing without a vision model.
+         */
+        post: operations["trigger_reminder_api_glasses_reminders__reminder_id__trigger_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/glasses/watch": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Watch
+         * @description One frame from the camera while the glasses watch for reminders. Not stored. A target in view gives a warning, at most once a minute per reminder.
+         */
+        post: operations["watch_api_glasses_watch_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -431,6 +647,11 @@ export interface components {
              * @default manual
              */
             collection: string;
+            /**
+             * Demo
+             * @default false
+             */
+            demo: boolean;
         };
         /** Body_upload_frame_api_glasses_frames_post */
         Body_upload_frame_api_glasses_frames_post: {
@@ -461,6 +682,14 @@ export interface components {
              */
             photo: string;
         };
+        /** Body_watch_api_glasses_watch_post */
+        Body_watch_api_glasses_watch_post: {
+            /**
+             * Photo
+             * @description One JPEG frame
+             */
+            photo: string;
+        };
         /** Button */
         Button: {
             /**
@@ -482,13 +711,26 @@ export interface components {
         };
         /**
          * Command
-         * @description Exactly one of: what the wearer said (`text`), or the action of the button they pressed.
+         * @description Exactly one of: what the wearer said (`text`), the action of the button they pressed, or
+         *     the question they asked after pressing Ask (`question`, always a question about the photos).
          */
         Command: {
             /** Text */
             text?: string | null;
             /** Action */
             action?: string | null;
+            /** Question */
+            question?: string | null;
+        };
+        /**
+         * Credentials
+         * @description The admin's login; guests have no password.
+         */
+        Credentials: {
+            /** Username */
+            username: string;
+            /** Password */
+            password: string;
         };
         /** FlexBox */
         FlexBox: {
@@ -575,7 +817,17 @@ export interface components {
             /** Speech */
             speech?: string | null;
             /** Client Action */
-            client_action?: "capture_photo" | null;
+            client_action?: ("capture_photo" | "listen_question") | null;
+            /** Dismiss After S */
+            dismiss_after_s?: number | null;
+        };
+        /**
+         * GuestLogin
+         * @description Reopen an unexpired temporary account using its generated username.
+         */
+        GuestLogin: {
+            /** Username */
+            username: string;
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -611,6 +863,19 @@ export interface components {
             /** Height */
             height?: number | null;
         };
+        /** LoginResult */
+        LoginResult: {
+            /** Id */
+            id: number;
+            /** Username */
+            username: string;
+            /** Role */
+            role: string;
+            /** Expires At */
+            expires_at?: string | null;
+            /** Token */
+            token: string;
+        };
         /** MemoryPublic */
         MemoryPublic: {
             /** Id */
@@ -628,6 +893,10 @@ export interface components {
             image_url: string | null;
             /** Collection */
             collection: string;
+            /** Demo */
+            demo: boolean;
+            /** Owner */
+            owner?: string | null;
         };
         /** MemoryVector */
         MemoryVector: {
@@ -646,6 +915,10 @@ export interface components {
             image_url: string | null;
             /** Collection */
             collection: string;
+            /** Demo */
+            demo: boolean;
+            /** Owner */
+            owner?: string | null;
             /** Embedding */
             embedding: string;
         };
@@ -660,6 +933,27 @@ export interface components {
             text: string;
             /** Id */
             id: number;
+        };
+        /** ReminderCreate */
+        ReminderCreate: {
+            /** Text */
+            text: string;
+        };
+        /** ReminderPublic */
+        ReminderPublic: {
+            /** Id */
+            id: number;
+            /** Text */
+            text: string;
+            /** Target */
+            target: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Last Warned At */
+            last_warned_at: string | null;
         };
         /** SearchResult */
         SearchResult: {
@@ -741,6 +1035,11 @@ export interface components {
              * @default manual
              */
             collection: string;
+            /**
+             * Demo
+             * @default false
+             */
+            demo: boolean;
         };
         /** Timespan */
         Timespan: {
@@ -818,6 +1117,17 @@ export interface components {
             /** Last Fired At */
             last_fired_at: string | null;
         };
+        /** UserPublic */
+        UserPublic: {
+            /** Id */
+            id: number;
+            /** Username */
+            username: string;
+            /** Role */
+            role: string;
+            /** Expires At */
+            expires_at?: string | null;
+        };
         /** ValidationError */
         ValidationError: {
             /** Location */
@@ -850,6 +1160,17 @@ export interface components {
              */
             limit: number;
         };
+        /**
+         * WatchResult
+         * @description What one watched frame showed. `warning` is the screen to draw, when there is one.
+         */
+        WatchResult: {
+            /** Seen */
+            seen: string[];
+            warning?: components["schemas"]["GlassesReply"] | null;
+            /** Note */
+            note: string;
+        };
     };
     responses: never;
     parameters: never;
@@ -877,6 +1198,150 @@ export interface operations {
                     "application/json": {
                         [key: string]: string;
                     };
+                };
+            };
+        };
+    };
+    guest_api_auth_guest_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LoginResult"];
+                };
+            };
+        };
+    };
+    guest_login_api_auth_guest_login_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GuestLogin"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LoginResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    login_api_auth_login_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Credentials"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LoginResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    logout_api_auth_logout_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    me_api_auth_me_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserPublic"];
+                };
+            };
+        };
+    };
+    current_api_auth_session_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserPublic"] | null;
                 };
             };
         };
@@ -1408,6 +1873,152 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    list_reminders_api_glasses_reminders_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReminderPublic"][];
+                };
+            };
+        };
+    };
+    add_reminder_api_glasses_reminders_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReminderCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReminderPublic"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_reminder_api_glasses_reminders__reminder_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                reminder_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    trigger_reminder_api_glasses_reminders__reminder_id__trigger_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                reminder_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GlassesReply"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    watch_api_glasses_watch_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_watch_api_glasses_watch_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WatchResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
             };
         };
     };

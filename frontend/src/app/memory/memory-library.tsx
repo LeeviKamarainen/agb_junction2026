@@ -13,6 +13,7 @@ import { type ChangeEvent, useCallback, useEffect, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api/browser";
+import { useSession } from "@/lib/session";
 
 import {
   cleanCollection,
@@ -58,6 +59,11 @@ export function MemoryLibrary({
   const [memories, setMemories] = useState<Memory[] | null>(null);
   // The collection new images and notes go into: "manual" unless set, e.g. "glasses".
   const [collection, setCollection] = useState("manual");
+  // The admin's uploads are demo memories (every user sees them) unless unticked.
+  const { user } = useSession();
+  const isAdmin = user?.role === "admin";
+  const [demo, setDemo] = useState(true);
+  const asDemo = isAdmin && demo;
   const badCollection = collectionProblem(collection);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [pending, setPending] = useState<Pending[]>([]);
@@ -133,6 +139,7 @@ export function MemoryLibrary({
       form.append("file", item.file);
       form.append("text", item.caption.trim());
       form.append("collection", cleanCollection(collection));
+      form.append("demo", String(asDemo));
       if (item.takenAt) {
         form.append("created_at", new Date(item.takenAt).toISOString());
       }
@@ -180,6 +187,7 @@ export function MemoryLibrary({
           text,
           created_at: noteTime ? new Date(noteTime).toISOString() : null,
           collection: cleanCollection(collection),
+          demo: asDemo,
         },
       });
       if (error || !data) {
@@ -257,6 +265,22 @@ export function MemoryLibrary({
           {badCollection}
         </p>
       )}
+      {isAdmin ? (
+        <label className="-mt-1 flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={demo}
+            onChange={(event) => setDemo(event.target.checked)}
+            disabled={uploading || noteState.saving}
+          />
+          Demo: every user sees what you add
+        </label>
+      ) : user ? (
+        <p className="-mt-1 text-xs text-muted-foreground">
+          What you add is yours: other guests can’t see it, and Gemma only
+          searches the demo pictures and yours when you ask.
+        </p>
+      ) : null}
 
       {/* Images */}
       <div className="flex flex-col gap-3 rounded-lg border border-dashed border-border p-3">
@@ -447,21 +471,36 @@ export function MemoryLibrary({
                   #{memory.id} · {formatTime(memory.created_at)} ·{" "}
                   <span className="text-primary">{memory.collection}</span>
                 </span>
+                <span>
+                  {memory.demo ? (
+                    <span className="rounded-full border border-primary/50 px-1.5 text-primary">
+                      demo
+                    </span>
+                  ) : (
+                    <span className="rounded-full border border-border px-1.5">
+                      {memory.owner && memory.owner !== user?.username
+                        ? memory.owner
+                        : "yours"}
+                    </span>
+                  )}
+                </span>
                 {memory.image_url && memory.text && (
                   <span className="truncate text-foreground">
                     {memory.text}
                   </span>
                 )}
               </div>
-              <Button
-                variant="destructive"
-                size="icon-xs"
-                className="absolute top-1 right-1 opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
-                onClick={() => void deleteMemory(memory.id)}
-                aria-label={`Delete memory ${memory.id}`}
-              >
-                <Trash2 aria-hidden="true" />
-              </Button>
+              {isAdmin || !memory.demo ? (
+                <Button
+                  variant="destructive"
+                  size="icon-xs"
+                  className="absolute top-1 right-1 opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+                  onClick={() => void deleteMemory(memory.id)}
+                  aria-label={`Delete memory ${memory.id}`}
+                >
+                  <Trash2 aria-hidden="true" />
+                </Button>
+              ) : null}
             </li>
           ))}
         </ul>

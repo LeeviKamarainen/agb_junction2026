@@ -11,6 +11,7 @@ import {
   Image as ImageIcon,
   type LucideIcon,
   Mic,
+  TriangleAlert,
 } from "lucide-react";
 import {
   type CSSProperties,
@@ -33,6 +34,7 @@ const icons: Record<string, LucideIcon> = {
   help: CircleQuestionMark,
   image: ImageIcon,
   mic: Mic,
+  warning: TriangleAlert,
 };
 
 // The glasses' display in pixels; smaller columns get a scaled-down copy.
@@ -48,6 +50,8 @@ const flexAlign = {
 
 type Props = {
   screen: FlexBoxNode | null;
+  /** The microphone is recording: a blinking red light in the corner, over any screen. */
+  listening?: boolean;
   onAction: (action: string) => void;
   seeThrough: boolean;
   ref?: Ref<HTMLDivElement>;
@@ -60,6 +64,7 @@ type Props = {
  */
 export function Display({
   screen,
+  listening = false,
   onAction,
   seeThrough,
   ref,
@@ -119,6 +124,13 @@ export function Display({
         >
           {screen ? <Node node={screen} onAction={onAction} /> : null}
         </div>
+        {/* Drawn by the client over any screen, like the glasses' own recording light. */}
+        {listening ? (
+          <span className="gh-recording" role="status">
+            <Mic aria-hidden="true" />
+            <span className="gh-sr-only">Recording</span>
+          </span>
+        ) : null}
       </div>
     </div>
   );

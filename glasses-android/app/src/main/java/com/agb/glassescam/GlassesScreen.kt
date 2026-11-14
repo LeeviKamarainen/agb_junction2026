@@ -321,6 +321,7 @@ private fun MemoryModeCard(
                     ui.memorySending -> "↑ Sending  "
                     else -> ""
                 }
+                Text("WebSocket: ${ui.memoryConnection}")
                 Text(indicator + ui.memoryStatus)
                 Text(
                     "On the glasses: double tap (Neural Band or touchpad) or double press the capture button to " +

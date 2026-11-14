@@ -1,26 +1,31 @@
 """The glasses' API: every response is a `GlassesReply` the client draws and speaks.
 
-Clients: the browser harness (frontend /glasses) and, later, glasses-android. Memory is the
-backend's own (app/routes/memories.py): photos become image memories, questions go through the
-same question loop as /api/ask. When those models are not set or not reachable, the glasses fall
-back to the glass-memory API (MEMORY_API_URL, remote_memory.py), which runs Gemma itself. With
-neither, they still take and show photos and say memory search isn't set up.
+Clients: the browser harness (frontend /glasses) and, later, glasses-android. The live traffic
+(commands, photos, watched frames, pushed warnings) also runs over one WebSocket per client at
+/ws (app/glasses/channel.py); both call the same code in app/glasses/actions.py.
 """
 
-from datetime import UTC, datetime
-from typing import Annotated, Self
+from datetime import datetime
+from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, WebSocket
 from fastapi.responses import FileResponse, Response
-from pydantic import BaseModel, Field, model_validator
 from sqlmodel import col, select
 
+from app.auth import ViewerDep
 from app.db import SessionDep
-from app.glasses import frames, memory, photos, remote_memory, screens
-from app.glasses.intents import BUTTON_ACTIONS, interpret
+from app.glasses import actions, channel, frames, photos, reminders, remote_memory, screens
+from app.glasses.actions import Command, WatchResult
 from app.glasses.layout import GlassesReply
-from app.llm import Chat, Embedder, UpstreamError, get_chat, get_embedder
-from app.models import Trigger, TriggerCreate, TriggerPublic
+from app.llm import Chat, Embedder, get_chat, get_embedder
+from app.models import (
+    Reminder,
+    ReminderCreate,
+    ReminderPublic,
+    Trigger,
+    TriggerCreate,
+    TriggerPublic,
+)
 
 router = APIRouter(prefix="/glasses", tags=["glasses"])
 
@@ -45,64 +50,22 @@ ChatDep = Annotated[Chat | None, Depends(optional_chat)]
 EmbedderDep = Annotated[Embedder | None, Depends(optional_embedder)]
 
 
-class Command(BaseModel):
-    """Exactly one of: what the wearer said (`text`), or the action of the button they pressed."""
-
-    text: str | None = Field(default=None, max_length=500)
-    action: str | None = Field(default=None, max_length=100)
-
-    @model_validator(mode="after")
-    def one_of(self) -> Self:
-        if (self.text is None) == (self.action is None):
-            raise ValueError("send exactly one of text or action")
-        return self
+@router.websocket("/ws")
+async def socket(websocket: WebSocket, chat: ChatDep, embed: EmbedderDep):
+    """The live channel; its protocol is in app/glasses/channel.py."""
+    await channel.serve(websocket, chat, embed)
 
 
 @router.get("/home", response_model=GlassesReply)
-def home():
+async def home():
     return screens.home()
 
 
 @router.post("/command", response_model=GlassesReply)
-def command(body: Command, session: SessionDep, chat: ChatDep, embed: EmbedderDep):
-    if body.action is not None:
-        if body.action not in BUTTON_ACTIONS:
-            raise HTTPException(422, f"unknown action {body.action!r}")
-        name, text = body.action, ""
-    else:
-        intent = interpret(body.text or "")
-        name, text = intent.name, intent.text
-
-    if name == "home":
-        return screens.home()
-    if name == "help":
-        return screens.help_()
-    if name == "take_photo":
-        return screens.capture()
-    if name == "gallery":
-        return screens.gallery()
-    if name == "ask_memory":
-        return _ask(session, text, chat, embed)
-    return screens.unknown(text)
-
-
-def _ask(session, question: str, chat: Chat | None, embed: Embedder | None) -> GlassesReply:
-    if chat is not None and embed is not None:
-        try:
-            answer = memory.ask(session, question, chat, embed)
-            images = [source.image_url for source in answer.sources if source.image_url]
-            said = answer.answer or "I couldn’t find that in your memories."
-            return screens.memory_answer(question, said, images)
-        except UpstreamError:
-            if not remote_memory.configured():
-                return screens.memory_problem(question, "I can’t reach the memory right now.")
-    if remote_memory.configured():
-        try:
-            said, images = remote_memory.ask(question)
-        except remote_memory.Unavailable:
-            return screens.memory_problem(question, "I can’t reach the memory right now.")
-        return screens.memory_answer(question, said, images)
-    return screens.memory_problem(question, "Memory search isn’t set up yet.")
+async def command(
+    body: Command, session: SessionDep, viewer: ViewerDep, chat: ChatDep, embed: EmbedderDep
+):
+    return await actions.command(session, viewer, body, chat, embed)
 
 
 @router.post(
@@ -114,43 +77,15 @@ def _ask(session, question: str, chat: Chat | None, embed: Embedder | None) -> G
         "also becomes an image memory, captioned with that description."
     ),
 )
-def upload_photo(
+async def upload_photo(
     photo: Annotated[UploadFile, File(description="One JPEG still")],
     session: SessionDep,
+    viewer: ViewerDep,
     chat: ChatDep,
     embed: EmbedderDep,
 ):
-    data = photo.file.read(photos.MAX_BYTES + 1)
-    if len(data) > photos.MAX_BYTES:
-        raise HTTPException(413, "photo is larger than 10 MB")
-    if not photos.is_jpeg(data):
-        raise HTTPException(415, "photo must be a JPEG")
-    name = photos.save(data)
-
-    description, problems, stored = "", [], False
-    if chat is not None:
-        try:
-            description = memory.describe(chat, data)
-        except UpstreamError:
-            pass
-    if not description and remote_memory.configured():
-        try:
-            description = remote_memory.describe(data, name)
-        except remote_memory.Unavailable:
-            pass
-    if not description and (chat is not None or remote_memory.configured()):
-        problems.append("couldn’t describe it")
-    if embed is not None:
-        try:
-            memory.remember(session, embed, data, description)
-            stored = True
-        except UpstreamError:
-            problems.append("couldn’t save it to memory")
-
-    note = "; ".join(problems) or ("saved to memory" if stored else None)
-    if description:
-        return screens.photo_described(name, description, note)
-    return screens.photo_saved(name, note)
+    data = await photo.read(photos.MAX_BYTES + 1)
+    return await actions.photo(session, viewer, data, chat, embed)
 
 
 @router.get(
@@ -158,8 +93,9 @@ def upload_photo(
     response_class=FileResponse,
     responses={200: {"content": {"image/jpeg": {}}}, 404: {}},
 )
-def get_photo(name: str):
-    file = photos.path(name)
+async def get_photo(name: str, viewer: ViewerDep):
+    """Your own photos only (the admin's: everyone's); 404 for anyone else's."""
+    file = photos.path(name, viewer.owners)
     if file is None:
         raise HTTPException(404, "no such photo")
     return FileResponse(file, media_type="image/jpeg")
@@ -170,10 +106,13 @@ def get_photo(name: str):
     response_class=Response,
     responses={200: {"content": {"image/jpeg": {}}}, 404: {}, 502: {}},
 )
-def get_memory_keyframe(batch: str, name: str):
-    """A still from the glass-memory API, fetched with the backend's token."""
+async def get_memory_keyframe(batch: str, name: str, viewer: ViewerDep):
+    """A still from the glass-memory API, fetched with the backend's token: only from your own
+    batch (the admin: any)."""
+    if not viewer.is_admin and batch != remote_memory.current_batch(viewer.id):
+        raise HTTPException(404, "no such keyframe")
     try:
-        data = remote_memory.keyframe(batch, name)
+        data = await remote_memory.keyframe(batch, name)
     except remote_memory.Unavailable:
         raise HTTPException(502, "the memory API is unreachable") from None
     if data is None:
@@ -181,13 +120,65 @@ def get_memory_keyframe(batch: str, name: str):
     return Response(data, media_type="image/jpeg")
 
 
-MAX_FRAME = 10 * 1024 * 1024  # bytes
+@router.get("/reminders", response_model=list[ReminderPublic])
+async def list_reminders(session: SessionDep, viewer: ViewerDep):
+    """Your reminders; the admin's list holds everyone's."""
+    return await reminders.active(session, None if viewer.is_admin else viewer.id)
+
+
+@router.post("/reminders", response_model=ReminderPublic, status_code=201)
+async def add_reminder(body: ReminderCreate, session: SessionDep, viewer: ViewerDep, chat: ChatDep):
+    """What the wearer would say, e.g. "remind me not to trip over the stool"; 422 when no
+    object can be found in it."""
+    reminder = await reminders.add(session, body.text, chat, viewer.id)
+    if reminder is None:
+        raise HTTPException(422, "no object to watch for in that text")
+    return reminder
+
+
+@router.delete("/reminders/{reminder_id}", status_code=204)
+async def delete_reminder(reminder_id: int, session: SessionDep, viewer: ViewerDep):
+    reminder = await session.get(Reminder, reminder_id)
+    if reminder is None or not viewer.can_change(reminder.owner_id):
+        raise HTTPException(404, "no such reminder")
+    await session.delete(reminder)
+    await session.commit()
+
+
+@router.post(
+    "/reminders/{reminder_id}/trigger",
+    response_model=GlassesReply,
+    description="The warning as if the object were in view, for testing without a vision model.",
+)
+async def trigger_reminder(reminder_id: int, session: SessionDep, viewer: ViewerDep):
+    reminder = await session.get(Reminder, reminder_id)
+    if reminder is None or not viewer.can_change(reminder.owner_id):
+        raise HTTPException(404, "no such reminder")
+    return screens.warning(reminder.target, reminder.text)
+
+
+@router.post(
+    "/watch",
+    response_model=WatchResult,
+    description=(
+        "One frame from the camera while the glasses watch for reminders. Not stored. A target in "
+        "view gives a warning, at most once a minute per reminder."
+    ),
+)
+async def watch(
+    photo: Annotated[UploadFile, File(description="One JPEG frame")],
+    session: SessionDep,
+    viewer: ViewerDep,
+    chat: ChatDep,
+):
+    return await actions.watch(session, viewer, await photo.read(photos.MAX_BYTES + 1), chat)
 
 
 @router.post("/frames", response_model=frames.FrameReply)
-def upload_frame(
+async def upload_frame(
     frame: Annotated[UploadFile, File(description="One image, usually a JPEG")],
     session: SessionDep,
+    viewer: ViewerDep,
     chat: ChatDep,
     embed: EmbedderDep,
     source: Annotated[frames.Source, Form()] = "single",
@@ -202,53 +193,54 @@ def upload_frame(
     wearer took (always stored). Most answers carry no `message`; when a trigger fires,
     `message` is what to show on the glasses.
     """
-    if embed is None:
-        raise HTTPException(503, "No embedding model configured: set EMBED_URL")
-    data = frame.file.read(MAX_FRAME + 1)
-    if len(data) > MAX_FRAME:
-        raise HTTPException(413, "frame is larger than 10 MB")
-    when = seen_at if seen_at is None or seen_at.tzinfo else seen_at.replace(tzinfo=UTC)
-    try:
-        return frames.receive(session, data, embed, chat, source, stream_id, when)
-    except ValueError as error:
-        raise HTTPException(415, str(error)) from error
-    except UpstreamError as error:
-        raise HTTPException(502, str(error)) from error
+    return await actions.memory_frame(
+        session,
+        viewer,
+        await frame.read(actions.MAX_FRAME + 1),
+        chat,
+        embed,
+        source,
+        stream_id,
+        seen_at,
+    )
 
 
 @router.get("/triggers", response_model=list[TriggerPublic])
-def list_triggers(session: SessionDep):
-    return session.exec(select(Trigger).order_by(col(Trigger.id))).all()
+async def list_triggers(session: SessionDep, viewer: ViewerDep):
+    query = select(Trigger).order_by(col(Trigger.id))
+    if viewer.owners is not None:
+        query = query.where(col(Trigger.owner_id).in_(viewer.owners))
+    return (await session.exec(query)).all()
 
 
 @router.post("/triggers", response_model=TriggerPublic, status_code=201)
-def create_trigger(body: TriggerCreate, session: SessionDep):
-    trigger = Trigger.model_validate(body)
+async def create_trigger(body: TriggerCreate, session: SessionDep, viewer: ViewerDep):
+    trigger = Trigger.model_validate(body, update={"owner_id": viewer.id})
     session.add(trigger)
-    session.commit()
-    session.refresh(trigger)
+    await session.commit()
+    await session.refresh(trigger)
     return trigger
 
 
 @router.put("/triggers/{id}", response_model=TriggerPublic)
-def update_trigger(id: int, body: TriggerCreate, session: SessionDep):
-    trigger = session.get(Trigger, id)
-    if trigger is None:
+async def update_trigger(id: int, body: TriggerCreate, session: SessionDep, viewer: ViewerDep):
+    trigger = await session.get(Trigger, id)
+    if trigger is None or not viewer.can_change(trigger.owner_id):
         raise HTTPException(404, "No such trigger")
     if body.watch_for != trigger.watch_for:
-        frames.forget_trigger_vector(session, id)
+        await frames.forget_trigger_vector(session, id)
     trigger.sqlmodel_update(body.model_dump())
     session.add(trigger)
-    session.commit()
-    session.refresh(trigger)
+    await session.commit()
+    await session.refresh(trigger)
     return trigger
 
 
 @router.delete("/triggers/{id}", status_code=204)
-def delete_trigger(id: int, session: SessionDep):
-    trigger = session.get(Trigger, id)
-    if trigger is None:
+async def delete_trigger(id: int, session: SessionDep, viewer: ViewerDep):
+    trigger = await session.get(Trigger, id)
+    if trigger is None or not viewer.can_change(trigger.owner_id):
         raise HTTPException(404, "No such trigger")
-    frames.forget_trigger_vector(session, id)
-    session.delete(trigger)
-    session.commit()
+    await frames.forget_trigger_vector(session, id)
+    await session.delete(trigger)
+    await session.commit()

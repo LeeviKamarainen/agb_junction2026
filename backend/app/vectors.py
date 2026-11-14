@@ -18,7 +18,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 import sqlite_vec
-from sqlalchemy import Connection
+from sqlalchemy.ext.asyncio import AsyncConnection
 
 
 @dataclass(frozen=True)
@@ -43,19 +43,22 @@ class Hit:
 VECTOR_TABLES: dict[str, VectorTable] = {
     "note_embedding": VectorTable(768),
     # One row per Memory (app/models.py), same id. The width must be EMBED_MODEL's: if the model
-    # changes, change it here and the database rebuilds. kind and collection are copied here so a
-    # search can filter on them.
-    "memory_embedding": VectorTable(768, {"kind": "TEXT", "collection": "TEXT"}),
-    # One row per Trigger (app/models.py), same id: the embedding of its watch_for text.
+    # changes, change it here and the database rebuilds. kind, collection and owner (Memory's
+    # owner_id) are copied here so a search can filter on them; owner keeps users apart
+    # (app/auth.py).
+    "memory_embedding": VectorTable(
+        768, {"kind": "TEXT", "collection": "TEXT", "owner": "INTEGER"}
+    ),
+    # One row per Trigger, same id: its watch_for embedding.
     "trigger_embedding": VectorTable(768),
 }
 
 
-def load_extension(dbapi_connection) -> None:
-    """Load sqlite-vec into a raw sqlite3 connection (called for every new connection)."""
-    dbapi_connection.enable_load_extension(True)
-    sqlite_vec.load(dbapi_connection)
-    dbapi_connection.enable_load_extension(False)
+async def load_extension(driver_connection) -> None:
+    """Load sqlite-vec into an aiosqlite connection (app/db.py runs it on every new one)."""
+    await driver_connection.enable_load_extension(True)
+    await driver_connection.load_extension(sqlite_vec.loadable_path())
+    await driver_connection.enable_load_extension(False)
 
 
 def _create_statement(name: str, table: VectorTable) -> str:
@@ -73,9 +76,9 @@ def ddl() -> str:
     return ";".join(_create_statement(name, table) for name, table in VECTOR_TABLES.items())
 
 
-def create_tables(connection: Connection) -> None:
+async def create_tables(connection: AsyncConnection) -> None:
     for name, table in VECTOR_TABLES.items():
-        connection.exec_driver_sql(_create_statement(name, table))
+        await connection.exec_driver_sql(_create_statement(name, table))
 
 
 def _table(name: str) -> VectorTable:
@@ -106,8 +109,8 @@ def _to_unix(moment: datetime) -> int:
     return int(moment.timestamp())
 
 
-def upsert(
-    connection: Connection,
+async def upsert(
+    connection: AsyncConnection,
     table: str,
     id: int,
     vector: Sequence[float],
@@ -129,20 +132,20 @@ def upsert(
         **extra,
     }
     # vec0 has no INSERT OR REPLACE, so replace by deleting first.
-    connection.exec_driver_sql(f"DELETE FROM {table} WHERE id = ?", (id,))
-    connection.exec_driver_sql(
+    await connection.exec_driver_sql(f"DELETE FROM {table} WHERE id = ?", (id,))
+    await connection.exec_driver_sql(
         f"INSERT INTO {table}({', '.join(row)}) VALUES ({', '.join('?' * len(row))})",
         tuple(row.values()),
     )
 
 
-def delete(connection: Connection, table: str, id: int) -> None:
+async def delete(connection: AsyncConnection, table: str, id: int) -> None:
     _table(table)
-    connection.exec_driver_sql(f"DELETE FROM {table} WHERE id = ?", (id,))
+    await connection.exec_driver_sql(f"DELETE FROM {table} WHERE id = ?", (id,))
 
 
-def nearest(
-    connection: Connection,
+async def nearest(
+    connection: AsyncConnection,
     table: str,
     vector: Sequence[float],
     k: int = 10,
@@ -176,7 +179,7 @@ def nearest(
             params.append(value)
 
     columns = ", ".join(["id", "distance", "created_at", *extra_columns])
-    rows = connection.exec_driver_sql(
+    rows = await connection.exec_driver_sql(
         f"SELECT {columns} FROM {table} WHERE {' AND '.join(conditions)} ORDER BY distance",
         tuple(params),
     )
@@ -191,13 +194,13 @@ def nearest(
     ]
 
 
-def stored(
-    connection: Connection, table: str, ids: Collection[int] | None = None
+async def stored(
+    connection: AsyncConnection, table: str, ids: Collection[int] | None = None
 ) -> dict[int, list[float]]:
     """The stored vectors by id: those of `ids`, or every row. A full scan, for maps and exports."""
     _table(table)
     wanted = None if ids is None else set(ids)
-    rows = connection.exec_driver_sql(f"SELECT id, embedding FROM {table}")
+    rows = await connection.exec_driver_sql(f"SELECT id, embedding FROM {table}")
     return {
         id: list(struct.unpack(f"<{len(blob) // 4}f", blob))
         for id, blob in rows

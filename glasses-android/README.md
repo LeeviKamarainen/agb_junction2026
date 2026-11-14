@@ -34,17 +34,18 @@ Minimal Android app that streams the camera from Meta glasses via the
 | `HevcDecoder.kt` | `MediaCodec` HEVC decoder rendering frames to the preview `Surface` |
 | `GlassesScreen.kt` | Compose UI |
 | `PhotoSink.kt` | Where captures go (HTTP POST of a JPEG). Replace with your backend call |
-| `FrameApi.kt` | Memory mode: frames to the backend's `/api/glasses/frames`, and its trigger messages back |
+| `GlassesChannel.kt` | Authenticated WebSocket, guest login, reconnects and bounded memory uploads |
+| `FrameApi.kt` | Memory result and pushed warning message parsing |
 
 ## Memory mode (frames to the backend)
 
 **Arm memory mode** opens a session with the glasses' inputs and display, without the camera. Frames then go to
-the Junction backend (`POST <glasses.api>/api/glasses/frames`, see `FrameApi.kt`), which embeds each one into the
+the Junction backend over one WebSocket (`<glasses.api>/api/glasses/ws`, see `GlassesChannel.kt`), which embeds each one into the
 vector database (the `glasses` collection) and checks it against the triggers set up in the Memory lab.
 
 - **Stream (2 fps):** the phone's **Start stream** button, a **double tap** on the Neural Band or the glasses
   touchpad, or a **double press** of the capture button starts or stops a 504x896, 2 fps video stream. Every
-  decoded frame is uploaded, one at a time; a frame due while the previous upload is still running is skipped.
+  decoded frame is uploaded, one at a time; the camera waits for each result before grabbing a new frame.
   The backend stores a stream frame only when the scene changed (or every 10 s), so a still scene does not
   flood the database.
 - **Single photo:** **Send one photo**, one tap, or one short press sends the next frame as a single photo (always
@@ -56,7 +57,25 @@ vector database (the `glasses` collection) and checks it against the triggers se
   trigger fired; drawn with a bell and the title as a heading) or `"text_reply"` (an answer to the wearer; the
   text, with the title as a small label). An unknown type is drawn as a reply.
 
-Set `glasses.api` in `local.properties` to the backend's address without `/api` (see `local.properties.example`).
+Set `glasses.api` in `local.properties` to the backend's HTTP(S) address without `/api` (see
+`local.properties.example`); HTTPS uses a secure WebSocket. Set optional `glasses.token` to the token returned by
+`POST /api/auth/login` or `POST /api/auth/guest` to use that account's memories and triggers. This is an app
+session token, separate from the Memory API and segmentation tokens. Keep it in the ignored `local.properties`;
+it is compiled into the APK. With no token the app starts a temporary guest, reuses it across reconnects and
+rearming, and starts another after it expires (60 minutes; the old guest's data is deleted).
+
+The phone shows the connection state. The socket stays open while memory mode is armed, including while the
+camera is stopped, so pushed text warnings can still arrive. Disarming closes it and cancels pending uploads.
+Connection loss triggers reconnects with a delay of 1–30 seconds. A JPEG whose response was lost is never retried,
+since the backend may already have stored it; streaming resumes with a fresh frame. Each upload is a
+`memory_frame` JSON header (`id`, `source`, `stream_id`, `seen_at`) immediately followed by the JPEG binary
+message. A `memory_result` with the same `id` carries the same result as the HTTP `/api/glasses/frames` endpoint.
+Only one memory upload runs per connection; `error` replies surface on the phone without closing the socket.
+The existing command/photo/watch WebSocket messages remain available to other clients.
+
+Run Android checks with JDK 17 or 21 and an installed Android SDK:
+`gradle :app:compileDebugKotlin :app:testDebugUnitTest`. Socket tests use a local MockWebServer and cover login,
+header/binary pairing, trigger results, pushed warnings, disarming and reconnects.
 The Neural Band only reports single taps, so a double tap is two taps within 450 ms; a single tap waits that long
 before it counts. Unverified on hardware: restarting the stream within one session (the camera is closed and
 added again), and whether display updates and the 2 fps stream share Bluetooth without lag. Without glasses, the
@@ -186,8 +205,8 @@ full-resolution photo (`camera.photo.capturePhoto(FULL, HIGH)`), saves it to the
 
 ## Caveats
 
-- **Not compiled or run yet.** Written from Meta's docs and CameraAccess sample without an Android SDK on
-  this machine. Expect small compile fixes (SDK type/method names were not all verifiable).
+- The app compiles and the WebSocket unit tests run with the Android SDK. Camera, gestures and display
+  behaviour still need a physical glasses test.
 - Live frames are HEVC (`compressVideo = true`); the preview is decoded with `MediaCodec`. If the picture
   stays black, compare with the sample's `HevcDecoder` and `csdCollector` (it feeds codec-config data explicitly).
 - To analyze frames continuously, prefer repeated `capturePhoto()` (gives a `Bitmap`/HEIC) over

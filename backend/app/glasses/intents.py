@@ -8,10 +8,14 @@ import re
 from dataclasses import dataclass
 from typing import Literal
 
-IntentName = Literal["home", "help", "take_photo", "gallery", "ask_memory", "unknown"]
+from app.glasses.reminders import is_reminder
+
+IntentName = Literal["home", "help", "take_photo", "gallery", "ask_memory", "remind", "unknown"]
 
 # Button actions are intent names, so pressing "Photo" and saying "take a photo" do the same.
-BUTTON_ACTIONS: set[str] = {"home", "help", "take_photo", "gallery"}
+# "ask" has no words: it opens the microphone for a question. "double_tap" is the Neural Band's
+# double index-finger tap, which does the same.
+BUTTON_ACTIONS: set[str] = {"home", "help", "take_photo", "gallery", "ask", "double_tap"}
 
 _QUESTION_START = re.compile(
     r"^(where|what|when|who|which|why|how|did|do|does|have|has|is|are|was|were|can you find)\b"
@@ -35,6 +39,9 @@ def interpret(text: str) -> Intent:
     words = re.sub(r"\s+", " ", words).strip()
     if not words:
         return Intent("unknown", spoken)
+    # First: "remind me to take my keys" is a reminder, not a photo.
+    if is_reminder(spoken):
+        return Intent("remind", spoken)
     if _has(words, "help", "what can i say", "what can you do"):
         return Intent("help")
     if _has(words, "home", "menu", "go back", "cancel", "never mind", "nevermind"):

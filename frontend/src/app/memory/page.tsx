@@ -2,6 +2,8 @@ import { ArrowLeft, Asterisk, Glasses } from "lucide-react";
 import type { Metadata } from "next";
 import Link from "next/link";
 
+import { UserMenu } from "@/components/user-menu";
+
 import "../glasses/glasses.css";
 import { MemoryLab } from "./lab";
 
@@ -27,7 +29,8 @@ export default function MemoryLabPage() {
             </p>
           </div>
         </div>
-        <nav className="flex items-center gap-4" aria-label="Pages">
+        <nav className="flex flex-wrap items-center gap-4" aria-label="Pages">
+          <UserMenu requireLogin />
           <Link
             href="/glasses"
             className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground"

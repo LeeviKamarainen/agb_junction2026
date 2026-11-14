@@ -31,6 +31,12 @@ class Settings(BaseSettings):
     memory_api_url: str | None = None
     memory_api_token: str | None = None
 
+    # The one admin account, who sees every user's memories. It is created (or its password reset)
+    # on every start from these. Without ADMIN_PASSWORD a random one is made and printed in the
+    # log once. Everyone else registers a guest account on /register.
+    admin_username: str = "admin"
+    admin_password: str | None = None
+
 
 @lru_cache
 def get_settings() -> Settings:
