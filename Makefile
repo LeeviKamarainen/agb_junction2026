@@ -67,14 +67,15 @@ prod-import-keys:
 # --- Memory API (the Gemma server) -------------------------------------------
 # The visual memory in memory/ runs beside vLLM on the Gemma server; nothing deploys there
 # automatically. memory/deploy/deploy.sh does the work, and its header describes each command.
-.PHONY: check-memory memory-deploy memory-setup memory-logs memory-ssh memory-link memory-send
+.PHONY: check-memory memory-deploy memory-setup memory-logs memory-ssh memory-link memory-token memory-send
 
 # Not part of `check`: it needs torch (a 6 GB environment), which CI does not install.
 check-memory:
 	cd memory && uv run ruff format --check && uv run ruff check \
 		&& uv run marimo check notebooks/template.py notebooks/*/*.py && uv run pytest -q
 
-memory-deploy memory-setup memory-logs memory-ssh memory-link:
+# memory-token: the token API clients send as "Authorization: Bearer <token>".
+memory-deploy memory-setup memory-logs memory-ssh memory-link memory-token:
 	@memory/deploy/deploy.sh $(@:memory-%=%)
 
 # Posts a folder of JPEG stills as one batch: make memory-send FRAMES=<folder> [EVERY=<seconds>],

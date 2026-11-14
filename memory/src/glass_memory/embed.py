@@ -1,4 +1,4 @@
-"""Turn a video into memories: keyframes on disk, their CLIP embeddings and an index.
+"""Turn a video into memories: keyframes on disk, their EmbeddingGemma 2 embeddings and an index.
 
 .venv/bin/python -m glass_memory.embed VIDEO [--out res/items/EMB-1/<video name>]
 """
@@ -9,44 +9,46 @@ from pathlib import Path
 
 import av
 import numpy as np
-import open_clip
 import polars as pl
 import torch
 import umap
 from PIL import Image
+from sentence_transformers import SentenceTransformer
 
-MODEL, PRETRAINED = "ViT-B-32", "laion2b_s34b_b79k"
+MODEL = "google/embeddinggemma-2"
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 
 @cache
-def clip():
-    model, _, preprocess = open_clip.create_model_and_transforms(
-        MODEL, pretrained=PRETRAINED, device=DEVICE
+def encoder():
+    """EmbeddingGemma 2 with its text and image encoders (no audio); never float16, per its card."""
+    dtype = torch.bfloat16 if DEVICE == "cuda" and torch.cuda.is_bf16_supported() else torch.float32
+    return SentenceTransformer(
+        MODEL,
+        device=DEVICE,
+        config_kwargs={"audio_config": None},
+        model_kwargs={"torch_dtype": dtype},
     )
-    return model.eval(), preprocess, open_clip.get_tokenizer(MODEL)
 
 
 def _normalised(x):
-    return torch.nn.functional.normalize(x.float(), dim=-1).cpu().numpy()
+    """Normalised in float32: bfloat16 output normalised by the model is off by up to 0.5%."""
+    x = np.asarray(x, np.float32)
+    return x / np.linalg.norm(x, axis=-1, keepdims=True)
 
 
-@torch.no_grad()
 def embed_images(paths, batch=32):
-    """L2-normalised float32 embeddings, one row per image."""
-    model, preprocess, _ = clip()
+    """L2-normalised float32 embeddings, one row per image, each a path or an open file."""
     rows = []
     for i in range(0, len(paths), batch):
-        images = torch.stack([preprocess(Image.open(p)) for p in paths[i : i + batch]])
-        rows.append(_normalised(model.encode_image(images.to(DEVICE))))
-    return np.concatenate(rows)
+        images = [Image.open(p).convert("RGB") for p in paths[i : i + batch]]
+        rows.append(encoder().encode(images, convert_to_numpy=True))
+    return _normalised(np.concatenate(rows))
 
 
-@torch.no_grad()
 def embed_text(text):
     """The L2-normalised float32 embedding of a question, in the same space as the images."""
-    model, _, tokenizer = clip()
-    return _normalised(model.encode_text(tokenizer([text]).to(DEVICE)))[0]
+    return _normalised(encoder().encode(text, prompt_name="SearchQuery", convert_to_numpy=True))
 
 
 def keyframes(video, out_dir, every_s=1.0, max_side=768):

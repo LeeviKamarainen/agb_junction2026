@@ -325,3 +325,18 @@ def test_add_a_text_memory(client):
 
     assert response.status_code == 201
     assert response.json()["kind"] == "text" and response.json()["image_url"] is None
+
+
+def test_a_model_of_another_width_is_reported(client, memories):
+    app.dependency_overrides[get_embedder] = lambda: lambda texts: [[0.1] * 512 for _ in texts]
+    try:
+        search = client.post("/api/search", json={"user_query": "keys"})
+        note = client.post("/api/memories/text", json={"text": "coffee"})
+    finally:
+        app.dependency_overrides.clear()
+
+    for response in (search, note):
+        assert response.status_code == 502
+        assert (
+            f"gives 512 numbers per input, but {TABLE} holds {WIDTH}" in response.json()["detail"]
+        )

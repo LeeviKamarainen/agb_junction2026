@@ -2,7 +2,7 @@
 
 The backend's memory search (`/api/ask`, see `backend/app/agent.py`) needs two OpenAI-compatible
 endpoints: **chat completions with tool calling** for Gemma, and **text embeddings** that land in
-the same 512-wide CLIP space as the stored images, for both text queries and uploaded images. The vector database, the search and the
+the same 768-wide EmbeddingGemma 2 space as the stored images, for both text queries and uploaded images. The vector database, the search and the
 question loop all run on the backend (VM1); the server only answers these two kinds of request.
 
 ## How a question flows
@@ -130,14 +130,14 @@ need its base URL, API key and model name.
 ### Request
 
 ```json
-{"model": "ViT-B-32", "input": ["car keys on a table", "keys in a hand"]}
+{"model": "google/embeddinggemma-2", "input": ["car keys on a table", "keys in a hand"]}
 ```
 
 - `input` is a list of 1 to 6 strings. A search sends short texts (the query plus up to 5
   alternatives).
 - **Images arrive in the same field** as `data:image/jpeg;base64,...` strings, one per request,
   when someone uploads a memory on the backend's Memory lab page. Any input that starts with
-  `data:image/` must go through the CLIP **image** tower; everything else through the text tower.
+  `data:image/` must go through the **image** encoder; everything else through the text encoder.
   (This is our convention: the OpenAI API has no image embeddings.)
 
 ### Response
@@ -146,25 +146,25 @@ need its base URL, API key and model name.
 {
   "object": "list",
   "data": [
-    {"object": "embedding", "index": 0, "embedding": [0.0123, -0.0456, "... 512 floats"]},
-    {"object": "embedding", "index": 1, "embedding": ["... 512 floats"]}
+    {"object": "embedding", "index": 0, "embedding": [0.0123, -0.0456, "... 768 floats"]},
+    {"object": "embedding", "index": 1, "embedding": ["... 768 floats"]}
   ],
-  "model": "ViT-B-32"
+  "model": "google/embeddinggemma-2"
 }
 ```
 
 ### Requirements
 
-- **One model for both:** open_clip `ViT-B-32` with `laion2b_s34b_b79k`, text tower for texts
-  and image tower for images (`glass_memory.embed`). With different models the distances between
+- **One model for both:** EmbeddingGemma 2 (`google/embeddinggemma-2`), its text encoder for
+  texts and its image encoder for images (`glass_memory.embed`). With different models the distances between
   a question and an image mean nothing.
-- 512 float32 values per input, L2-normalised (cosine distance makes that optional but cheap).
+- 768 float32 values per input, L2-normalised (cosine distance makes that optional but cheap).
 - One `data` entry per input, each with its `index`.
 - Under about 1 s for 6 texts or one image. Request bodies with an image are up to about 1 MB.
 
-vLLM cannot serve open_clip, so this is best as a small route in the memory API, which already
-loads CLIP: for example `POST /v1/embeddings` behind the existing Caddy and bearer token. The
-backend appends `/v1/embeddings` to the base URL it is given.
+The memory API, which already loads the model, serves this as `POST /v1/embeddings` behind its
+Caddy and bearer token (`memory/src/glass_memory/README.md`), with the `data:image/` convention
+above. The backend appends `/v1/embeddings` to the base URL it is given.
 
 ## Access and our settings
 
@@ -180,7 +180,7 @@ backend's environment:
 | `LLM_MODEL` | Served model name | `google/gemma-4-31B-it` |
 | `EMBED_URL` | Embeddings base URL, without `/v1` | `https://<vm2-ip-with-dashes>.sslip.io` |
 | `EMBED_API_KEY` | Token for the embeddings route | secret |
-| `EMBED_MODEL` | Model name sent in the request | `ViT-B-32` |
+| `EMBED_MODEL` | Model name sent in the request | `google/embeddinggemma-2` |
 
 ## Checks once it is set up
 
@@ -190,14 +190,14 @@ A tool call comes back structured (`finish_reason` is `tool_calls` and `tool_cal
 curl -s "$LLM_URL/v1/chat/completions" -H "Authorization: Bearer $LLM_API_KEY" -H "Content-Type: application/json" -d '{"model":"google/gemma-4-31B-it","messages":[{"role":"user","content":"Search my memories for my keys."}],"tools":[{"type":"function","function":{"name":"vector_search","description":"Search the user memories","parameters":{"type":"object","properties":{"user_query":{"type":"string"}},"required":["user_query"]}}}],"tool_choice":"auto","chat_template_kwargs":{"enable_thinking":false}}'
 ```
 
-Embeddings come back 512 wide, for a text and for an image:
+Embeddings come back 768 wide, for a text and for an image:
 
 ```bash
-curl -s "$EMBED_URL/v1/embeddings" -H "Authorization: Bearer $EMBED_API_KEY" -H "Content-Type: application/json" -d '{"model":"ViT-B-32","input":["car keys on a table"]}'
+curl -s "$EMBED_URL/v1/embeddings" -H "Authorization: Bearer $EMBED_API_KEY" -H "Content-Type: application/json" -d '{"model":"google/embeddinggemma-2","input":["car keys on a table"]}'
 ```
 
 ```bash
-curl -s "$EMBED_URL/v1/embeddings" -H "Authorization: Bearer $EMBED_API_KEY" -H "Content-Type: application/json" -d "{\"model\":\"ViT-B-32\",\"input\":[\"data:image/jpeg;base64,$(base64 -w0 still.jpg)\"]}"
+curl -s "$EMBED_URL/v1/embeddings" -H "Authorization: Bearer $EMBED_API_KEY" -H "Content-Type: application/json" -d "{\"model\":\"google/embeddinggemma-2\",\"input\":[\"data:image/jpeg;base64,$(base64 -w0 still.jpg)\"]}"
 ```
 
 The whole loop: open `/memory` on the web app, upload a few stills, then ask about them.

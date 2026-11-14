@@ -17,7 +17,7 @@ this project's API. **VM1** is the GPU server that runs the segmenter (SAM 3).
 
 ## Machines
 
-- **Everything runs on VM2**, CLIP beside Gemma. About 15 GB of GPU memory is free next to vLLM
+- **Everything runs on VM2**, the embedding model beside Gemma. About 15 GB of GPU memory is free next to vLLM
   and the API holds 1,460 MiB of it. Nothing heavy runs on a laptop. VM1 is only needed for
   object detection.
 - **The gemma container and port 8000 are never touched.** Teammates use them. The one
@@ -31,13 +31,14 @@ this project's API. **VM1** is the GPU server that runs the segmenter (SAM 3).
 
 ## Embeddings and storage
 
-- **One CLIP model for everything:** ViT-B/32 (open_clip, `laion2b_s34b_b79k`) for keyframes,
-  object crops and questions, stored L2-normalised as float32, so cosine similarity is a dot
+- **One embedding model for everything:** EmbeddingGemma 2 (`google/embeddinggemma-2`, text and
+  image encoders, 768-wide; it replaced CLIP ViT-B/32 on 2026-11-14) for keyframes, object crops
+  and questions, stored L2-normalised as float32, so cosine similarity is a dot
   product. Changing the model invalidates every stored embedding.
 - **No vector database.** Search is a brute-force dot product. A vector is about 2 KB and a
   still about 100 KB, so an hour at one keyframe a second is roughly 7 MB of vectors and 360 MB
   of stills.
-- **Gemma never reads CLIP embeddings.** They only pick which stills to send.
+- **Gemma never reads these embeddings.** They only pick which stills to send.
 - **Map coordinates are computed once, when a batch is stored** (UMAP on cosine distance, saved
   as `x` and `y` in the index), so every viewer draws the same map. Fewer than five memories get
   a straight line.

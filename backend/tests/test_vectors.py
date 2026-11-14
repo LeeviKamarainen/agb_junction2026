@@ -134,7 +134,7 @@ def test_vectors_survive_a_restart_and_a_schema_change_wipes_them(db_path):
 def test_wrong_width_and_unknown_table_are_rejected(db_path):
     init_db()
     with get_engine().begin() as connection:
-        with pytest.raises(ValueError, match="512-wide"):
+        with pytest.raises(ValueError, match=f"{WIDTH}-wide"):
             vectors.upsert(connection, TABLE, 1, [1.0, 2.0])
         with pytest.raises(ValueError, match="Unknown vector table"):
             vectors.nearest(connection, "sqlite_master; DROP TABLE note", unit(0))
