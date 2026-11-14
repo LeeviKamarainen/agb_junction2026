@@ -77,8 +77,10 @@ Gemma is loaded when the app starts, before it serves a request, unless `GEMMA_U
   400 for `vectors` when `GEMMA_URL` is set.
 - `POST /v1/embeddings`, OpenAI-style JSON `{"model": "google/embeddinggemma-2", "input": str | [str]}`
   (1 to 16 strings): `{"object": "list", "data": [{"object", "index", "embedding"}], "model"}`,
-  one 768-wide `embed.embed_text` vector per input, in order, for the app backend's search over
-  the same stills. 400 for another `model`, 422 for no input.
+  one 768-wide vector per input, in order, for the app backend's search over the same stills.
+  An input that starts with `data:image/` is a base64 data URL of an image and gets its
+  `embed.embed_images` vector; every other input gets its `embed.embed_text` vector. 400 for
+  another `model` or an image that cannot be read, 422 for no input.
 - Client: `scripts/send_batch.py FRAMES [--every S]` posts a folder's `.jpg` files, in file name
   order, as one batch and prints the response. It reads `GLASS_API_URL` and `GLASS_API_TOKEN`
   from the environment.

@@ -1,6 +1,7 @@
 """The frames API through FastAPI's TestClient, with the embedding model and Gemma faked and a
 temporary store."""
 
+import base64
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -23,6 +24,8 @@ PROTECTED = [
     ("POST", f"/batches/{BATCH}/ask"),
     ("POST", "/v1/embeddings"),
 ]
+
+EMBED_IMAGES = embed.embed_images
 
 
 def fake_images(paths, batch=32):
@@ -327,3 +330,29 @@ def test_text_embeddings_come_back_one_per_input_in_order(client):
         == 400
     )
     assert client.post("/v1/embeddings", json={"input": []}, headers=AUTH).status_code == 422
+
+
+def test_an_image_input_is_embedded_as_an_image(client, monkeypatch):
+    def image_vector(stills, batch=32):
+        """The still's own bytes, so the test sees that the decoded image reached the encoder."""
+        return np.array([list(still.read()) for still in stills], np.float32)
+
+    monkeypatch.setattr(embed, "embed_images", image_vector)
+
+    def embedded(*inputs):
+        return client.post("/v1/embeddings", json={"input": list(inputs)}, headers=AUTH)
+
+    still = "data:image/jpeg;base64," + base64.b64encode(bytes([7, 8, 9])).decode()
+    data = embedded("keys", still).json()["data"]
+    assert data[0]["embedding"] == fake_text("keys").tolist()
+    assert data[1]["embedding"] == [7.0, 8.0, 9.0]
+    assert embedded("data:image/jpeg;base64,not base64!").status_code == 400
+
+
+def test_an_image_input_that_is_no_image_is_refused(client, monkeypatch):
+    # The real embed_images opens the still before it loads the model.
+    monkeypatch.setattr(embed, "embed_images", EMBED_IMAGES)
+    not_an_image = "data:image/jpeg;base64," + base64.b64encode(b"hello").decode()
+
+    response = client.post("/v1/embeddings", json={"input": not_an_image}, headers=AUTH)
+    assert response.status_code == 400

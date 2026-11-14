@@ -67,7 +67,7 @@ curl -H "$AUTH" -H "Content-Type: application/json" -d '{"question": "where are 
 curl -H "$AUTH" -H "Content-Type: application/json" -d '{"model": "google/embeddinggemma-2", "input": ["keys"]}' $URL/v1/embeddings
 ```
 
-`/v1/embeddings` serves EmbeddingGemma 2 (`google/embeddinggemma-2`), 768 numbers per input, in the same space as the stored stills. It replaced CLIP (`ViT-B-32`, 512 numbers) on 2026-11-14: that name now gets a 400, and vectors made with it cannot be compared with new ones.
+`/v1/embeddings` serves EmbeddingGemma 2 (`google/embeddinggemma-2`), 768 numbers per input, in the same space as the stored stills; an input that starts with `data:image/` (a base64 data URL) is embedded as an image, any other as text. It replaced CLIP (`ViT-B-32`, 512 numbers) on 2026-11-14: that name now gets a 400, and vectors made with it cannot be compared with new ones.
 
 ## Agent skills
 

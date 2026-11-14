@@ -9,6 +9,8 @@ writes, plus `vectors/` (Gemma's image vectors of each keyframe), `summary.txt` 
 has been asked for, `vector_map.npy` (the map of those vectors).
 """
 
+import base64
+import io
 import logging
 import os
 import re
@@ -204,18 +206,30 @@ class Texts(BaseModel):
 
 @app.post("/v1/embeddings")
 def embeddings(body: Texts):
-    """OpenAI-style text embeddings in the stills' embedding space, for another service's search."""
+    """OpenAI-style embeddings in the stills' embedding space, for another service's search. An
+    input that starts with `data:image/` is a base64 image and is embedded as one; every other
+    input is embedded as a question."""
     if body.model != embed.MODEL:
         raise HTTPException(400, f"only {embed.MODEL} is served")
-    texts = [body.input] if isinstance(body.input, str) else body.input
+    inputs = [body.input] if isinstance(body.input, str) else body.input
     return {
         "object": "list",
         "data": [
-            {"object": "embedding", "index": i, "embedding": embed.embed_text(text).tolist()}
-            for i, text in enumerate(texts)
+            {"object": "embedding", "index": i, "embedding": _embedded(given).tolist()}
+            for i, given in enumerate(inputs)
         ],
         "model": embed.MODEL,
     }
+
+
+def _embedded(given):
+    if not given.startswith("data:image/"):
+        return embed.embed_text(given)
+    try:
+        still = io.BytesIO(base64.b64decode(given.partition(",")[2], validate=True))
+        return embed.embed_images([still])[0]
+    except ValueError, OSError:  # not base64, or PIL could not read it
+        raise HTTPException(400, "an image input must be a base64 data URL of an image") from None
 
 
 app.include_router(batches)

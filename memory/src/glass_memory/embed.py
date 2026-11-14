@@ -38,7 +38,7 @@ def _normalised(x):
 
 
 def embed_images(paths, batch=32):
-    """L2-normalised float32 embeddings, one row per image."""
+    """L2-normalised float32 embeddings, one row per image, each a path or an open file."""
     rows = []
     for i in range(0, len(paths), batch):
         images = [Image.open(p).convert("RGB") for p in paths[i : i + batch]]
