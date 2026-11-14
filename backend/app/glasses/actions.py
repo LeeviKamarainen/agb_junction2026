@@ -16,6 +16,7 @@ from fastapi import HTTPException
 from pydantic import BaseModel, Field, model_validator
 from sqlmodel import Session
 
+from app.auth import Viewer
 from app.glasses import memory, photos, reminders, remote_memory, screens
 from app.glasses.intents import BUTTON_ACTIONS, interpret
 from app.glasses.layout import GlassesReply
@@ -50,15 +51,16 @@ class WatchResult(BaseModel):
 
 
 def command(
-    session: Session, body: Command, chat: Chat | None, embed: Embedder | None
+    session: Session, viewer: Viewer, body: Command, chat: Chat | None, embed: Embedder | None
 ) -> GlassesReply:
+    """What `viewer` said or pressed; everything it reaches is scoped to them (app/auth.py)."""
     if body.question is not None:
         question = body.question.strip()
         if not question:
             return screens.home()
         if reminders.is_reminder(question):
-            return _remind(session, question, chat)
-        return _ask(session, question, chat, embed)
+            return _remind(session, question, chat, viewer)
+        return _ask(session, question, chat, embed, viewer)
     if body.action is not None:
         if body.action not in BUTTON_ACTIONS:
             raise HTTPException(422, f"unknown action {body.action!r}")
@@ -76,27 +78,27 @@ def command(
     if name == "ask":
         return screens.listen()
     if name == "gallery":
-        return screens.gallery()
+        return screens.gallery(viewer.owners)
     if name == "ask_memory":
-        return _ask(session, text, chat, embed)
+        return _ask(session, text, chat, embed, viewer)
     if name == "remind":
-        return _remind(session, text, chat)
+        return _remind(session, text, chat, viewer)
     return screens.unknown(text)
 
 
-def _remind(session: Session, text: str, chat: Chat | None) -> GlassesReply:
-    reminder = reminders.add(session, text, chat)
+def _remind(session: Session, text: str, chat: Chat | None, viewer: Viewer) -> GlassesReply:
+    reminder = reminders.add(session, text, chat, viewer.id)
     if reminder is None:
         return screens.reminder_unclear(text)
     return screens.reminder_added(reminder.target, reminder.text)
 
 
 def _ask(
-    session: Session, question: str, chat: Chat | None, embed: Embedder | None
+    session: Session, question: str, chat: Chat | None, embed: Embedder | None, viewer: Viewer
 ) -> GlassesReply:
     if chat is not None and embed is not None:
         try:
-            answer = memory.ask(session, question, chat, embed)
+            answer = memory.ask(session, question, chat, embed, viewer.owners)
             said = answer.answer or "I couldn’t find that in your memories."
             return screens.memory_answer(question, said)
         except UpstreamError as error:
@@ -105,7 +107,7 @@ def _ask(
                 return screens.memory_problem(question, "I can’t reach the memory right now.")
     if remote_memory.configured():
         try:
-            said, _stills = remote_memory.ask(question)
+            said, _stills = remote_memory.ask(question, viewer.id, viewer.owners)
         except remote_memory.Unavailable:
             return screens.memory_problem(question, "I can’t reach the memory right now.")
         return screens.memory_answer(question, said)
@@ -120,10 +122,12 @@ def check_jpeg(data: bytes, what: str) -> None:
         raise HTTPException(415, f"{what} must be a JPEG")
 
 
-def photo(session: Session, data: bytes, chat: Chat | None, embed: Embedder | None) -> GlassesReply:
+def photo(
+    session: Session, viewer: Viewer, data: bytes, chat: Chat | None, embed: Embedder | None
+) -> GlassesReply:
     """Saves the still, describes it with the chat model and stores it as an image memory."""
     check_jpeg(data, "photo")
-    name = photos.save(data)
+    name = photos.save(data, viewer.id)
 
     description, problems, stored = "", [], False
     if chat is not None:
@@ -140,7 +144,7 @@ def photo(session: Session, data: bytes, chat: Chat | None, embed: Embedder | No
         problems.append("couldn’t describe it")
     if embed is not None:
         try:
-            memory.remember(session, embed, data, description)
+            memory.remember(session, embed, data, description, viewer.id)
             stored = True
         except UpstreamError as error:
             log.warning("Storing a photo as a memory failed: %s", error)
@@ -152,10 +156,10 @@ def photo(session: Session, data: bytes, chat: Chat | None, embed: Embedder | No
     return screens.photo_saved(name, note)
 
 
-def watch(session: Session, data: bytes, chat: Chat | None) -> WatchResult:
+def watch(session: Session, viewer: Viewer, data: bytes, chat: Chat | None) -> WatchResult:
     """Checks one frame for every reminder's object; never raises for a model's failure."""
     check_jpeg(data, "frame")
-    watched = reminders.active(session)
+    watched = reminders.active(session, viewer.id)  # your own, even for the admin
     try:
         found, note = reminders.detect(data, [r.target for r in watched], chat)
     except reminders.Unavailable as error:

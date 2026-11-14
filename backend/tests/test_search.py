@@ -75,7 +75,7 @@ def test_tool_definition_matches_the_arguments_model():
 
 
 def test_closest_memory_comes_first(memories, session):
-    results = vector_search(session, VectorSearchArgs(user_query="keys"), fake_embed)
+    results = vector_search(session, VectorSearchArgs(user_query="keys"), fake_embed, None)
 
     assert results[0].id == memories[0]
     assert results[0].distance == pytest.approx(0.0, abs=1e-6)
@@ -86,7 +86,7 @@ def test_closest_memory_comes_first(memories, session):
 def test_queries_and_keywords_that_agree_win(memories, session):
     args = VectorSearchArgs(user_query="keys", alternative_queries=["dog"], keywords=["rex"])
 
-    results = vector_search(session, args, fake_embed)
+    results = vector_search(session, args, fake_embed, None)
 
     # The last memory is second for both queries and a keyword match: it beats each query's top.
     assert results[0].id == memories[3]
@@ -99,7 +99,7 @@ def test_queries_and_keywords_that_agree_win(memories, session):
 def test_keyword_only_hits_are_returned(memories, session):
     args = VectorSearchArgs(user_query="something unknown", keywords=["aino"], limit=1)
 
-    (result,) = vector_search(session, args, fake_embed)
+    (result,) = vector_search(session, args, fake_embed, None)
 
     assert result.id == memories[2]
     assert result.matched_keywords == ["aino"]
@@ -108,9 +108,14 @@ def test_keyword_only_hits_are_returned(memories, session):
 def test_timespan_and_kinds_filter(memories, session):
     window = Timespan(start=NOON - timedelta(hours=2), end=NOON)
     in_window = vector_search(
-        session, VectorSearchArgs(user_query="keys", keywords=["rex"], timespan=window), fake_embed
+        session,
+        VectorSearchArgs(user_query="keys", keywords=["rex"], timespan=window),
+        fake_embed,
+        None,
     )
-    texts = vector_search(session, VectorSearchArgs(user_query="keys", kinds=["text"]), fake_embed)
+    texts = vector_search(
+        session, VectorSearchArgs(user_query="keys", kinds=["text"]), fake_embed, None
+    )
 
     assert {result.id for result in in_window} == {memories[1], memories[2]}  # end is exclusive
     assert [result.id for result in texts] == [memories[2]]
@@ -354,9 +359,13 @@ def test_collections_group_memories_and_filter_searches(client):
             session,
             VectorSearchArgs(user_query="keys", keywords=["keys"], collections=["GLASSES"]),
             fake_embed,
+            None,
         )
         nowhere = vector_search(
-            session, VectorSearchArgs(user_query="keys", collections=["no such"]), fake_embed
+            session,
+            VectorSearchArgs(user_query="keys", collections=["no such"]),
+            fake_embed,
+            None,
         )
         with pytest.raises(ValueError, match="Collection"):
             add_memory(session, "text", unit(2), NOON, "x", collection="not ok!")

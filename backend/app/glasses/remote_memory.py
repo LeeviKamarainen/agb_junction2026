@@ -1,8 +1,9 @@
 """The glass-memory API (memory/ on the Gemma server) as the glasses' fallback memory.
 
 It runs Gemma itself, so it works when the backend cannot reach the chat model directly. It
-answers questions within one batch of stills, so the glasses keep one batch holding all their
-photos and post it again whenever photos were added (state in `memory-batch.json` beside them).
+answers questions within one batch of stills, so each user has one batch holding the photos they
+may see (app.auth.Viewer.owners), posted again whenever photos were added (state in
+`memory-batch-<user>.json` beside them). Gemma never gets another user's photos in a batch.
 Its keyframes reach clients through /api/glasses/memory/..., so the token stays here.
 """
 
@@ -56,32 +57,41 @@ def describe(jpeg: bytes, name: str) -> str:
         raise Unavailable(str(error)) from error
 
 
-def _state_file():
-    return photos.photos_dir() / "memory-batch.json"
+def _state_file(user: int):
+    return photos.photos_dir() / f"memory-batch-{user}.json"
 
 
-def _photo_batch(client: httpx.Client) -> str | None:
-    """The id of a batch holding every glasses photo, posting a new one if photos were added."""
-    names = sorted(photos.latest(MAX_FRAMES))
+def current_batch(user: int) -> str | None:
+    """The batch last posted for `user`: the only one whose keyframes they may fetch."""
+    try:
+        batch = str(json.loads(_state_file(user).read_text()).get("batch", ""))
+    except (OSError, ValueError):
+        return None
+    return batch if BATCH.match(batch) else None
+
+
+def _photo_batch(client: httpx.Client, user: int, owners: list[int] | None) -> str | None:
+    """The id of a batch holding the photos `user` may see, posting a new one if they changed."""
+    names = sorted(photos.latest(MAX_FRAMES, owners))
     if not names:
         return None
     try:
-        state = json.loads(_state_file().read_text())
+        state = json.loads(_state_file(user).read_text())
     except (OSError, ValueError):
         state = {}
     if state.get("photos") == names and BATCH.match(str(state.get("batch", ""))):
         return state["batch"]
-    frames = [(name, file.read_bytes()) for name in names if (file := photos.path(name))]
+    frames = [(n, file.read_bytes()) for n in names if (file := photos.path(n, owners))]
     batch = _post_batch(client, frames)["batch"]
-    _state_file().write_text(json.dumps({"batch": batch, "photos": names}))
+    _state_file(user).write_text(json.dumps({"batch": batch, "photos": names}))
     return batch
 
 
-def ask(question: str) -> tuple[str, list[str]]:
-    """Gemma's answer from the glasses' photos, and URLs of the stills it was given."""
+def ask(question: str, user: int, owners: list[int] | None) -> tuple[str, list[str]]:
+    """Gemma's answer from the photos `user` may see, and URLs of the stills it was given."""
     try:
         with _client() as client:
-            batch = _photo_batch(client)
+            batch = _photo_batch(client, user, owners)
             if batch is None:
                 return "I have no photos to look through yet.", []
             reply = client.post(f"/batches/{batch}/ask", json={"question": question, "k": 4})

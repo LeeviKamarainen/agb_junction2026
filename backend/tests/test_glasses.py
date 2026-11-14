@@ -12,7 +12,6 @@ from app.llm import UpstreamError
 from app.main import app
 from app.routes.glasses import optional_chat, optional_embedder
 from app.search import TABLE
-from app.settings import get_settings
 
 WIDTH = vectors.VECTOR_TABLES[TABLE].dimensions
 
@@ -255,7 +254,9 @@ def test_question_falls_back_to_the_memory_api(client, monkeypatch):
     use_models(chat=broken, embed=fake_embed)
     monkeypatch.setattr(remote_memory, "configured", lambda: True)
     url = "/api/glasses/memory/20261114T120000000000/keyframes/a.jpg"
-    monkeypatch.setattr(remote_memory, "ask", lambda question: ("By the door.", [url]))
+    monkeypatch.setattr(
+        remote_memory, "ask", lambda question, user, owners: ("By the door.", [url])
+    )
 
     reply = client.post("/api/glasses/command", json={"text": "where is the can?"}).json()
 
@@ -302,8 +303,8 @@ def test_memory_api_batch_holds_every_photo(client, monkeypatch):
         client.post("/api/glasses/photos", files={"photo": ("a.jpg", JPEG, "image/jpeg")})
     posted.clear()  # the two one-photo batches that described them
 
-    assert remote_memory.ask("where?")[0] == "On the table."
-    assert remote_memory.ask("again?")[0] == "On the table."
+    assert remote_memory.ask("where?", 1, None)[0] == "On the table."
+    assert remote_memory.ask("again?", 1, None)[0] == "On the table."
     assert posted == [2]  # one batch with both photos, reused for the second question
 
 
@@ -530,14 +531,6 @@ def test_socket_checks_only_the_latest_frame(client):
     assert len(checks) == 2
 
 
-@pytest.fixture
-def token(monkeypatch):
-    monkeypatch.setenv("GLASSES_TOKEN", "s3cret")
-    get_settings.cache_clear()
-    yield "s3cret"
-    get_settings.cache_clear()
-
-
 @pytest.mark.parametrize(
     "first",
     [
@@ -546,38 +539,51 @@ def token(monkeypatch):
         {"type": "command", "id": 1, "action": "take_photo"},
     ],
 )
-def test_socket_refuses_a_missing_or_wrong_token(client, token, first):
+def test_socket_refuses_a_client_that_is_not_logged_in(anonymous, first):
     with pytest.raises(WebSocketDisconnect) as refused:
-        with client.websocket_connect("/api/glasses/ws") as ws:
+        with anonymous.websocket_connect("/api/glasses/ws") as ws:
             ws.send_json(first)
             ws.receive_json()
     assert refused.value.code == 1008
 
 
-def test_socket_refuses_a_wrong_bearer_header(client, token):
+def test_socket_refuses_a_wrong_bearer_header(anonymous):
     with pytest.raises(WebSocketDisconnect) as refused:
-        with client.websocket_connect(
+        with anonymous.websocket_connect(
             "/api/glasses/ws", headers={"Authorization": "Bearer wrong"}
         ) as ws:
             ws.receive_json()
     assert refused.value.code == 1008
 
 
-@pytest.mark.parametrize("how", ["message", "header"])
-def test_socket_accepts_the_token(client, token, how):
-    headers = {"Authorization": f"Bearer {token}"} if how == "header" else {}
-    with client.websocket_connect("/api/glasses/ws", headers=headers) as ws:
+@pytest.mark.parametrize("how", ["cookie", "header", "message"])
+def test_socket_accepts_a_login(anonymous, guest, how):
+    bearer = guest("aino")
+    token = bearer["Authorization"].removeprefix("Bearer ")
+    if how == "cookie":
+        anonymous.cookies.set("session", token)
+    headers = bearer if how == "header" else {}
+    with anonymous.websocket_connect("/api/glasses/ws", headers=headers) as ws:
         if how == "message":
             ws.send_json({"type": "auth", "token": token})
         ws.send_json({"type": "ping"})
         assert ws.receive_json()["type"] == "pong"
 
 
-def test_socket_survives_a_refused_client_leaving_first(client, token):
-    with client.websocket_connect("/api/glasses/ws") as ws:
+def test_socket_commands_are_scoped_to_the_login(client, guest):
+    aino, ville = guest("aino"), guest("ville")
+    with client.websocket_connect("/api/glasses/ws", headers=aino) as ws:
+        ws.send_json({"type": "command", "id": 1, "question": "remind me about the stool"})
+        assert ws.receive_json()["reply"]["intent"] == "remind"
+
+    assert len(client.get("/api/glasses/reminders", headers=aino).json()) == 1
+    assert client.get("/api/glasses/reminders", headers=ville).json() == []
+
+
+def test_socket_survives_a_refused_client_leaving_first(anonymous, guest):
+    bearer = guest("aino")
+    with anonymous.websocket_connect("/api/glasses/ws") as ws:
         ws.close()  # before sending its auth message
-    with client.websocket_connect(
-        "/api/glasses/ws", headers={"Authorization": f"Bearer {token}"}
-    ) as ws:
+    with anonymous.websocket_connect("/api/glasses/ws", headers=bearer) as ws:
         ws.send_json({"type": "ping"})
         assert ws.receive_json()["type"] == "pong"

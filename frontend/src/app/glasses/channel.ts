@@ -30,7 +30,7 @@ export type ServerMessage =
 export type SocketState =
   | { state: "connecting"; attempt: number }
   | { state: "open" }
-  /** `retryInMs` is null when retrying cannot help: the backend refused the token. */
+  /** `retryInMs` is null when retrying cannot help: the backend refused the login. */
   | { state: "closed"; retryInMs: number | null; reason: string };
 
 type Handlers = {
@@ -134,7 +134,7 @@ export class GlassesSocket {
         this.handlers.onState({
           state: "closed",
           retryInMs: null,
-          reason: "refused the token: add ?token= to the page address",
+          reason: "refused: log in again",
         });
         return;
       }

@@ -29,6 +29,7 @@ import {
 
 import Link from "next/link";
 
+import { UserMenu } from "@/components/user-menu";
 import { api } from "@/lib/api/browser";
 
 import {
@@ -622,8 +623,8 @@ export function GlassesHarness({
     } else void command({ text }, `said “${text}” (typed)`);
   }
 
-  // One socket per harness, reconnecting with backoff. For a backend with GLASSES_TOKEN set,
-  // ?token= in the page address is sent as the socket's first message.
+  // One socket per harness, reconnecting with backoff. The browser sends the login cookie with
+  // it; a login token in ?token= of the page address is sent as the first message instead.
   const onSocketMessage = useEffectEvent(received);
   const onSocketState = useEffectEvent(socketChanged);
   const onPing = useEffectEvent(ping);
@@ -752,6 +753,7 @@ export function GlassesHarness({
           </div>
           <div className="gh-header-side">
             <nav className="gh-nav" aria-label="Pages">
+              <UserMenu requireLogin />
               <Link href="/memory">Memory lab</Link>
               <Link href="/">
                 <ArrowLeft size={14} aria-hidden="true" /> Home

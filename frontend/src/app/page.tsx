@@ -4,6 +4,7 @@ import Link from "next/link";
 import { io } from "next/cache";
 import { Suspense } from "react";
 
+import { UserMenu } from "@/components/user-menu";
 import { api } from "@/lib/api/server";
 
 import { ApiKeyJoke } from "./api-key-joke";
@@ -36,6 +37,7 @@ export default function Home() {
           <nav aria-label="Main navigation">
             <Link href="/memory">Memory lab</Link>
             <Link href="/glasses">Glasses</Link>
+            <UserMenu />
             <a href="#workspace">Workspace</a>
             <a href="#crew">The crew</a>
             <a

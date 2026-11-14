@@ -24,6 +24,8 @@ from app import vectors
 from app.llm import Embedder, UpstreamError
 from app.models import Memory, MemoryPublic
 
+DEMO_OWNER = 0  # the same as app.auth.DEMO_OWNER; here to keep search free of the web layer
+
 TABLE = "memory_embedding"
 MemoryKind = Literal["image", "text"]
 DEFAULT_COLLECTION = "manual"
@@ -148,8 +150,10 @@ def image_url(memory: Memory) -> str | None:
     return f"/api/memories/{memory.id}/image" if memory.image_file else None
 
 
-def public(memory: Memory) -> MemoryPublic:
+def public(memory: Memory, usernames: dict[int, str] | None = None) -> MemoryPublic:
+    """`usernames` (id -> name) fills in `owner`; without it only demo memories are marked."""
     assert memory.id is not None
+    demo = memory.owner_id == DEMO_OWNER
     return MemoryPublic(
         id=memory.id,
         kind=memory.kind,
@@ -157,6 +161,8 @@ def public(memory: Memory) -> MemoryPublic:
         text=memory.text,
         image_url=image_url(memory),
         collection=memory.collection,
+        demo=demo,
+        owner=None if demo else (usernames or {}).get(memory.owner_id),
     )
 
 
@@ -168,11 +174,13 @@ def add_memory(
     text: str = "",
     image_file: str | None = None,
     collection: str = DEFAULT_COLLECTION,
+    owner_id: int = DEMO_OWNER,
 ) -> Memory:
     """Store a memory and its embedding in the session's transaction; the caller commits.
 
     created_at defaults to now and must be timezone-aware. collection is cleaned with
-    clean_collection, so it raises ValueError for a name that is not allowed.
+    clean_collection, so it raises ValueError for a name that is not allowed. owner_id is the
+    User who added it, or DEMO_OWNER for a memory every user sees.
     """
     collection = clean_collection(collection)
     if kind not in ("image", "text"):
@@ -181,7 +189,12 @@ def add_memory(
     if moment.tzinfo is None:
         raise ValueError("Timestamps must be timezone-aware, e.g. datetime.now(UTC)")
     memory = Memory(
-        kind=kind, created_at=moment, text=text, image_file=image_file, collection=collection
+        kind=kind,
+        created_at=moment,
+        text=text,
+        image_file=image_file,
+        collection=collection,
+        owner_id=owner_id,
     )
     session.add(memory)
     session.flush()  # assigns the id
@@ -192,7 +205,7 @@ def add_memory(
         memory.id,
         embedding,
         moment,
-        {"kind": kind, "collection": collection},
+        {"kind": kind, "collection": collection, "owner": owner_id},
     )
     return memory
 
@@ -209,7 +222,7 @@ def _collections(args: VectorSearchArgs) -> list[str]:
 
 
 def _keyword_ranking(
-    session: Session, args: VectorSearchArgs, candidates: int
+    session: Session, args: VectorSearchArgs, candidates: int, owners: list[int] | None
 ) -> tuple[list[int], dict[int, list[str]]]:
     """Ids of memories whose text holds a keyword, most keywords first, then newest first."""
     keywords = list(dict.fromkeys(k.strip() for k in args.keywords if k.strip()))
@@ -223,6 +236,8 @@ def _keyword_ranking(
     query = select(Memory.id, Memory.text, Memory.created_at).where(
         or_(*(like(keyword) for keyword in keywords))
     )
+    if owners is not None:
+        query = query.where(col(Memory.owner_id).in_(owners))
     if args.kinds:
         query = query.where(col(Memory.kind).in_(args.kinds))
     if collections := _collections(args):
@@ -253,14 +268,23 @@ def width_error(got: int) -> str | None:
     )
 
 
-def vector_search(session: Session, args: VectorSearchArgs, embed: Embedder) -> list[SearchResult]:
-    """Run one vector_search call: the best `args.limit` memories, best first."""
+def vector_search(
+    session: Session, args: VectorSearchArgs, embed: Embedder, owners: list[int] | None
+) -> list[SearchResult]:
+    """Run one vector_search call: the best `args.limit` memories, best first.
+
+    `owners` limits it to memories of those owner ids (a guest: the demo ones and their own);
+    None searches every memory, for the admin. It is not optional on purpose: every caller says
+    whose memories it may reach.
+    """
     candidates = args.limit * CANDIDATES_PER_LIST
     queries = list(dict.fromkeys(q.strip() for q in [args.user_query, *args.alternative_queries]))
     queries = [q for q in queries if q]
     since = args.timespan.start if args.timespan else None
     until = args.timespan.end if args.timespan else None
     where: dict[str, Any] = {}
+    if owners is not None:
+        where["owner"] = list(dict.fromkeys(owners))
     if args.kinds:
         where["kind"] = list(dict.fromkeys(args.kinds))
     if collections := _collections(args):
@@ -277,7 +301,7 @@ def vector_search(session: Session, args: VectorSearchArgs, embed: Embedder) -> 
         for hit in hits:
             best_distance[hit.id] = min(hit.distance, best_distance.get(hit.id, hit.distance))
 
-    keyword_ids, matched = _keyword_ranking(session, args, candidates)
+    keyword_ids, matched = _keyword_ranking(session, args, candidates, owners)
     rankings.append(keyword_ids)
 
     scores: dict[int, float] = defaultdict(float)

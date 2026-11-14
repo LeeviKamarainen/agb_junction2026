@@ -10,6 +10,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, WebSocket
 from fastapi.responses import FileResponse, Response
 
+from app.auth import ViewerDep
 from app.db import SessionDep
 from app.glasses import actions, channel, photos, reminders, remote_memory, screens
 from app.glasses.actions import Command, WatchResult
@@ -52,8 +53,10 @@ def home():
 
 
 @router.post("/command", response_model=GlassesReply)
-def command(body: Command, session: SessionDep, chat: ChatDep, embed: EmbedderDep):
-    return actions.command(session, body, chat, embed)
+def command(
+    body: Command, session: SessionDep, viewer: ViewerDep, chat: ChatDep, embed: EmbedderDep
+):
+    return actions.command(session, viewer, body, chat, embed)
 
 
 @router.post(
@@ -68,10 +71,11 @@ def command(body: Command, session: SessionDep, chat: ChatDep, embed: EmbedderDe
 def upload_photo(
     photo: Annotated[UploadFile, File(description="One JPEG still")],
     session: SessionDep,
+    viewer: ViewerDep,
     chat: ChatDep,
     embed: EmbedderDep,
 ):
-    return actions.photo(session, photo.file.read(photos.MAX_BYTES + 1), chat, embed)
+    return actions.photo(session, viewer, photo.file.read(photos.MAX_BYTES + 1), chat, embed)
 
 
 @router.get(
@@ -79,8 +83,9 @@ def upload_photo(
     response_class=FileResponse,
     responses={200: {"content": {"image/jpeg": {}}}, 404: {}},
 )
-def get_photo(name: str):
-    file = photos.path(name)
+def get_photo(name: str, viewer: ViewerDep):
+    """Your own photos only (the admin's: everyone's); 404 for anyone else's."""
+    file = photos.path(name, viewer.owners)
     if file is None:
         raise HTTPException(404, "no such photo")
     return FileResponse(file, media_type="image/jpeg")
@@ -91,8 +96,11 @@ def get_photo(name: str):
     response_class=Response,
     responses={200: {"content": {"image/jpeg": {}}}, 404: {}, 502: {}},
 )
-def get_memory_keyframe(batch: str, name: str):
-    """A still from the glass-memory API, fetched with the backend's token."""
+def get_memory_keyframe(batch: str, name: str, viewer: ViewerDep):
+    """A still from the glass-memory API, fetched with the backend's token: only from your own
+    batch (the admin: any)."""
+    if not viewer.is_admin and batch != remote_memory.current_batch(viewer.id):
+        raise HTTPException(404, "no such keyframe")
     try:
         data = remote_memory.keyframe(batch, name)
     except remote_memory.Unavailable:
@@ -103,24 +111,25 @@ def get_memory_keyframe(batch: str, name: str):
 
 
 @router.get("/reminders", response_model=list[ReminderPublic])
-def list_reminders(session: SessionDep):
-    return reminders.active(session)
+def list_reminders(session: SessionDep, viewer: ViewerDep):
+    """Your reminders; the admin's list holds everyone's."""
+    return reminders.active(session, None if viewer.is_admin else viewer.id)
 
 
 @router.post("/reminders", response_model=ReminderPublic, status_code=201)
-def add_reminder(body: ReminderCreate, session: SessionDep, chat: ChatDep):
+def add_reminder(body: ReminderCreate, session: SessionDep, viewer: ViewerDep, chat: ChatDep):
     """What the wearer would say, e.g. "remind me not to trip over the stool"; 422 when no
     object can be found in it."""
-    reminder = reminders.add(session, body.text, chat)
+    reminder = reminders.add(session, body.text, chat, viewer.id)
     if reminder is None:
         raise HTTPException(422, "no object to watch for in that text")
     return reminder
 
 
 @router.delete("/reminders/{reminder_id}", status_code=204)
-def delete_reminder(reminder_id: int, session: SessionDep):
+def delete_reminder(reminder_id: int, session: SessionDep, viewer: ViewerDep):
     reminder = session.get(Reminder, reminder_id)
-    if reminder is None:
+    if reminder is None or not viewer.can_change(reminder.owner_id):
         raise HTTPException(404, "no such reminder")
     session.delete(reminder)
     session.commit()
@@ -131,9 +140,9 @@ def delete_reminder(reminder_id: int, session: SessionDep):
     response_model=GlassesReply,
     description="The warning as if the object were in view, for testing without a vision model.",
 )
-def trigger_reminder(reminder_id: int, session: SessionDep):
+def trigger_reminder(reminder_id: int, session: SessionDep, viewer: ViewerDep):
     reminder = session.get(Reminder, reminder_id)
-    if reminder is None:
+    if reminder is None or not viewer.can_change(reminder.owner_id):
         raise HTTPException(404, "no such reminder")
     return screens.warning(reminder.target, reminder.text)
 
@@ -149,6 +158,7 @@ def trigger_reminder(reminder_id: int, session: SessionDep):
 def watch(
     photo: Annotated[UploadFile, File(description="One JPEG frame")],
     session: SessionDep,
+    viewer: ViewerDep,
     chat: ChatDep,
 ):
-    return actions.watch(session, photo.file.read(photos.MAX_BYTES + 1), chat)
+    return actions.watch(session, viewer, photo.file.read(photos.MAX_BYTES + 1), chat)

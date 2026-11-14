@@ -24,14 +24,14 @@ cannot stall the others.
 Commands and photos from one client run at most WORKERS at a time; on disconnect the socket
 closes at once and the threads still running finish on their own.
 
-Auth: with GLASSES_TOKEN set, connect with `Authorization: Bearer <token>` (native clients) or
-send `{"type": "auth", "token": ...}` as the first message (browsers cannot set headers), else
-the socket is closed with 1008. Not a query parameter: uvicorn logs the URL. Without the setting
-the socket is open, as the HTTP routes are.
+Auth: the user's login (app/auth.py), as for every /api/glasses route. A browser sends its
+`session` cookie with the handshake; a native client sends `Authorization: Bearer <token>`, or
+`{"type": "auth", "token": ...}` as the first message, with the token /api/auth/login returned.
+Without a valid login the socket is closed with 1008. Not a query parameter: uvicorn logs the URL.
+Everything the socket does then is scoped to that user, like the HTTP routes.
 """
 
 import logging
-import secrets
 import time
 from collections.abc import Callable
 from typing import Annotated, Literal
@@ -42,12 +42,13 @@ from fastapi import HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field, TypeAdapter, ValidationError
 from sqlmodel import Session
 
+from app import auth
+from app.auth import Viewer
 from app.db import get_engine
 from app.glasses import actions
 from app.glasses.actions import Command, WatchResult
 from app.glasses.layout import GlassesReply
 from app.llm import Chat, Embedder
-from app.settings import get_settings
 
 log = logging.getLogger(__name__)
 
@@ -92,7 +93,8 @@ class PingMessage(BaseModel):
 
 
 class AuthMessage(BaseModel):
-    """The first message, when GLASSES_TOKEN is set and no bearer header came; ignored later."""
+    """The first message, from a client that sent no cookie or bearer header: its login token.
+    Ignored later."""
 
     type: Literal["auth"]
     token: str
@@ -137,29 +139,31 @@ class PongMessage(BaseModel):
 ServerMessage = ReplyMessage | WatchResultMessage | ErrorMessage | PongMessage
 
 
-def _matches(given: str, expected: str) -> bool:
-    return secrets.compare_digest(given.encode(), expected.encode())
+def _viewer_for(token: str | None) -> Viewer | None:
+    with Session(get_engine()) as session:
+        user = auth.user_for(session, token)
+        return Viewer(user) if user else None
 
 
-async def authenticated(websocket: WebSocket) -> bool:
-    """The bearer header, or else the first message, carries GLASSES_TOKEN (when it is set)."""
-    expected = get_settings().glasses_token
-    if not expected:
-        return True
+async def authenticated(websocket: WebSocket) -> Viewer | None:
+    """Who logged in: the bearer header or session cookie, or else a first `auth` message."""
     header = websocket.headers.get("authorization", "")
-    if header.lower().startswith("bearer "):
-        return _matches(header[7:].strip(), expected)
+    given = header[7:].strip() if header.lower().startswith("bearer ") else None
+    given = given or websocket.cookies.get(auth.COOKIE)
+    if given:
+        return await anyio.to_thread.run_sync(_viewer_for, given)
     with anyio.move_on_after(AUTH_TIMEOUT_S):
         event = await websocket.receive()
         text = event.get("text")
         if text is None:
-            return False
+            return None
         try:
             message = client_message.validate_json(text)
         except ValidationError:
-            return False
-        return isinstance(message, AuthMessage) and _matches(message.token, expected)
-    return False
+            return None
+        if isinstance(message, AuthMessage):
+            return await anyio.to_thread.run_sync(_viewer_for, message.token)
+    return None
 
 
 def _in_session[T](work: Callable[..., T], *args) -> T:
@@ -172,8 +176,11 @@ class _Left(Exception):
 
 
 class Channel:
-    def __init__(self, websocket: WebSocket, chat: Chat | None, embed: Embedder | None):
+    def __init__(
+        self, websocket: WebSocket, viewer: Viewer, chat: Chat | None, embed: Embedder | None
+    ):
         self.websocket = websocket
+        self.viewer = viewer  # every action runs with this user's scope
         self.chat = chat
         self.embed = embed
         self.send_lock = anyio.Lock()
@@ -261,7 +268,7 @@ class Channel:
             (id, data), self.frame = self.frame, None
             dropped, self.dropped = self.dropped, 0
             started = time.perf_counter()
-            result = await self.work(id, actions.watch, data, self.chat)
+            result = await self.work(id, actions.watch, self.viewer, data, self.chat)
             if result is None:
                 continue
             ms = round((time.perf_counter() - started) * 1000)
@@ -271,12 +278,14 @@ class Channel:
 
     async def run_command(self, message: CommandMessage) -> None:
         body = Command(text=message.text, action=message.action, question=message.question)
-        reply = await self.work(message.id, actions.command, body, self.chat, self.embed)
+        reply = await self.work(
+            message.id, actions.command, self.viewer, body, self.chat, self.embed
+        )
         if reply is not None:
             await self.send(ReplyMessage(id=message.id, reply=reply))
 
     async def run_photo(self, id: int | None, data: bytes) -> None:
-        reply = await self.work(id, actions.photo, data, self.chat, self.embed)
+        reply = await self.work(id, actions.photo, self.viewer, data, self.chat, self.embed)
         if reply is not None:
             await self.send(ReplyMessage(id=id, reply=reply))
 
@@ -310,16 +319,16 @@ async def serve(websocket: WebSocket, chat: Chat | None, embed: Embedder | None)
     # Refused after accepting: a browser only learns the close code of an opened socket.
     await websocket.accept()
     try:
-        ok = await authenticated(websocket)
+        viewer = await authenticated(websocket)
     except WebSocketDisconnect:
         return
-    if not ok:
+    if viewer is None:
         try:
-            await websocket.close(code=REFUSED, reason="wrong or missing token")
+            await websocket.close(code=REFUSED, reason="log in first")
         except (WebSocketDisconnect, RuntimeError):
             pass  # it left first
         return
-    channel = Channel(websocket, chat, embed)
+    channel = Channel(websocket, viewer, chat, embed)
     async with anyio.create_task_group() as tasks:
         tasks.start_soon(channel.check_frames)
         try:

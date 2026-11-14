@@ -43,8 +43,8 @@ def describe(chat: Chat, jpeg: bytes) -> str:
     return (message.get("content") or "").strip()
 
 
-def remember(session: Session, embed: Embedder, jpeg: bytes, caption: str) -> int:
-    """Stores a photo as an image memory in the glasses collection and returns its id.
+def remember(session: Session, embed: Embedder, jpeg: bytes, caption: str, owner: int) -> int:
+    """Stores a photo as `owner`'s image memory in the glasses collection and returns its id.
 
     Raises UpstreamError.
     """
@@ -55,7 +55,14 @@ def remember(session: Session, embed: Embedder, jpeg: bytes, caption: str) -> in
         if len(vector) != width:
             raise UpstreamError(f"The embedding model gave {len(vector)} numbers, not {width}")
         memory = add_memory(
-            session, "image", vector, datetime.now(UTC), caption, name, collection=COLLECTION
+            session,
+            "image",
+            vector,
+            datetime.now(UTC),
+            caption,
+            name,
+            collection=COLLECTION,
+            owner_id=owner,
         )
         session.commit()
     except BaseException:
@@ -65,6 +72,8 @@ def remember(session: Session, embed: Embedder, jpeg: bytes, caption: str) -> in
     return memory.id
 
 
-def ask(session: Session, question: str, chat: Chat, embed: Embedder) -> agent.Answer:
-    """The question loop of /api/ask. Raises UpstreamError."""
-    return agent.answer(session, question, chat, embed)
+def ask(
+    session: Session, question: str, chat: Chat, embed: Embedder, owners: list[int] | None
+) -> agent.Answer:
+    """The question loop of /api/ask, over `owners`' memories. Raises UpstreamError."""
+    return agent.answer(session, question, chat, embed, owners)

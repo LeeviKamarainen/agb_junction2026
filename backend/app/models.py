@@ -37,6 +37,10 @@ class Memory(SQLModel, table=True):
     # "glasses". Searches can be limited to some collections; app.search.clean_collection says
     # what a name may be.
     collection: str = Field(default="manual", index=True)
+    # Who added it: a User id, or DEMO_OWNER (0) for the demo memories everyone can see. Copied
+    # into memory_embedding as `owner`, so searches (and so the chat model) only reach what the
+    # asking user may see; app/auth.py.
+    owner_id: int = Field(default=0, index=True)
 
 
 class MemoryPublic(SQLModel):
@@ -46,6 +50,8 @@ class MemoryPublic(SQLModel):
     text: str
     image_url: str | None  # /api/memories/{id}/image, for the browser
     collection: str
+    demo: bool  # shared with every user
+    owner: str | None = None  # the uploader's username; None for demo memories
 
 
 class CollectionCount(SQLModel):
@@ -61,6 +67,7 @@ class TextMemoryCreate(SQLModel):
     text: str = Field(min_length=1, max_length=2000)
     created_at: datetime | None = None  # defaults to now; without an offset it is taken as UTC
     collection: str = Field(default="manual", max_length=40)
+    demo: bool = False  # admin only: share it with every user
 
 
 # Things the wearer asked to be warned about ("remind me not to trip over the stool"). While the
@@ -69,6 +76,7 @@ class TextMemoryCreate(SQLModel):
 
 class Reminder(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
+    owner_id: int = Field(index=True)  # the User who set it
     text: str  # what the wearer said
     target: str  # the object to look for, e.g. "stool"
     created_at: datetime
@@ -85,3 +93,39 @@ class ReminderPublic(SQLModel):
 
 class ReminderCreate(SQLModel):
     text: str = Field(min_length=1, max_length=500)
+
+
+# Accounts: one admin, who sees everything, and guests, who see the demo memories and their own.
+# app/auth.py hashes passwords and checks sessions.
+
+
+class User(SQLModel, table=True):
+    id: int | None = Field(default=None, primary_key=True)
+    username: str = Field(unique=True, index=True)  # lower case
+    password_hash: str
+    role: str = "guest"  # "admin" or "guest"
+    created_at: datetime
+
+
+class AuthSession(SQLModel, table=True):
+    # sha256 of the token, so a leaked database cannot be used to log in
+    token_hash: str = Field(primary_key=True)
+    user_id: int = Field(foreign_key="user.id", index=True)
+    expires_at: datetime
+
+
+class UserPublic(SQLModel):
+    id: int
+    username: str
+    role: str
+
+
+class Credentials(SQLModel):
+    username: str = Field(min_length=3, max_length=32)
+    password: str = Field(min_length=8, max_length=200)
+
+
+class LoginResult(UserPublic):
+    # The same session as the cookie, for clients without cookies (the glasses' phone app): send
+    # it as `Authorization: Bearer <token>`.
+    token: str

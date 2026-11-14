@@ -72,20 +72,26 @@ def target_of(text: str, chat: Chat | None) -> str | None:
     return target_from(text)
 
 
-def add(session: Session, text: str, chat: Chat | None) -> Reminder | None:
-    """Stores a reminder, or returns None when no object could be found in `text`."""
+def add(session: Session, text: str, chat: Chat | None, owner: int) -> Reminder | None:
+    """Stores `owner`'s reminder, or returns None when no object could be found in `text`."""
     target = target_of(text, chat)
     if not target:
         return None
-    reminder = Reminder(text=text.strip(), target=target, created_at=datetime.now(UTC))
+    reminder = Reminder(
+        text=text.strip(), target=target, created_at=datetime.now(UTC), owner_id=owner
+    )
     session.add(reminder)
     session.commit()
     session.refresh(reminder)
     return reminder
 
 
-def active(session: Session) -> list[Reminder]:
-    return list(session.exec(select(Reminder).order_by(Reminder.id)))  # type: ignore[arg-type]
+def active(session: Session, owner: int | None) -> list[Reminder]:
+    """`owner`'s reminders, oldest first; None for everyone's."""
+    query = select(Reminder).order_by(Reminder.id)  # type: ignore[arg-type]
+    if owner is not None:
+        query = query.where(Reminder.owner_id == owner)
+    return list(session.exec(query))
 
 
 DETECT_PROMPT = (

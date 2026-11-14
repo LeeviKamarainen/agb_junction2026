@@ -93,8 +93,9 @@ def photo_described(name: str, description: str, note: str | None = None) -> Gla
     )
 
 
-def gallery() -> GlassesReply:
-    names = photos.latest(4)
+def gallery(owners: list[int] | None) -> GlassesReply:
+    """The newest photos the wearer may see (app.auth.Viewer.owners)."""
+    names = photos.latest(4, owners)
     if not names:
         return GlassesReply(
             intent="gallery",

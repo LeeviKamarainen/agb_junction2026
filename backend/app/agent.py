@@ -97,12 +97,15 @@ def run(
     question: str,
     chat: Chat,
     embed: Embedder,
+    owners: list[int] | None,
     now: datetime | None = None,
     collections: list[str] | None = None,
 ) -> Iterator[Step]:
     """Answer `question`, yielding each step; the last one is the answer.
 
-    With `collections`, every search is limited to them, whatever the model asks for.
+    `owners` is whose memories the model may reach (app.auth.Viewer.owners; None for all): every
+    vector_search it makes is limited to them, and only their stills are attached. With
+    `collections`, every search is limited to them too, whatever the model asks for.
 
     Raises UpstreamError when a model server fails.
     """
@@ -149,7 +152,7 @@ def run(
                     content = json.dumps({"error": problems}, default=str)
                     yield step("tool_error", round, call_id=call_id, content=content)
                 else:
-                    results = vector_search(session, args, embed)
+                    results = vector_search(session, args, embed, owners)
                     yield step("tool_result", round, call_id=call_id, results=results)
                     for result in results:
                         if result.image_url and result.id not in shown:
@@ -167,6 +170,8 @@ def run(
                 memory = session.get(Memory, result.id)
                 if memory is None or memory.image_file is None:
                     continue
+                if owners is not None and memory.owner_id not in owners:
+                    continue  # never happens through vector_search; checked again all the same
                 seen = result.created_at.isoformat(timespec="seconds")
                 parts.append({"type": "text", "text": f"Memory {result.id}, seen at {seen}:"})
                 url = media.data_url(memory.image_file)
@@ -180,10 +185,11 @@ def answer(
     question: str,
     chat: Chat,
     embed: Embedder,
+    owners: list[int] | None,
     now: datetime | None = None,
     collections: list[str] | None = None,
 ) -> Answer:
-    steps = list(run(session, question, chat, embed, now, collections))
+    steps = list(run(session, question, chat, embed, owners, now, collections))
     searches: list[VectorSearchArgs] = []
     sources: dict[int, SearchResult] = {}
     for step in steps:

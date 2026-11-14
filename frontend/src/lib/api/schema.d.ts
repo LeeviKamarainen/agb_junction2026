@@ -21,6 +21,103 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/auth/register": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Register
+         * @description A new guest account, logged in. 409 when the username is taken.
+         */
+        post: operations["register_api_auth_register_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/auth/login": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Login
+         * @description 401 for a wrong username or password, without saying which.
+         */
+        post: operations["login_api_auth_login_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/auth/logout": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Logout */
+        post: operations["logout_api_auth_logout_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/auth/me": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Me
+         * @description The logged-in user; 401 when nobody is.
+         */
+        get: operations["me_api_auth_me_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/auth/session": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Current
+         * @description The logged-in user, or null: for pages that show a login link instead of failing.
+         */
+        get: operations["current_api_auth_session_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/notes": {
         parameters: {
             query?: never;
@@ -48,7 +145,8 @@ export interface paths {
         };
         /**
          * List Memories
-         * @description The newest 500 memories, newest first.
+         * @description The newest 500 memories you may see, newest first: a guest sees the demo memories and
+         *     their own, the admin everything.
          */
         get: operations["list_memories_api_memories_get"];
         put?: never;
@@ -68,7 +166,7 @@ export interface paths {
         };
         /**
          * List Collections
-         * @description Every collection that holds a memory, with how many, largest first.
+         * @description Every collection that holds a memory you may see, with how many, largest first.
          */
         get: operations["list_collections_api_memories_collections_get"];
         put?: never;
@@ -115,7 +213,8 @@ export interface paths {
          * Add Image
          * @description Store one image: shrink it, embed it with the image model, keep an optional caption.
          *
-         *     collection groups it, e.g. "glasses" for stills from the glasses (default "manual").
+         *     collection groups it, e.g. "glasses" for stills from the glasses (default "manual"). It is
+         *     yours; with demo=true (admin only) every user sees it.
          */
         post: operations["add_image_api_memories_image_post"];
         delete?: never;
@@ -135,7 +234,7 @@ export interface paths {
         put?: never;
         /**
          * Add Text
-         * @description Store a text memory, embedded with the text model.
+         * @description Store a text memory, embedded with the text model. demo=true (admin only) shares it.
          */
         post: operations["add_text_api_memories_text_post"];
         delete?: never;
@@ -151,7 +250,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Memory Image */
+        /**
+         * Memory Image
+         * @description 404, not 403, for someone else's image: nobody learns which ids exist.
+         */
         get: operations["memory_image_api_memories__id__image_get"];
         put?: never;
         post?: never;
@@ -171,7 +273,10 @@ export interface paths {
         get?: never;
         put?: never;
         post?: never;
-        /** Delete Memory */
+        /**
+         * Delete Memory
+         * @description Your own memories; the admin's any. A guest gets 403 for a demo memory.
+         */
         delete: operations["delete_memory_api_memories__id__delete"];
         options?: never;
         head?: never;
@@ -189,7 +294,8 @@ export interface paths {
         put?: never;
         /**
          * Search
-         * @description Run the vector_search tool directly, with the arguments the chat model would send.
+         * @description Run the vector_search tool directly, with the arguments the chat model would send, over
+         *     the memories you may see.
          */
         post: operations["search_api_search_post"];
         delete?: never;
@@ -209,7 +315,8 @@ export interface paths {
         put?: never;
         /**
          * Ask
-         * @description Answer a question from the memories: the chat model searches them, then answers.
+         * @description Answer a question from the memories you may see: the chat model searches them, then
+         *     answers.
          */
         post: operations["ask_api_ask_post"];
         delete?: never;
@@ -301,7 +408,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Get Photo */
+        /**
+         * Get Photo
+         * @description Your own photos only (the admin's: everyone's); 404 for anyone else's.
+         */
         get: operations["get_photo_api_glasses_photos__name__get"];
         put?: never;
         post?: never;
@@ -320,7 +430,8 @@ export interface paths {
         };
         /**
          * Get Memory Keyframe
-         * @description A still from the glass-memory API, fetched with the backend's token.
+         * @description A still from the glass-memory API, fetched with the backend's token: only from your own
+         *     batch (the admin: any).
          */
         get: operations["get_memory_keyframe_api_glasses_memory__batch__keyframes__name__get"];
         put?: never;
@@ -338,7 +449,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List Reminders */
+        /**
+         * List Reminders
+         * @description Your reminders; the admin's list holds everyone's.
+         */
         get: operations["list_reminders_api_glasses_reminders_get"];
         put?: never;
         /**
@@ -448,6 +562,11 @@ export interface components {
              * @default manual
              */
             collection: string;
+            /**
+             * Demo
+             * @default false
+             */
+            demo: boolean;
         };
         /** Body_upload_photo_api_glasses_photos_post */
         Body_upload_photo_api_glasses_photos_post: {
@@ -496,6 +615,13 @@ export interface components {
             action?: string | null;
             /** Question */
             question?: string | null;
+        };
+        /** Credentials */
+        Credentials: {
+            /** Username */
+            username: string;
+            /** Password */
+            password: string;
         };
         /** FlexBox */
         FlexBox: {
@@ -587,6 +713,17 @@ export interface components {
             /** Height */
             height?: number | null;
         };
+        /** LoginResult */
+        LoginResult: {
+            /** Id */
+            id: number;
+            /** Username */
+            username: string;
+            /** Role */
+            role: string;
+            /** Token */
+            token: string;
+        };
         /** MemoryPublic */
         MemoryPublic: {
             /** Id */
@@ -604,6 +741,10 @@ export interface components {
             image_url: string | null;
             /** Collection */
             collection: string;
+            /** Demo */
+            demo: boolean;
+            /** Owner */
+            owner?: string | null;
         };
         /** MemoryVector */
         MemoryVector: {
@@ -622,6 +763,10 @@ export interface components {
             image_url: string | null;
             /** Collection */
             collection: string;
+            /** Demo */
+            demo: boolean;
+            /** Owner */
+            owner?: string | null;
             /** Embedding */
             embedding: string;
         };
@@ -738,6 +883,11 @@ export interface components {
              * @default manual
              */
             collection: string;
+            /**
+             * Demo
+             * @default false
+             */
+            demo: boolean;
         };
         /** Timespan */
         Timespan: {
@@ -751,6 +901,15 @@ export interface components {
              * @description Exclusive. ISO 8601, e.g. 2026-11-14T12:00Z
              */
             end?: string | null;
+        };
+        /** UserPublic */
+        UserPublic: {
+            /** Id */
+            id: number;
+            /** Username */
+            username: string;
+            /** Role */
+            role: string;
         };
         /** ValidationError */
         ValidationError: {
@@ -822,6 +981,130 @@ export interface operations {
                     "application/json": {
                         [key: string]: string;
                     };
+                };
+            };
+        };
+    };
+    register_api_auth_register_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Credentials"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LoginResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    login_api_auth_login_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Credentials"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LoginResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    logout_api_auth_logout_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    me_api_auth_me_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserPublic"];
+                };
+            };
+        };
+    };
+    current_api_auth_session_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserPublic"] | null;
                 };
             };
         };
