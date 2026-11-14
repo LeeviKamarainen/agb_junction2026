@@ -61,7 +61,9 @@ The contract is in `src/glass_memory/README.md`. The choices behind it:
 
 - **One request is one batch** (the stills of one video), stored in the layout `embed.build`
   writes plus `summary.txt`, so `embed.load` reads it unchanged.
-- **It listens on 127.0.0.1:8001;** vLLM holds port 8000 and Caddy serves HTTPS to the outside.
+- **It listens on 127.0.0.1:8001;** vLLM holds port 8000 and Caddy serves HTTPS to the outside:
+  `/v1/chat/*` and `/v1/models` to vLLM (so the backend's `LLM_URL` is the same address), the
+  rest to the API. Since 2026-11-14 VM2 runs vLLM with `GEMMA_URL` set, so no image vectors.
 
 Made while writing the code, for the owner to keep or overrule:
 

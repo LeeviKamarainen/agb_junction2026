@@ -18,7 +18,10 @@ grep -Eqs '^GLASS_API_TOKEN=[A-Za-z0-9_-]{32,}$' "$dir/.env" \
 # services (Docker among them) after the install.
 apt-get update -q
 NEEDRESTART_SUSPEND=1 DEBIAN_FRONTEND=noninteractive apt-get install -yq caddy
-printf '%s {\n\treverse_proxy 127.0.0.1:8001\n}\n' "$site_host" > /etc/caddy/Caddyfile
+# Chat goes to vLLM (port 8000, its own key), so the backend's LLM_URL can be this address;
+# everything else to the API.
+printf '%s {\n\t@vllm path /v1/chat/* /v1/models\n\treverse_proxy @vllm 127.0.0.1:8000\n\treverse_proxy 127.0.0.1:8001\n}\n' \
+    "$site_host" > /etc/caddy/Caddyfile
 systemctl reload-or-restart caddy
 
 # The API's user: a home for the model caches, and the batches folder as the one place it can
