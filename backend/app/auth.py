@@ -174,12 +174,11 @@ def _delete_guest_files(user_id: int) -> None:
         shutil.rmtree(photos.photos_dir() / str(user_id))
     except FileNotFoundError:
         pass
-    (photos.photos_dir() / f"memory-batch-{user_id}.json").unlink(missing_ok=True)
 
 
 async def purge_expired_guests(session: AsyncSession) -> int:
-    """Deletes every expired guest with its logins, memories (and their image files), reminders,
-    glasses photos and memory-API batch. Returns how many. Commits."""
+    """Deletes every expired guest with its logins, memories (and their image files), reminders
+    and glasses photos. Returns how many. Commits."""
     now = datetime.now(UTC)
     guests = await session.exec(
         select(User).where(User.role == "guest", col(User.expires_at).is_not(None))

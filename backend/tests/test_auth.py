@@ -85,15 +85,13 @@ def test_a_new_guest_cannot_inherit_files_from_a_recycled_user_id(anonymous, db)
 
     name = photos.save(jpeg(), next_id)
     old_photo = photos.photos_dir() / str(next_id) / name
-    old_batch = photos.photos_dir() / f"memory-batch-{next_id}.json"
-    old_batch.write_text(json.dumps({"batch": "a" * 32, "photos": [name]}))
     legacy_photo = photos.photos_dir() / name
     legacy_photo.write_bytes(jpeg())
 
     created = anonymous.post("/api/auth/guest").json()
 
     assert created["id"] == next_id
-    assert not old_photo.exists() and not old_batch.exists()
+    assert not old_photo.exists()
     assert legacy_photo.exists()  # legacy photos remain available to the admin
     assert anonymous.get(photos.url(name)).status_code == 404
     gallery = anonymous.post("/api/glasses/command", json={"action": "gallery"}).json()

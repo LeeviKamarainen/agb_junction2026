@@ -6,7 +6,7 @@ import pytest
 from PIL import Image
 
 from app import media, vectors
-from app.glasses import frames, remote_memory, scores
+from app.glasses import frames, scores
 from app.llm import UpstreamError
 from app.main import app
 from app.routes.glasses import optional_chat, optional_embedder
@@ -48,8 +48,7 @@ class Scene:
 
 
 @pytest.fixture
-def scene(client, monkeypatch):
-    monkeypatch.setattr(remote_memory, "configured", lambda: False)
+def scene(client):
     frames.reset_streams()
     fake = Scene()
     app.dependency_overrides[optional_embedder] = lambda: fake

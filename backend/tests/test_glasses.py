@@ -7,7 +7,7 @@ from fastapi import WebSocketDisconnect
 from PIL import Image
 
 from app import vectors
-from app.glasses import reminders, remote_memory
+from app.glasses import reminders
 from app.glasses.intents import interpret
 from app.llm import UpstreamError
 from app.main import app
@@ -27,9 +27,8 @@ JPEG = make_jpeg()
 
 
 @pytest.fixture(autouse=True)
-def no_models(monkeypatch):
-    """No models or memory API unless a test sets them, even when backend/.env has them."""
-    monkeypatch.setattr(remote_memory, "configured", lambda: False)
+def no_models():
+    """No models unless a test sets them, even when backend/.env has them."""
     app.dependency_overrides[optional_chat] = lambda: None
     app.dependency_overrides[optional_embedder] = lambda: None
     yield
@@ -55,15 +54,6 @@ def says(text):
         return {"role": "assistant", "content": text}
 
     return chat
-
-
-def returns(value):
-    """A stand-in coroutine function that ignores its arguments and returns `value`."""
-
-    async def stub(*_args):
-        return value
-
-    return stub
 
 
 async def broken(*_args):
@@ -252,30 +242,6 @@ def test_unreachable_memory_is_spoken_not_raised(client):
     assert "can’t reach" in reply.json()["speech"]
 
 
-def test_photo_falls_back_to_the_memory_api(client, monkeypatch):
-    use_models(chat=broken)
-    monkeypatch.setattr(remote_memory, "configured", lambda: True)
-    monkeypatch.setattr(remote_memory, "describe", returns("A watering can."))
-
-    reply = client.post("/api/glasses/photos", files={"photo": ("a.jpg", JPEG, "image/jpeg")})
-
-    assert reply.json()["intent"] == "photo_described"
-    assert reply.json()["speech"] == "A watering can."
-    assert "couldn’t" not in texts(reply.json()["screen"])
-
-
-def test_question_falls_back_to_the_memory_api(client, monkeypatch):
-    use_models(chat=broken, embed=fake_embed)
-    monkeypatch.setattr(remote_memory, "configured", lambda: True)
-    url = "/api/glasses/memory/20261114T120000000000/keyframes/a.jpg"
-    monkeypatch.setattr(remote_memory, "ask", returns(("By the door.", [url])))
-
-    reply = client.post("/api/glasses/command", json={"text": "where is the can?"}).json()
-
-    assert reply["speech"] == "By the door."
-    assert url not in str(reply["screen"])  # answers are text only
-
-
 def test_answers_are_plain_text_without_images(client):
     use_models(chat=says("On the desk: * a **blue** mug * your keys"), embed=fake_embed)
     client.post("/api/glasses/photos", files={"photo": ("a.jpg", JPEG, "image/jpeg")})
@@ -284,45 +250,6 @@ def test_answers_are_plain_text_without_images(client):
 
     assert reply["speech"] == "On the desk: a blue mug, your keys"
     assert "image" not in str(reply["screen"])
-
-
-def test_memory_api_batch_holds_every_photo(client, monkeypatch):
-    posted = []
-
-    class FakeClient:
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *_):
-            return False
-
-        async def post(self, path, **kwargs):
-            class Reply:
-                def raise_for_status(self):
-                    pass
-
-                def json(self):
-                    if path == "/batches":
-                        posted.append(len(kwargs["files"]))
-                        return {"batch": f"20261114T12000000000{len(posted)}", "summary": "x"}
-                    return {"answer": "On the table.", "keyframes": ["0.jpg"]}
-
-            return Reply()
-
-    monkeypatch.setattr(remote_memory, "configured", lambda: True)
-    monkeypatch.setattr(remote_memory, "_client", FakeClient)
-    for _ in range(2):
-        client.post("/api/glasses/photos", files={"photo": ("a.jpg", JPEG, "image/jpeg")})
-    posted.clear()  # the two one-photo batches that described them
-
-    assert client.portal.call(remote_memory.ask, "where?", 1, None)[0] == "On the table."
-    assert client.portal.call(remote_memory.ask, "again?", 1, None)[0] == "On the table."
-    assert posted == [2]  # one batch with both photos, reused for the second question
-
-
-@pytest.mark.parametrize("path", ["../x/keyframes/a.jpg", "20261114T120000000000/keyframes/a.png"])
-def test_bad_keyframe_paths_are_404(client, path):
-    assert client.get(f"/api/glasses/memory/{path}").status_code == 404
 
 
 def test_double_tap_opens_the_microphone(client):
@@ -405,17 +332,6 @@ def test_watch_only_cools_down_the_reminder_it_shows(client):
     assert watch(client)["warning"]["speech"] == "Careful: stool ahead."
     assert watch(client)["warning"]["speech"] == "Careful: dog ahead."
     assert watch(client)["warning"] is None
-
-
-def test_watch_falls_back_to_the_memory_apis_description(client, monkeypatch):
-    client.post("/api/glasses/reminders", json={"text": "warn me about the stool"})
-    monkeypatch.setattr(remote_memory, "configured", lambda: True)
-    monkeypatch.setattr(remote_memory, "describe", returns("Two stools by a counter."))
-
-    result = watch(client)
-
-    assert result["seen"] == ["stool"]
-    assert result["warning"] is not None
 
 
 def test_watch_without_a_vision_model_says_so(client):
