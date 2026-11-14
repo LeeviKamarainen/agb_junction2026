@@ -1041,12 +1041,12 @@ export interface components {
         Timespan: {
             /**
              * Start
-             * @description Inclusive. ISO 8601, e.g. 2026-11-14T09:00Z
+             * @description Inclusive. ISO 8601, e.g. 2026-11-14T09:00+02:00
              */
             start?: string | null;
             /**
              * End
-             * @description Exclusive. ISO 8601, e.g. 2026-11-14T12:00Z
+             * @description Exclusive. ISO 8601, e.g. 2026-11-14T12:00+02:00
              */
             end?: string | null;
         };
