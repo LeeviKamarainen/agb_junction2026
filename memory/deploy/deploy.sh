@@ -10,6 +10,7 @@
 #   make memory-logs      follow the API's log
 #   make memory-ssh       a shell on VM2
 #   make memory-link      the page's address with the token in it
+#   make memory-token     the token API clients send as "Authorization: Bearer <token>"
 #   make memory-send FRAMES=<folder> [EVERY=<seconds>]
 #                         post a folder of frames from here (scripts/send_batch.py)
 #
@@ -88,6 +89,7 @@ case ${1:-deploy} in
     ssh) ssh "$vm" ;;
     # The page's address with the token in it, to open on a phone or share. The only place the
     # token is printed.
+    token) token ;;
     link)
         token=$(token)
         echo "https://$host/#token=$token" ;;
@@ -96,5 +98,5 @@ case ${1:-deploy} in
         token=$(token)
         GLASS_API_URL=https://$host GLASS_API_TOKEN=$token \
             "$root/.venv/bin/python" "$root/scripts/send_batch.py" "${@:2}" ;;
-    *) echo "usage: $0 [deploy|setup|logs|ssh|link|send FRAMES]"; exit 2 ;;
+    *) echo "usage: $0 [deploy|setup|logs|ssh|link|token|send FRAMES]"; exit 2 ;;
 esac

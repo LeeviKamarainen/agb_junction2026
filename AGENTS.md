@@ -45,15 +45,29 @@ Each change that lands on `main` runs the checks, then deploys: the code is copi
 
 ## Memory API
 
-`memory/` is the visual memory for the glasses: frames are posted to its API, embedded with CLIP and stored as memories, shown as a 2D map, and Gemma answers questions from the stills a question retrieves. Read `memory/README.md` before working there; what is left is in `memory/docs/todo.md` and the choices already made in `memory/docs/decisions.md`. It is its own uv project (Python 3.14 with torch, about 6 GB), so `make check` and CI leave it out: run `make check-memory`.
+`memory/` is the visual memory for the glasses: frames are posted to its API, embedded with EmbeddingGemma 2 and stored as memories, shown as a 2D map, and Gemma answers questions from the stills a question retrieves. Read `memory/README.md` before working there; what is left is in `memory/docs/todo.md` and the choices already made in `memory/docs/decisions.md`. It is its own uv project (Python 3.14 with torch, about 6 GB), so `make check` and CI leave it out: run `make check-memory`.
 
 The API runs on the Gemma server (called VM2 in `memory/`), beside vLLM, behind Caddy at `https://<vm2-ip-with-dashes>.sslip.io`. Nothing deploys there automatically, so `make memory-deploy` and `make memory-setup` need the same approval as other production changes. Leave the `gemma` container and port 8000 alone.
 
 - `make memory-deploy`: copy `memory/` to `/opt/glass-memory`, install it and restart the `glass-memory` systemd service. `make memory-setup`: once on a fresh server, after the first deploy.
 - `make memory-logs`; `make memory-ssh`.
 - `make memory-link`: the map page's address with the token in it, to share.
+- `make memory-token`: the token API clients need (works for whoever `make memory-ssh` works for).
 - `make memory-send FRAMES=<folder>`: post a folder of JPEG stills as one batch, the folder given from the repo root (needs `uv sync` in `memory/` first).
 - The server's address is `VM2_IP` in `memory/.env`, which is not in git. Its secrets live only in `/opt/glass-memory/.env`: `GLASS_API_TOKEN` and `GEMMA_API_KEY`.
+
+Calling it: every route except `GET /` and `GET /health` needs `Authorization: Bearer <GLASS_API_TOKEN>`, else 401. That is the only token this API takes: `GEMMA_API_KEY` is vLLM's (port 8000) and `SEGMENTER_API_TOKEN` is the segmenter's, and neither works here. Never commit the token; read it from the environment. Every route and its answer is in `memory/src/glass_memory/README.md` (HTTP API); the common ones:
+
+```bash
+URL=https://<vm2-ip-with-dashes>.sslip.io
+AUTH="Authorization: Bearer $GLASS_API_TOKEN"
+curl -H "$AUTH" -F frames=@0001.jpg -F frames=@0002.jpg -F every_s=1 $URL/batches   # {"batch", "memories", "summary"}
+curl -H "$AUTH" $URL/batches                                                          # newest first
+curl -H "$AUTH" -H "Content-Type: application/json" -d '{"question": "where are my keys?"}' $URL/batches/<batch>/ask
+curl -H "$AUTH" -H "Content-Type: application/json" -d '{"model": "google/embeddinggemma-2", "input": ["keys"]}' $URL/v1/embeddings
+```
+
+`/v1/embeddings` serves EmbeddingGemma 2 (`google/embeddinggemma-2`), 768 numbers per input, in the same space as the stored stills. It replaced CLIP (`ViT-B-32`, 512 numbers) on 2026-11-14: that name now gets a 400, and vectors made with it cannot be compared with new ones.
 
 ## Agent skills
 

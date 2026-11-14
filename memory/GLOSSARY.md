@@ -10,7 +10,7 @@ One still saved from the glasses' video (one per second), kept next to its embed
 _Avoid_: frame, snapshot
 
 **Embedding**:
-The CLIP vector of a keyframe, an object crop or a question. All three share one space, so they
+The EmbeddingGemma 2 vector of a keyframe, an object crop or a question. All three share one space, so they
 can be compared.
 _Avoid_: feature, latent
 

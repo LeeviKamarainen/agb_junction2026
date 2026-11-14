@@ -5,14 +5,14 @@
 Every route except `/` and `/health` needs `Authorization: Bearer <GLASS_API_TOKEN>`. The token
 is read from the environment, and the app refuses to start when it is shorter than 32 characters.
 A batch is stored in res/items/API-1/<batch>/ under the working directory: what `embed.store`
-writes, plus `summary.txt`.
+writes, plus `vectors/` (Gemma's image vectors of each keyframe), `summary.txt` and, once it
+has been asked for, `vector_map.npy` (the map of those vectors).
 """
 
 import logging
 import os
 import re
 import secrets
-import shutil
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
@@ -43,6 +43,8 @@ def _token():
 @asynccontextmanager
 async def _lifespan(app):
     _token()  # no token, no start
+    if not ask.served():
+        ask.gemma()  # loaded once and kept on the GPU, so no request waits for it
     yield
 
 
@@ -109,8 +111,8 @@ def store_batch(
     every_s: Annotated[float, Form(gt=0, allow_inf_nan=False)] = 1.0,
 ):
     """Store the frames (JPEGs in time order, `every_s` seconds apart, 1000 at most: the form
-    parser's limit) as one batch of memories. If Gemma gives no summary the batch is still stored,
-    with an empty one."""
+    parser's limit) as one batch of memories, with Gemma's image vectors of each. If Gemma fails
+    the batch is still stored, with an empty summary."""
     stills = [frame.file.read() for frame in frames]
     if not all(still.startswith(b"\xff\xd8") for still in stills):
         raise HTTPException(415, "every frame must be a JPEG")
@@ -120,13 +122,9 @@ def store_batch(
     for path, still in zip(paths, stills, strict=True):
         path.write_bytes(still)
     times = [i * every_s for i in range(len(paths))]
+    index = embed.store([(t, path.name) for t, path in zip(times, paths, strict=True)], folder)
     try:
-        index = embed.store([(t, path.name) for t, path in zip(times, paths, strict=True)], folder)
-    except OSError:  # PIL could not read a still: a JPEG's first bytes, but no whole JPEG
-        log.exception("batch %s is refused", folder.name)
-        shutil.rmtree(folder)
-        raise HTTPException(415, "every frame must be a whole JPEG") from None
-    try:
+        ask.store(paths)
         summary = ask.summarise(paths, times)
     except Exception:
         log.exception("batch %s is stored, but Gemma gave no summary", folder.name)
@@ -148,9 +146,25 @@ def batch_info(folder: Folder):
     return _info(folder)
 
 
+def _own_gemma():
+    if ask.served():
+        raise HTTPException(400, "the Gemma API at GEMMA_URL reads stills only")
+
+
 @batches.get("/{batch}/map")
-def batch_map(folder: Folder):
-    return pl.read_parquet(folder / "index.parquet").select("t_s", "x", "y", "keyframe").to_dicts()
+def batch_map(folder: Folder, vectors: bool = False):
+    """Each memory's place on the map of the embeddings, or with `vectors` on the map of
+    Gemma's image vectors (one point per still, the mean over its tokens, the same layout). That
+    map is made the first time it is asked for and kept."""
+    index = pl.read_parquet(folder / "index.parquet").select("t_s", "x", "y", "keyframe")
+    if vectors:
+        path = folder / "vector_map.npy"
+        if not path.exists():
+            _own_gemma()
+            np.save(path, embed.layout(ask.pooled(embed.load(folder)[0]["keyframe"].to_list())))
+        xy = np.load(path)
+        index = index.with_columns(x=pl.Series(xy[:, 0]), y=pl.Series(xy[:, 1]))
+    return index.to_dicts()
 
 
 @batches.get("/{batch}/keyframes/{name}")
@@ -164,21 +178,45 @@ def keyframe(folder: Folder, name: str):
 class Question(BaseModel):
     question: str
     k: int = Field(4, ge=1, le=48)  # as many stills as a summary sends
+    vectors: bool = False  # Gemma reads the stills, or its stored image vectors of them
 
 
 @batches.post("/{batch}/ask")
 def answer(folder: Folder, body: Question):
-    """Gemma's answer from the stills of the k memories CLIP finds closest to the question; the
-    stills are sent, and their names returned, in time order."""
+    """Gemma's answer from the k memories whose embeddings are closest to the question: from
+    their stills,
+    or with `vectors` from its stored image vectors of them. They are given, and their keyframes
+    named, in time order."""
+    if body.vectors:
+        _own_gemma()
     index, embeddings = embed.load(folder)
     closest = index[np.sort(np.argsort(embeddings @ embed.embed_text(body.question))[-body.k :])]
     stills = closest["keyframe"].to_list()
-    try:
-        reply = ask.ask(body.question, stills, closest["t_s"].to_list())
-    except Exception:
-        log.exception("Gemma gave no answer for batch %s", folder.name)
-        raise HTTPException(502, "Gemma did not answer") from None
-    return {"answer": reply, "keyframes": [Path(still).name for still in stills]}
+    return {
+        "answer": ask.ask(body.question, stills, closest["t_s"].to_list(), body.vectors),
+        "keyframes": [Path(still).name for still in stills],
+    }
+
+
+class Texts(BaseModel):
+    model: str = embed.MODEL
+    input: str | Annotated[list[str], Field(min_length=1, max_length=16)]
+
+
+@app.post("/v1/embeddings")
+def embeddings(body: Texts):
+    """OpenAI-style text embeddings in the stills' embedding space, for another service's search."""
+    if body.model != embed.MODEL:
+        raise HTTPException(400, f"only {embed.MODEL} is served")
+    texts = [body.input] if isinstance(body.input, str) else body.input
+    return {
+        "object": "list",
+        "data": [
+            {"object": "embedding", "index": i, "embedding": embed.embed_text(text).tolist()}
+            for i, text in enumerate(texts)
+        ],
+        "model": embed.MODEL,
+    }
 
 
 app.include_router(batches)

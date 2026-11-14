@@ -1,6 +1,8 @@
-"""The frames API through FastAPI's TestClient, with CLIP and Gemma faked and a temporary store."""
+"""The frames API through FastAPI's TestClient, with the embedding model and Gemma faked and a
+temporary store."""
 
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -19,6 +21,7 @@ PROTECTED = [
     ("GET", f"/batches/{BATCH}/map"),
     ("GET", f"/batches/{BATCH}/keyframes/00000.jpg"),
     ("POST", f"/batches/{BATCH}/ask"),
+    ("POST", "/v1/embeddings"),
 ]
 
 
@@ -35,8 +38,22 @@ def fake_text(text):
 
 @pytest.fixture
 def gemma(monkeypatch):
-    """The calls made to the faked ask.summarise and ask.ask, as (name, arguments) pairs."""
+    """The calls made to the faked ask.store, ask.summarise and ask.ask, as (name, arguments)
+    pairs; the model itself is never loaded."""
     calls = []
+    monkeypatch.setattr(ask, "gemma", lambda: calls.append(("gemma", ())))
+    monkeypatch.setattr(ask, "store", lambda *args: calls.append(("store", args)))
+    # Still i's pooled vectors are (i, 2i), so with the layout faked too it sits at x = i, y = 2i.
+    monkeypatch.setattr(
+        ask,
+        "pooled",
+        lambda stills: (
+            calls.append(("pooled", (stills,)))
+            or np.array(
+                [[int(Path(still).stem), 2 * int(Path(still).stem)] for still in stills], np.float32
+            )
+        ),
+    )
     monkeypatch.setattr(
         ask, "summarise", lambda *args: calls.append(("summarise", args)) or "a faked summary"
     )
@@ -47,10 +64,13 @@ def gemma(monkeypatch):
 @pytest.fixture
 def client(monkeypatch, tmp_path, gemma):
     monkeypatch.setenv("GLASS_API_TOKEN", TOKEN)
+    monkeypatch.delenv("GEMMA_URL", raising=False)
     monkeypatch.setattr(api, "ROOT", tmp_path / "API-1")
     monkeypatch.setattr(embed, "embed_images", fake_images)
     monkeypatch.setattr(embed, "embed_text", fake_text)
-    monkeypatch.setattr(embed, "clip", lambda: pytest.fail("the test loaded CLIP"))
+    monkeypatch.setattr(
+        embed, "encoder", lambda: pytest.fail("the test loaded the embedding model")
+    )
     with TestClient(api.app) as client:
         yield client
 
@@ -84,7 +104,7 @@ def test_a_post_without_the_token_stores_nothing(client, gemma):
     files = [("frames", ("0.jpg", jpeg(0), "image/jpeg"))]
 
     assert client.post("/batches", files=files).status_code == 401
-    assert not api.ROOT.exists() and gemma == []
+    assert not api.ROOT.exists() and gemma == [("gemma", ())]  # loaded at the start, asked nothing
 
 
 @pytest.mark.parametrize(
@@ -135,8 +155,12 @@ def test_a_posted_batch_round_trips_through_every_read_route(client, gemma):
     assert index["keyframe"].to_list() == [str(folder / "keyframes" / name) for name in names]
     assert np.array_equal(embeddings, np.eye(8, dtype=np.float32)[:4])
     assert (folder / "summary.txt").read_text() == "a faked summary"
+    # Gemma is loaded when the app starts, then stores every still's vectors before it summarises.
+    stills = [folder / "keyframes" / name for name in names]
     assert gemma == [
-        ("summarise", ([folder / "keyframes" / name for name in names], [0.0, 0.5, 1.0, 1.5]))
+        ("gemma", ()),
+        ("store", (stills,)),
+        ("summarise", (stills, [0.0, 0.5, 1.0, 1.5])),
     ]
 
 
@@ -148,7 +172,7 @@ def test_batches_are_listed_newest_first(client):
     assert listed[0]["created"] > listed[1]["created"]
 
 
-def test_ask_answers_from_the_stills_clip_retrieves(client, gemma):
+def test_ask_answers_from_the_stills_the_embeddings_retrieve(client, gemma):
     batch = post(client, every_s=2).json()["batch"]
 
     response = client.post(
@@ -159,8 +183,51 @@ def test_ask_answers_from_the_stills_clip_retrieves(client, gemma):
     names = ["00001.jpg", "00002.jpg", "00003.jpg"]
     assert response.json() == {"answer": "a faked answer", "keyframes": names}
     stills = [api.ROOT / batch / "keyframes" / name for name in names]
-    assert gemma[-1] == ("ask", ("where?", [str(still) for still in stills], [2.0, 4.0, 6.0]))
+    assert gemma[-1] == (
+        "ask",
+        ("where?", [str(still) for still in stills], [2.0, 4.0, 6.0], False),
+    )
+    # The same memories, with Gemma told to read its stored vectors instead of the stills.
+    client.post(
+        f"/batches/{batch}/ask", json={"question": "where?", "k": 3, "vectors": True}, headers=AUTH
+    )
+    assert gemma[-1] == ("ask", ("where?", [str(still) for still in stills], [2.0, 4.0, 6.0], True))
     assert all(still.is_file() for still in stills)
+
+
+def test_the_map_of_gemmas_vectors_is_laid_out_once_and_kept(client, gemma, monkeypatch):
+    batch = post(client).json()["batch"]
+    monkeypatch.setattr(embed, "layout", lambda rows: rows * 10)
+
+    def vector_map():
+        return client.get(f"/batches/{batch}/map", params={"vectors": True}, headers=AUTH).json()
+
+    embedded = client.get(f"/batches/{batch}/map", headers=AUTH).json()
+    assert (
+        vector_map()
+        == [m | {"x": 10.0 * i, "y": 20.0 * i} for i, m in enumerate(embedded)]
+        == vector_map()
+    )
+    stills = [str(api.ROOT / batch / "keyframes" / m["keyframe"]) for m in embedded]
+    assert [call for call in gemma if call[0] == "pooled"] == [("pooled", (stills,))]
+    assert client.get(f"/batches/{batch}/map", headers=AUTH).json() == embedded
+
+
+def test_vectors_are_refused_when_an_api_serves_gemma(client, monkeypatch):
+    batch = post(client).json()["batch"]
+    monkeypatch.setenv("GEMMA_URL", "http://gemma.test")
+
+    def asked(**body):
+        return client.post(
+            f"/batches/{batch}/ask", json={"question": "where?", **body}, headers=AUTH
+        )
+
+    assert asked(vectors=True).status_code == 400 and asked().status_code == 200
+    assert (
+        client.get(f"/batches/{batch}/map", params={"vectors": True}, headers=AUTH).status_code
+        == 400
+    )
+    assert client.get(f"/batches/{batch}/map", headers=AUTH).status_code == 200
 
 
 def test_ask_takes_four_memories_by_default_and_never_more_than_there_are(client):
@@ -241,23 +308,22 @@ def test_a_batch_without_frames_or_with_a_frame_that_is_no_jpeg_is_refused(clien
     assert client.get("/batches", headers=AUTH).json() == []
 
 
-def test_a_batch_whose_stills_pil_cannot_read_is_refused_and_not_kept(client, monkeypatch):
-    def unreadable(paths, batch=32):
-        raise OSError("image file is truncated")
+def test_text_embeddings_come_back_one_per_input_in_order(client):
+    response = client.post(
+        "/v1/embeddings", json={"model": embed.MODEL, "input": ["keys", "a hand"]}, headers=AUTH
+    )
 
-    monkeypatch.setattr(embed, "embed_images", unreadable)
-
-    assert post(client).status_code == 415
-    assert list(api.ROOT.iterdir()) == []
-
-
-def test_ask_is_a_502_when_gemma_fails(client, monkeypatch):
-    batch = post(client).json()["batch"]
-
-    def fail(*args):
-        raise OSError("Gemma is down")
-
-    monkeypatch.setattr(ask, "ask", fail)
-
-    response = client.post(f"/batches/{batch}/ask", json={"question": "where?"}, headers=AUTH)
-    assert response.status_code == 502 and response.json() == {"detail": "Gemma did not answer"}
+    data = response.json()["data"]
+    assert [row["index"] for row in data] == [0, 1]
+    assert data[0]["embedding"] == fake_text("keys").tolist()
+    assert (
+        client.post("/v1/embeddings", json={"input": "keys"}, headers=AUTH).json()["model"]
+        == embed.MODEL
+    )
+    assert (
+        client.post(
+            "/v1/embeddings", json={"model": "other", "input": ["x"]}, headers=AUTH
+        ).status_code
+        == 400
+    )
+    assert client.post("/v1/embeddings", json={"input": []}, headers=AUTH).status_code == 422

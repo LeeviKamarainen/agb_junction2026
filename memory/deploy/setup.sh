@@ -27,6 +27,17 @@ id -u glass >/dev/null 2>&1 \
     || useradd --system --create-home --home-dir /var/lib/glass-memory --shell /usr/sbin/nologin glass
 install -d -o glass "$dir/res/items/API-1"
 
+# Gemma's weights are in root's Hugging Face cache (vLLM downloaded them), which the API's user
+# cannot read. Hard links put the same files in its own cache: no copy, no download.
+hub=.cache/huggingface/hub
+model=models--google--gemma-4-31B-it
+if [ -d "/root/$hub/$model" ]; then
+    home=/var/lib/glass-memory
+    install -d -o glass "$home/.cache" "$home/.cache/huggingface" "$home/$hub" "$home/$hub/blobs"
+    cp -al --update=none "/root/$hub/$model" "$home/$hub/"
+    cp -al --update=none "/root/$hub/blobs/." "$home/$hub/blobs/"
+fi
+
 install -m 644 "$(dirname "$0")/glass-memory.service" /etc/systemd/system/
 systemctl daemon-reload
 systemctl enable --quiet glass-memory

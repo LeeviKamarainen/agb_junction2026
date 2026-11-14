@@ -4,13 +4,20 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
-# Not root: setup.sh adds this user. It can write its home (/var/lib/glass-memory, where CLIP's
-# weights are cached) and res/items/API-1 (the batches), nothing else under /opt/glass-memory.
+# Not root: setup.sh adds this user. It can write its home (/var/lib/glass-memory, where the
+# models' weights are cached) and res/items/API-1 (the batches), nothing else under
+# /opt/glass-memory.
 User=glass
 WorkingDirectory=/opt/glass-memory
-# GEMMA_API_KEY and GLASS_API_TOKEN, typed there by the owner.
+# GLASS_API_TOKEN, typed there by the owner; GEMMA_URL and GEMMA_API_KEY too when vLLM serves
+# Gemma (see src/glass_memory/README.md).
 EnvironmentFile=/opt/glass-memory/.env
-# Listens on this machine only: Caddy serves HTTPS to the outside. Port 8000 is vLLM's.
+# Both models are read from the cache and never fetched: Gemma's repository needs a login, and
+# setup.sh links its weights into this user's cache.
+Environment=HF_HUB_OFFLINE=1
+# Without GEMMA_URL, Gemma is loaded before the first request is served, so a start takes a
+# while. Listens on this machine only: Caddy serves HTTPS to the outside. Port 8000 is vLLM's,
+# when vLLM runs.
 ExecStart=/opt/glass-memory/.venv/bin/uvicorn glass_memory.api:app --host 127.0.0.1 --port 8001
 Restart=on-failure
 
