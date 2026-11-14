@@ -254,7 +254,8 @@ export interface paths {
         put?: never;
         /**
          * Add Image
-         * @description Store one image: shrink it, embed it with the image model, keep an optional caption.
+         * @description Store one image: fill every face in it, shrink it, embed it with the image model, keep an
+         *     optional caption.
          *
          *     collection groups it, e.g. "glasses" for stills from the glasses (default "manual"). It is
          *     yours; with demo=true (admin only) every user sees it.
@@ -277,7 +278,8 @@ export interface paths {
         put?: never;
         /**
          * Add Text
-         * @description Store a text memory, embedded with the text model. demo=true (admin only) shares it.
+         * @description Store a text memory, embedded as a document for searches to find. demo=true (admin only)
+         *     shares it.
          */
         post: operations["add_text_api_memories_text_post"];
         delete?: never;
@@ -424,67 +426,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/glasses/photos": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Upload Photo
-         * @description Saves the still. With a chat model the glasses describe it; with an embedding model it also becomes an image memory, captioned with that description.
-         */
-        post: operations["upload_photo_api_glasses_photos_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/glasses/photos/{name}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Photo
-         * @description Your own photos only (the admin's: everyone's); 404 for anyone else's.
-         */
-        get: operations["get_photo_api_glasses_photos__name__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/glasses/memory/{batch}/keyframes/{name}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Memory Keyframe
-         * @description A still from the glass-memory API, fetched with the backend's token: only from your own
-         *     batch (the admin: any).
-         */
-        get: operations["get_memory_keyframe_api_glasses_memory__batch__keyframes__name__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/glasses/reminders": {
         parameters: {
             query?: never;
@@ -558,7 +499,7 @@ export interface paths {
         put?: never;
         /**
          * Watch
-         * @description One frame from the camera while the glasses watch for reminders. Not stored. A target in view gives a warning, at most once a minute per reminder.
+         * @description One frame from the camera while the glasses watch for reminders, with every face in it filled before the chat model sees it. Not stored. A target in view gives a warning, at most once a minute per reminder.
          */
         post: operations["watch_api_glasses_watch_post"];
         delete?: never;
@@ -578,8 +519,8 @@ export interface paths {
         put?: never;
         /**
          * Upload Frame
-         * @description One frame from the glasses: embedded, stored as a memory in the glasses collection, and
-         *     checked against the triggers.
+         * @description One frame from the glasses, with every face in it filled first: embedded, stored as a
+         *     memory in the glasses collection, and checked against the triggers.
          *
          *     `source` is "stream" for frames of a running stream (twice a second; a frame much like the
          *     last one stored from the same `stream_id` is not stored again) or "single" for a photo the
@@ -593,25 +534,33 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/glasses/triggers": {
+    "/api/glasses/goals": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** List Triggers */
-        get: operations["list_triggers_api_glasses_triggers_get"];
+        /**
+         * List Goals
+         * @description What you asked the glasses to watch out for, each with its triggers. Yours only.
+         */
+        get: operations["list_goals_api_glasses_goals_get"];
         put?: never;
-        /** Create Trigger */
-        post: operations["create_trigger_api_glasses_triggers_post"];
+        /**
+         * Create Goal
+         * @description Say what the glasses should watch out for ("tell me when my bus comes"): Gemma writes the
+         *     triggers, and the goal is saved with them, enabled. With `triggers` they are used as given.
+         *     503 without a chat model; 502 when it fails or its answer holds no trigger.
+         */
+        post: operations["create_goal_api_glasses_goals_post"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/glasses/triggers/generate": {
+    "/api/glasses/goals/{id}": {
         parameters: {
             query?: never;
             header?: never;
@@ -619,14 +568,36 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
-        put?: never;
         /**
-         * Generate Triggers
-         * @description Gemma writes the triggers for what the wearer wants watched ("tell me when my bus comes")
-         *     and they are saved, enabled. 503 without a chat model; 502 when it fails or its answer holds
-         *     no trigger.
+         * Update Goal
+         * @description Switch a goal, and so all its triggers, on or off.
          */
-        post: operations["generate_triggers_api_glasses_triggers_generate_post"];
+        put: operations["update_goal_api_glasses_goals__id__put"];
+        post?: never;
+        /**
+         * Delete Goal
+         * @description Remove a goal with all its triggers.
+         */
+        delete: operations["delete_goal_api_glasses_goals__id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/glasses/triggers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Triggers
+         * @description Every trigger of your goals, with the level measured for it.
+         */
+        get: operations["list_triggers_api_glasses_triggers_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -641,10 +612,16 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
-        /** Update Trigger */
+        /**
+         * Update Trigger
+         * @description Reword or retune one trigger of a goal.
+         */
         put: operations["update_trigger_api_glasses_triggers__id__put"];
         post?: never;
-        /** Delete Trigger */
+        /**
+         * Delete Trigger
+         * @description Drop one trigger from its goal; a goal left with none goes with it.
+         */
         delete: operations["delete_trigger_api_glasses_triggers__id__delete"];
         options?: never;
         head?: never;
@@ -716,14 +693,6 @@ export interface components {
             /** Seen At */
             seen_at?: string | null;
         };
-        /** Body_upload_photo_api_glasses_photos_post */
-        Body_upload_photo_api_glasses_photos_post: {
-            /**
-             * Photo
-             * @description One JPEG still
-             */
-            photo: string;
-        };
         /** Body_watch_api_glasses_watch_post */
         Body_watch_api_glasses_watch_post: {
             /**
@@ -753,12 +722,11 @@ export interface components {
         };
         /**
          * Command
-         * @description Exactly one of: what the wearer said (`text`), the action of the button they pressed, or
-         *     the question they asked after pressing Ask (`question`, always a question about the photos).
+         * @description Exactly one of: the action of a button or gesture (`action`), or what the wearer said
+         *     (`question`). What they said goes to the memory as it is, unless it starts "remind me…" or
+         *     "warn me…", which makes it a reminder (reminders.py).
          */
         Command: {
-            /** Text */
-            text?: string | null;
             /** Action */
             action?: string | null;
             /** Question */
@@ -870,6 +838,8 @@ export interface components {
             text: string;
             /** Trigger Id */
             trigger_id?: number | null;
+            /** Goal Id */
+            goal_id?: number | null;
         };
         /**
          * GlassesReply
@@ -882,9 +852,37 @@ export interface components {
             /** Speech */
             speech?: string | null;
             /** Client Action */
-            client_action?: ("capture_photo" | "listen_question") | null;
+            client_action?: "listen_question" | null;
             /** Dismiss After S */
             dismiss_after_s?: number | null;
+        };
+        /** GoalCreate */
+        GoalCreate: {
+            /** Text */
+            text: string;
+            /** Triggers */
+            triggers?: components["schemas"]["TriggerDraft"][] | null;
+        };
+        /** GoalPublic */
+        GoalPublic: {
+            /** Id */
+            id: number;
+            /** Text */
+            text: string;
+            /** Enabled */
+            enabled: boolean;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Triggers */
+            triggers: components["schemas"]["TriggerPublic"][];
+        };
+        /** GoalUpdate */
+        GoalUpdate: {
+            /** Enabled */
+            enabled: boolean;
         };
         /**
          * GuestLogin
@@ -1110,46 +1108,36 @@ export interface components {
         Timespan: {
             /**
              * Start
-             * @description Inclusive. ISO 8601, e.g. 2026-11-14T09:00Z
+             * @description Inclusive. ISO 8601, e.g. 2026-11-14T09:00+02:00
              */
             start?: string | null;
             /**
              * End
-             * @description Exclusive. ISO 8601, e.g. 2026-11-14T12:00Z
+             * @description Exclusive. ISO 8601, e.g. 2026-11-14T12:00+02:00
              */
             end?: string | null;
         };
-        /** TriggerCreate */
-        TriggerCreate: {
+        /**
+         * TriggerDraft
+         * @description A trigger as it is written or edited.
+         */
+        TriggerDraft: {
             /** Name */
             name: string;
             /** Watch For */
             watch_for: string;
-            /** Instruction */
-            instruction: string;
             /**
              * Sigmas
              * @default 3
              */
             sigmas: number;
-            /**
-             * Enabled
-             * @default true
-             */
-            enabled: boolean;
-        };
-        /**
-         * TriggerGoal
-         * @description What the wearer wants the glasses to watch out for, in their own words.
-         */
-        TriggerGoal: {
-            /** Goal */
-            goal: string;
         };
         /** TriggerMatch */
         TriggerMatch: {
             /** Trigger Id */
             trigger_id: number;
+            /** Goal Id */
+            goal_id: number;
             /** Name */
             name: string;
             /** Distance */
@@ -1167,20 +1155,15 @@ export interface components {
             name: string;
             /** Watch For */
             watch_for: string;
-            /** Instruction */
-            instruction: string;
             /**
              * Sigmas
              * @default 3
              */
             sigmas: number;
-            /**
-             * Enabled
-             * @default true
-             */
-            enabled: boolean;
             /** Id */
             id: number;
+            /** Goal Id */
+            goal_id: number;
             /** Last Fired At */
             last_fired_at: string | null;
             /** Level */
@@ -1848,123 +1831,6 @@ export interface operations {
             };
         };
     };
-    upload_photo_api_glasses_photos_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "multipart/form-data": components["schemas"]["Body_upload_photo_api_glasses_photos_post"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["GlassesReply"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_photo_api_glasses_photos__name__get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                name: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "image/jpeg": unknown;
-                };
-            };
-            /** @description Not Found */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_memory_keyframe_api_glasses_memory__batch__keyframes__name__get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                batch: string;
-                name: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "image/jpeg": unknown;
-                };
-            };
-            /** @description Not Found */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-            /** @description Bad Gateway */
-            502: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-        };
-    };
     list_reminders_api_glasses_reminders_get: {
         parameters: {
             query?: never;
@@ -2144,6 +2010,123 @@ export interface operations {
             };
         };
     };
+    list_goals_api_glasses_goals_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoalPublic"][];
+                };
+            };
+        };
+    };
+    create_goal_api_glasses_goals_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GoalCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoalPublic"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_goal_api_glasses_goals__id__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GoalUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoalPublic"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_goal_api_glasses_goals__id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_triggers_api_glasses_triggers_get: {
         parameters: {
             query?: never;
@@ -2164,72 +2147,6 @@ export interface operations {
             };
         };
     };
-    create_trigger_api_glasses_triggers_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["TriggerCreate"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["TriggerPublic"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    generate_triggers_api_glasses_triggers_generate_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["TriggerGoal"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["TriggerPublic"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     update_trigger_api_glasses_triggers__id__put: {
         parameters: {
             query?: never;
@@ -2241,7 +2158,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["TriggerCreate"];
+                "application/json": components["schemas"]["TriggerDraft"];
             };
         };
         responses: {

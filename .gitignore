@@ -4,6 +4,9 @@
 # Local SQLite database
 backend/data/
 
+# Data for the backend's scripts, such as WIDER FACE for scripts/face_recall.py
+backend/res/
+
 # Python
 __pycache__/
 .venv/

@@ -5,15 +5,17 @@ is embedded (EmbeddingGemma 2, the memories' space). A stream frame is only stor
 changed since the last one stored from that stream, or a while has passed, so a still scene does
 not flood the database; single photos are always stored.
 
-Then a stream frame is scored against every enabled Trigger: how far its similarity to the
+Then a stream frame is scored against the triggers of the sender's enabled goals (a Goal is what
+they asked the glasses to watch out for; app/glasses/triggers.py): how far its similarity to a
 trigger's text is above what the stream has just been showing. The closest trigger whose score
-reaches its level fires: the chat model looks at the frame and writes the message the glasses
-show, or finds it a false alarm. Then nothing reaches the wearer, and the trigger's level is
-raised above that score (up to scores.MAX_LEVEL). Without a chat model, or when its answer cannot
-be read, no trigger says anything. After a firing the stream is quiet for scores.SKIP_S, or for
-scores.READ_S once a message was shown, so the wearer can read it. The level is measured from the
-trigger's own noise in the stream (app/glasses/scores.py), so a trigger waits for a few seconds
-of frames before it can fire, and a single photo fires nothing. Most frames get an empty answer.
+reaches its level fires for its goal: the chat model is shown the frame and what the wearer
+asked, and writes the message the glasses show, or finds it a false alarm. Then nothing reaches
+the wearer, and the trigger's level is raised above that score (up to scores.MAX_LEVEL). Without
+a chat model, or when its answer cannot be read, no trigger says anything. After a firing the
+stream is quiet for scores.SKIP_S, or for scores.READ_S once a message was shown, so the wearer
+can read it. The level is measured from the trigger's own noise in the stream
+(app/glasses/scores.py), so a trigger waits for a few seconds of frames before it can fire, and
+a single photo fires nothing. Most frames get an empty answer.
 """
 
 import json
@@ -32,7 +34,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from app import media, vectors
 from app.glasses import scores
 from app.llm import Chat, Embedder, UpstreamError
-from app.models import Trigger
+from app.models import Goal, Trigger
 from app.search import add_memory, width_error
 
 COLLECTION = "glasses"
@@ -57,6 +59,7 @@ Source = Literal["stream", "single"]
 
 class TriggerMatch(BaseModel):
     trigger_id: int
+    goal_id: int
     name: str
     distance: float  # cosine distance between the frame and the trigger's watch_for
     fired: bool
@@ -73,7 +76,8 @@ class GlassesMessage(BaseModel):
     type: Literal["text_reply", "trigger"]
     title: str
     text: str
-    trigger_id: int | None = None  # set for "trigger"
+    trigger_id: int | None = None  # set for "trigger": the one that fired,
+    goal_id: int | None = None  # and the goal it belongs to
 
 
 class FrameReply(BaseModel):
@@ -134,10 +138,10 @@ async def forget_trigger_vector(session: AsyncSession, trigger_id: int) -> None:
     scores.forget_trigger(trigger_id)
 
 
-async def _message(chat: Chat, trigger: Trigger, jpeg_name: str) -> str | None:
-    """What to tell the wearer about the still that fired the trigger, or None when the chat
-    model finds it a false alarm. Raises UpstreamError when the model fails and ValueError when
-    its answer cannot be read."""
+async def _message(chat: Chat, goal: Goal, trigger: Trigger, jpeg_name: str) -> str | None:
+    """What to tell the wearer about the still that fired a trigger of the goal, or None when
+    the chat model finds it a false alarm. Raises UpstreamError when the model fails and
+    ValueError when its answer cannot be read."""
     reply = await chat(
         [
             {"role": "system", "content": MESSAGE_SYSTEM},
@@ -146,7 +150,9 @@ async def _message(chat: Chat, trigger: Trigger, jpeg_name: str) -> str | None:
                 "content": [
                     {
                         "type": "text",
-                        "text": f"Watched for: {trigger.watch_for}. {trigger.instruction}",
+                        "text": f"The wearer asked: “{goal.text}” Watched for: "
+                        f"{trigger.watch_for}. If the still shows what they asked about, tell "
+                        "them what they need to know now.",
                     },
                     {
                         "type": "image_url",
@@ -179,9 +185,9 @@ async def receive(
     stream_id: str = "",
     seen_at: datetime | None = None,
     owner_id: int = 0,
-    owners: list[int] | None = None,
 ) -> FrameReply:
-    """Embed one frame, store it when it is new enough, and fire at most one trigger.
+    """Embed one frame of `owner_id`'s, store it when it is new enough, and fire at most one
+    trigger of their enabled goals.
 
     Raises ValueError for data that is not an image and UpstreamError when embedding fails.
     """
@@ -207,10 +213,16 @@ async def receive(
 
         fired: Trigger | None = None
         fired_score = 0.0
-        query = select(Trigger).where(col(Trigger.enabled))
-        if owners is not None:
-            query = query.where(col(Trigger.owner_id).in_(owners))
-        triggers = list(await session.exec(query))
+        # Only the account's own goals: nobody's triggers fire on someone else's stream.
+        goals = {
+            goal.id: goal
+            for goal in await session.exec(
+                select(Goal).where(Goal.owner_id == owner_id, col(Goal.enabled))
+            )
+        }
+        triggers = list(
+            await session.exec(select(Trigger).where(col(Trigger.goal_id).in_(list(goals))))
+        )
         trigger_vectors: dict = {}
         if triggers:
             try:
@@ -249,6 +261,7 @@ async def receive(
                 reply.matches.append(
                     TriggerMatch(
                         trigger_id=trigger.id,
+                        goal_id=trigger.goal_id,
                         name=trigger.name,
                         distance=round(distance, 4),
                         fired=trigger is fired,
@@ -276,7 +289,7 @@ async def receive(
                 reply.note = f"{fired.name} fired, but there is no chat model to look at the frame"
                 return reply
             try:
-                text = await _message(chat, fired, name)
+                text = await _message(chat, goals[fired.goal_id], fired, name)
             except (UpstreamError, ValueError) as error:
                 reply.note = f"{fired.name} fired, but the chat model failed: {error}"
                 return reply
@@ -292,7 +305,11 @@ async def receive(
                     reply.note += f"; its level is now {current.level:.3f}"
             else:
                 reply.message = GlassesMessage(
-                    type="trigger", title=fired.name, text=text, trigger_id=fired.id
+                    type="trigger",
+                    title=fired.name,
+                    text=text,
+                    trigger_id=fired.id,
+                    goal_id=fired.goal_id,
                 )
                 if stream is not None:
                     stream.quiet_until = time.monotonic() + scores.READ_S

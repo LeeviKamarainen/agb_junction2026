@@ -207,17 +207,17 @@ class GlassesChannel(
     }
 
     /**
-     * What the wearer said, as POST /api/glasses/command: `text` (anything), or `question` (a question
-     * about their photos, after a reply asked for one). Waits for the backend's reply.
+     * What the wearer said, as POST /api/glasses/command with `question`: the backend gives the words to
+     * Gemma as they are, whatever they say. Waits for the backend's reply.
      */
-    suspend fun command(text: String, asQuestion: Boolean = false): CommandOutcome {
+    suspend fun command(text: String): CommandOutcome {
         if (!configured) return CommandOutcome.Fail("Set glasses.api in local.properties")
         val ws = withTimeoutOrNull(10_000) { ready.filterNotNull().first() }
             ?: return CommandOutcome.Fail("Not connected to the backend")
         val id = ids.incrementAndGet()
         val result = CompletableDeferred<CommandOutcome>()
         val message = JSONObject().put("type", "command").put("id", id)
-            .put(if (asQuestion) "question" else "text", text.take(500))
+            .put("question", text.take(500))
         try {
             synchronized(sendLock) {
                 pendingCommands[id] = result

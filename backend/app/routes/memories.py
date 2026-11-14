@@ -10,10 +10,10 @@ from fastapi.responses import FileResponse, StreamingResponse
 from sqlmodel import col, func, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from app import agent, media, vectors
+from app import agent, faces, media, vectors
 from app.auth import DEMO_OWNER, Viewer, ViewerDep
 from app.db import SessionDep, new_session
-from app.llm import Chat, Embedder, UpstreamError, get_chat, get_embedder
+from app.llm import Chat, Embedder, InputType, UpstreamError, get_chat, get_embedder
 from app.models import (
     CollectionCount,
     Memory,
@@ -92,9 +92,9 @@ def _owner_for(viewer: Viewer, demo: bool) -> int:
     return DEMO_OWNER if demo else viewer.id
 
 
-async def _embed_one(embed: Embedder, input: str) -> list[float]:
+async def _embed_one(embed: Embedder, input: str, input_type: InputType = "query") -> list[float]:
     try:
-        (vector,) = await embed([input])
+        (vector,) = await embed([input], input_type)
     except UpstreamError as error:
         raise HTTPException(502, str(error)) from error
     if problem := width_error(len(vector)):
@@ -160,7 +160,8 @@ async def add_image(
     collection: Annotated[str, Form(max_length=40)] = "manual",
     demo: Annotated[bool, Form()] = False,
 ):
-    """Store one image: shrink it, embed it with the image model, keep an optional caption.
+    """Store one image: fill every face in it, shrink it, embed it with the image model, keep an
+    optional caption.
 
     collection groups it, e.g. "glasses" for stills from the glasses (default "manual"). It is
     yours; with demo=true (admin only) every user sees it.
@@ -171,8 +172,10 @@ async def add_image(
     if len(data) > MAX_UPLOAD:
         raise HTTPException(413, "Images can be at most 25 MB")
     try:
-        # Decoding and shrinking is CPU work: off the event loop.
-        name = await anyio.to_thread.run_sync(media.save_image, data)
+        # Filling faces, decoding and shrinking are CPU work: off the event loop. The fill comes
+        # first, so nothing below sees a face.
+        filled = await anyio.to_thread.run_sync(faces.anonymise, data)
+        name = await anyio.to_thread.run_sync(media.save_image, filled)
     except ValueError as error:
         raise HTTPException(422, str(error)) from error
     try:
@@ -192,10 +195,11 @@ async def add_image(
 async def add_text(
     body: TextMemoryCreate, session: SessionDep, viewer: ViewerDep, embed: EmbedderDep
 ):
-    """Store a text memory, embedded with the text model. demo=true (admin only) shares it."""
+    """Store a text memory, embedded as a document for searches to find. demo=true (admin only)
+    shares it."""
     collection = _collection(body.collection)
     owner = _owner_for(viewer, body.demo)
-    vector = await _embed_one(embed, body.text)
+    vector = await _embed_one(embed, body.text, "document")
     memory = await add_memory(
         session,
         "text",
@@ -210,8 +214,14 @@ async def add_text(
 
 
 @router.get("/memories/{id}/image", response_class=FileResponse)
-async def memory_image(id: int, session: SessionDep, viewer: ViewerDep):
-    """404, not 403, for someone else's image: nobody learns which ids exist."""
+async def memory_image(
+    id: int, session: SessionDep, viewer: ViewerDep, v: str | None = None
+) -> FileResponse:
+    """404, not 403, for someone else's image: nobody learns which ids exist.
+
+    With `v` (as `image_url` gives it) matching the image, the browser may keep it for good, since
+    a different image gets a different `v`; without it, it has to ask again every time.
+    """
     memory = await session.get(Memory, id)
     if (
         memory is None
@@ -220,7 +230,16 @@ async def memory_image(id: int, session: SessionDep, viewer: ViewerDep):
         or not media.path(memory.image_file).exists()
     ):
         raise HTTPException(404, "No image for this memory")
-    return FileResponse(media.path(memory.image_file), media_type="image/jpeg")
+    cache = (
+        "private, max-age=31536000, immutable"
+        if v == media.version(memory.image_file)
+        else "private, no-cache"
+    )
+    return FileResponse(
+        media.path(memory.image_file),
+        media_type="image/jpeg",
+        headers={"Cache-Control": cache},
+    )
 
 
 @router.delete("/memories/{id}", status_code=204)
@@ -262,7 +281,13 @@ async def ask(
     answers."""
     try:
         return await agent.answer(
-            session, body.question, chat, embed, viewer.owners, collections=body.collections
+            session,
+            body.question,
+            chat,
+            embed,
+            viewer.owners,
+            collections=body.collections,
+            owner_id=viewer.id,
         )
     except UpstreamError as error:
         raise HTTPException(502, str(error)) from error
@@ -279,7 +304,8 @@ async def ask_stream(body: agent.AskRequest, viewer: ViewerDep, chat: ChatDep, e
     A failure after the first line arrives as {"type": "error", "content": "..."}.
     """
 
-    owners = viewer.owners  # read now: the request's session closes before the stream ends
+    # Read now: the request's session closes before the stream ends.
+    owners, owner_id = viewer.owners, viewer.id
 
     async def lines() -> AsyncIterator[str]:
         # Its own session: the request's would close before the stream ends.
@@ -292,6 +318,7 @@ async def ask_stream(body: agent.AskRequest, viewer: ViewerDep, chat: ChatDep, e
                     embed,
                     owners,
                     collections=body.collections,
+                    owner_id=owner_id,
                 ):
                     yield step.model_dump_json() + "\n"
             except UpstreamError as error:

@@ -5,7 +5,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from PIL import Image
 
-from app import media, vectors
+from app import agent, media, vectors
 from app.llm import UpstreamError, get_chat, get_embedder
 from app.main import app
 from app.search import (
@@ -13,6 +13,7 @@ from app.search import (
     VECTOR_SEARCH_TOOL,
     Timespan,
     VectorSearchArgs,
+    _keyword_ranking,
     add_memory,
     vector_search,
 )
@@ -30,7 +31,7 @@ def unit(*axes: int) -> list[float]:
 PHRASES = {"keys": unit(0), "keys on a table": unit(0), "dog": unit(1), "coffee": unit(2)}
 
 
-async def fake_embed(texts):
+async def fake_embed(texts, input_type="query"):
     """Images (data: URLs) all embed like "keys"."""
     return [
         unit(0) if t.startswith("data:image/") else PHRASES.get(t, unit(WIDTH - 1)) for t in texts
@@ -83,7 +84,7 @@ def test_closest_memory_comes_first(memories, search):
 
     assert results[0].id == memories[0]
     assert results[0].distance == pytest.approx(0.0, abs=1e-6)
-    assert results[0].image_url == f"/api/memories/{memories[0]}/image"
+    assert results[0].image_url.startswith(f"/api/memories/{memories[0]}/image?v=")
     assert results[0].created_at == NOON - timedelta(hours=3)
 
 
@@ -118,8 +119,39 @@ def test_timespan_and_kinds_filter(memories, search):
     assert [result.id for result in texts] == [memories[2]]
 
 
-def test_naive_timespan_is_utc():
-    assert Timespan(start=datetime(2026, 11, 14, 9)).start == datetime(2026, 11, 14, 9, tzinfo=UTC)
+def test_naive_timespan_is_the_wearers_local_time():
+    # 09:00 in Helsinki in November is 07:00 UTC.
+    assert Timespan(start=datetime(2026, 11, 14, 9)).start == datetime(2026, 11, 14, 7, tzinfo=UTC)
+
+
+def test_a_local_timespan_selects_by_the_wearers_clock(memories, search, db):
+    # The memories are at 11:00, 12:00, 13:00 and 14:00 Helsinki time (09:00 to 12:00 UTC).
+    window = Timespan(start=datetime(2026, 11, 14, 12), end=datetime(2026, 11, 14, 14))
+    args = VectorSearchArgs(user_query="keys", keywords=["rex", "aino"], timespan=window)
+
+    # The vector table and the keyword search filter times apart, so check both.
+    keyword_ids, _ = db(lambda session: _keyword_ranking(session, args, 10, None))
+
+    assert {result.id for result in search(args)} == {memories[1], memories[2]}
+    assert set(keyword_ids) == {memories[1], memories[2]}
+
+
+def test_the_model_reads_and_writes_local_time(db, memories):
+    gemma = FakeGemma(
+        {"content": None, "tool_calls": [tool_call("a", user_query="keys", limit=1)]},
+        {"content": "On the table, at 11:00."},
+    )
+
+    async def ask(session):
+        steps = agent.run(session, "Where are my keys?", gemma, fake_embed, None, now=NOON)
+        return [step async for step in steps]
+
+    db(ask)
+    system = gemma.calls[0][0][0]["content"]
+    tool_message, images = gemma.calls[1][0][-2:]
+    assert "The current time is 2026-11-14T14:00:00+02:00" in system  # noon UTC
+    assert json.loads(tool_message["content"])[0]["seen_at"] == "2026-11-14T11:00:00+02:00"
+    assert images["content"][1]["text"].endswith("seen at 2026-11-14T11:00:00+02:00:")
 
 
 def test_add_memory_rejects_bad_input(db):
@@ -281,6 +313,11 @@ def test_upload_list_fetch_and_delete_an_image(client):
     image = client.get(memory["image_url"])
     assert image.headers["content-type"] == "image/jpeg"
     assert max(Image.open(io.BytesIO(image.content)).size) == media.MAX_SIDE
+    # Versioned by file name, so it can be cached for good; a bare id is asked about every time,
+    # since the disposable database hands the same id to a different image after a wipe.
+    assert "immutable" in image.headers["cache-control"]
+    bare = client.get(f"/api/memories/{memory['id']}/image")
+    assert bare.headers["cache-control"] == "private, no-cache"
 
     assert client.delete(f"/api/memories/{memory['id']}").status_code == 204
     assert client.get("/api/memories").json() == []
@@ -302,7 +339,7 @@ def test_upload_rejects_what_is_not_an_image_and_keeps_no_file(client):
 
 
 def test_failed_embedding_keeps_no_memory(client):
-    async def broken(texts):
+    async def broken(texts, input_type="query"):
         raise UpstreamError("Could not reach the embedding model")
 
     app.dependency_overrides[get_embedder] = lambda: broken
@@ -331,8 +368,25 @@ def test_add_a_text_memory(client):
     assert response.json()["kind"] == "text" and response.json()["image_url"] is None
 
 
+def test_a_note_is_embedded_as_a_document_and_a_search_as_a_query(client):
+    calls = []
+
+    async def recording(texts, input_type="query"):
+        calls.append((list(texts), input_type))
+        return await fake_embed(texts)
+
+    app.dependency_overrides[get_embedder] = lambda: recording
+    try:
+        client.post("/api/memories/text", json={"text": "The keys are in the hall drawer."})
+        client.post("/api/search", json={"user_query": "keys"})
+    finally:
+        app.dependency_overrides.clear()
+
+    assert calls == [(["The keys are in the hall drawer."], "document"), (["keys"], "query")]
+
+
 def test_a_model_of_another_width_is_reported(client, memories):
-    async def too_narrow(texts):
+    async def too_narrow(texts, input_type="query"):
         return [[0.1] * 512 for _ in texts]
 
     app.dependency_overrides[get_embedder] = lambda: too_narrow
@@ -375,6 +429,51 @@ def test_collections_group_memories_and_filter_searches(client, db, search):
     ]
     listed = client.get("/api/memories", params={"collection": "manual"}).json()
     assert [m["id"] for m in listed] == [manual_id]
+
+
+NEAR_KEYS = [1.0, 0.05] + [0.0] * (WIDTH - 2)  # about 0.001 from unit(0), the "keys" axis
+
+
+def test_a_near_copy_from_one_glance_waits_behind_distinct_results(client, db, search):
+    """A still a second after a better one that looks the same shows nothing new, so its slot
+    goes to the next memory. The same scene hours earlier, in a note or in another collection
+    is a memory of its own: the latest sighting of something must never be dropped."""
+    second, morning_at = timedelta(seconds=1), NOON - timedelta(hours=6)
+
+    async def add(session):
+        rows = [
+            await add_memory(session, "image", unit(0), NOON, collection="glasses"),
+            await add_memory(session, "image", NEAR_KEYS, NOON + second, collection="glasses"),
+            await add_memory(session, "image", NEAR_KEYS, morning_at, collection="glasses"),
+            await add_memory(session, "text", unit(0), NOON + second, "keys", collection="glasses"),
+            await add_memory(session, "image", unit(0), NOON, collection="manual"),
+            await add_memory(session, "image", unit(0, 1), NOON, collection="glasses"),
+        ]
+        await session.commit()
+        return [row.id for row in rows]
+
+    first, copy, morning, note, manual, other = db(add)
+
+    found = [hit.id for hit in search(VectorSearchArgs(user_query="keys", limit=5))]
+
+    assert copy not in found
+    assert sorted(found) == sorted([first, morning, note, manual, other])
+
+
+def test_near_copies_still_fill_the_slots_left(client, db, search):
+    async def add(session):
+        rows = [
+            await add_memory(session, "image", unit(0), NOON, collection="glasses"),
+            await add_memory(
+                session, "image", NEAR_KEYS, NOON + timedelta(seconds=1), collection="glasses"
+            ),
+        ]
+        await session.commit()
+        return [row.id for row in rows]
+
+    first, copy = db(add)
+
+    assert [hit.id for hit in search(VectorSearchArgs(user_query="keys", limit=3))] == [first, copy]
 
 
 def test_uploads_take_a_collection_and_reject_a_bad_one(client):

@@ -5,7 +5,7 @@ Our project for [Junction 2026](https://2026.hackjunction.com/) (13–15 Novembe
 **We give smart glasses a memory.** What the Meta Ray-Ban Display glasses see is embedded into a vector database, so the wearer can ask about their own past, and the glasses can speak up on their own. It works in two ways:
 
 - **Reactive:** you ask, the glasses answer. Double-tap the Neural Band (or hold the capture button) and say "where did I leave my keys?". The question is embedded, the closest stills are retrieved, and a Gemma model answers from those stills and when they were seen. You can also take a photo on purpose, which is stored as a memory.
-- **Proactive:** the glasses speak first. While you wear them, frames stream to the backend (2 per second), and each is compared with things you asked to be warned about. Say "remind me to take my keys" or "warn me about the stool in the kitchen" and the glasses flash a warning when that object comes into view. You can also write *triggers* in the web app ("a bike without a helmet in view → remind them to put it on"); the closest frame within a distance fires one, and Gemma words the message for the display.
+- **Proactive:** the glasses speak first. While you wear them, frames stream to the backend (2 per second), and each is compared with things you asked to be warned about. Say "remind me to take my keys" or "warn me about the stool in the kitchen" and the glasses flash a warning when that object comes into view. You can also say what to watch out for in the web app ("tell me when my bus comes"): that is a *goal*, Gemma writes its *triggers*, and when a frame newly looks like one of them Gemma checks it and words the message for the display, or stays quiet on a false alarm. Goals are yours alone; ask Gemma to stop watching for one and it is removed.
 
 Everything runs on our own servers with open models (EmbeddingGemma 2 for the embeddings, Gemma for the answers), so the footage never goes to a third party.
 
@@ -46,8 +46,6 @@ LLM_URL=...          # chat model, any OpenAI-style server with tool calling (Ge
 LLM_API_KEY=...
 EMBED_URL=...        # embeddings server: must be EmbeddingGemma 2, the model the memories use
 EMBED_API_KEY=...
-MEMORY_API_URL=...   # optional: the memory API, used as a fallback to describe photos
-MEMORY_API_TOKEN=...
 ADMIN_PASSWORD=...   # optional: otherwise a random admin password is printed in the backend log
 ```
 
@@ -64,8 +62,8 @@ Open http://localhost:3000 and start a **guest**: a generated name, no password,
 - **Library:** add memories by uploading images, taking a webcam picture, or writing a note; group them into collections. Browse stable thumbnails in pages of 24, search captions/collections, and tap a memory to inspect the full image.
 - **Ask tab:** ask Gemma a question and watch it search the memories step by step.
 - **Map:** every stored vector projected to 2D and 3D; the memories found by the last question are ringed.
-- **Glasses tab:** the glasses harness inside the lab, so photos it takes appear in the library.
-- **Stream tab:** the webcam acts as the glasses (frames go to the backend as the Android app sends them), next to the **triggers** editor where you write what to watch for, what to tell the wearer, the distance threshold and the cooldown.
+- **Glasses tab:** the glasses harness inside the lab: what the wearer sees and hears.
+- **Stream tab:** the webcam acts as the glasses (frames go to the backend as the Android app sends them), next to the editor for what the glasses watch out for: you say a goal, Gemma writes its triggers, and each shows its score on the latest frame against its level.
 
 ### Glasses harness (`/glasses`)
 
@@ -76,18 +74,19 @@ It calls the same `/api/glasses/*` endpoints and WebSocket the Android app uses.
 On a phone, open the HTTPS site at `/glasses`, rotate to landscape, and tap **Start camera**. The
 feed comes from that phone, preferring the rear camera; **Switch camera** requests the other lens.
 If the device has only one camera, the browser uses it. The feed appears behind the display by
-default, and captures and reminder frames use the same stream. In landscape the POV fills the first viewport; scroll down for controls and account navigation.
+default, and memory and reminder frames use the same stream. In landscape the POV fills the first viewport; scroll down for controls and account navigation.
 Tap **Fullscreen** to hide browser chrome where supported, and **Controls** to jump below the POV. Portrait and desktop layouts are supported too. Use **Turn off** to
 release the camera, or **Cancel camera** if the permission request is still waiting. Camera access
 on a real phone requires HTTPS; an ordinary HTTP LAN address will not work.
 
-Things to try: take a photo ("take a photo"), ask "where did I leave my keys?", say "remind me about the stool" and point the webcam at one.
+Things to try: ask "where did I leave my keys?", say "remind me about the stool" and point the webcam at one.
+
 
 ### The real glasses
 
 1. Pair the glasses in the Meta AI app, turn on Developer Mode, and build `glasses-android` in Android Studio (setup is in [its README](glasses-android/README.md)).
 2. Copy `local.properties.example` to `local.properties` and set `glasses.api` to the backend's address (without `/api`). Without `glasses.token` the app starts a guest account by itself.
-3. In the app press **Register**, then **Arm memory mode**. A double tap or double press of the capture button starts and stops the 2 fps stream; one tap or short press sends one photo; holding the capture button records a voice message, which is turned into text on the phone and sent as a command.
+3. In the app press **Register**, then **Arm memory mode**. A double tap or double press of the capture button starts and stops the 2 fps stream; one tap or short press sends one photo; holding the capture button records a voice message, which is turned into text on the phone and sent to Gemma as a question.
 4. Triggers and reminders now warn you on the display. Memories show up in the Memory lab.
 
 The memory service itself (embedding, the map page, deploying to the Gemma server) is described in [memory/README.md](memory/README.md).

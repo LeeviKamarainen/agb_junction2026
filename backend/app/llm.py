@@ -6,7 +6,7 @@ holds up the event loop.
 """
 
 from collections.abc import Awaitable, Callable, Sequence
-from typing import Any
+from typing import Any, Literal, Protocol
 
 import httpx
 from fastapi import HTTPException
@@ -15,8 +15,20 @@ from app.settings import get_settings
 
 # messages and tools in the OpenAI format -> the assistant message (content and/or tool_calls)
 Chat = Callable[[list[dict[str, Any]], list[dict[str, Any]] | None], Awaitable[dict[str, Any]]]
-# texts -> one vector per text, in order. An image goes in as a data:image/...;base64 URL.
-Embedder = Callable[[Sequence[str]], Awaitable[list[list[float]]]]
+
+# What a text is to the embedding model: a search query, or a document to be found later (a
+# stored note). EmbeddingGemma 2 gives the two sides of a search different prompts.
+InputType = Literal["query", "document"]
+
+
+class Embedder(Protocol):
+    """Inputs -> one vector per input, in order. An image goes in as a data:image/...;base64 URL
+    and takes no input_type."""
+
+    def __call__(
+        self, inputs: Sequence[str], /, input_type: InputType = "query"
+    ) -> Awaitable[list[list[float]]]: ...
+
 
 TIMEOUT = httpx.Timeout(120, connect=10)
 
@@ -68,8 +80,9 @@ def get_embedder() -> Embedder:
     url, model = settings.embed_url.rstrip("/") + "/v1/embeddings", settings.embed_model
     headers = _headers(settings.embed_api_key)
 
-    async def embed(texts):
-        body = {"model": model, "input": list(texts)}
+    async def embed(texts, input_type="query"):
+        # input_type is the memory API's field (memory/src/glass_memory/README.md).
+        body = {"model": model, "input": list(texts), "input_type": input_type}
         answer = await _post("embedding model", url, body, headers)
         rows = sorted(answer["data"], key=lambda r: r["index"])
         return [row["embedding"] for row in rows]

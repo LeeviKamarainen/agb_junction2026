@@ -197,12 +197,16 @@ async def nearest(
 async def stored(
     connection: AsyncConnection, table: str, ids: Collection[int] | None = None
 ) -> dict[int, list[float]]:
-    """The stored vectors by id: those of `ids`, or every row. A full scan, for maps and exports."""
+    """The stored vectors by id: those of `ids`, or every row (a full scan, for maps)."""
     _table(table)
-    wanted = None if ids is None else set(ids)
-    rows = await connection.exec_driver_sql(f"SELECT id, embedding FROM {table}")
-    return {
-        id: list(struct.unpack(f"<{len(blob) // 4}f", blob))
-        for id, blob in rows
-        if wanted is None or id in wanted
-    }
+    if ids is None:
+        rows = await connection.exec_driver_sql(f"SELECT id, embedding FROM {table}")
+    elif not ids:
+        return {}  # SQL has no empty IN ()
+    else:
+        wanted = tuple(set(ids))
+        rows = await connection.exec_driver_sql(
+            f"SELECT id, embedding FROM {table} WHERE id IN ({', '.join('?' * len(wanted))})",
+            wanted,
+        )
+    return {id: list(struct.unpack(f"<{len(blob) // 4}f", blob)) for id, blob in rows}

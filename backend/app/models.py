@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import UTC, datetime
 
 from sqlmodel import Field, SQLModel
 
@@ -142,26 +142,37 @@ class LoginResult(UserPublic):
     token: str
 
 
-# Triggers: things the glasses watch for in the frames they stream (app/glasses/frames.py). Each
-# has one embedding of `watch_for` in the trigger_embedding vector table, same id, made on first
-# use. Gemma writes them from what the wearer asks for (app/glasses/triggers.py).
+# Goals and their triggers: what the glasses watch for in the frames they stream
+# (app/glasses/frames.py). A goal is what the wearer asked for, in their own words ("tell me when
+# my bus comes"); Gemma writes its triggers, the things a frame can be matched against
+# (app/glasses/triggers.py). The triggers of a goal work as one: they are switched on and off
+# and removed together, and whichever of them fires, the chat model is asked about the goal.
+# Both belong to one account and are seen and used by nobody else, the admin included.
+
+
+class Goal(SQLModel, table=True):
+    owner_id: int = Field(index=True)
+    id: int | None = Field(default=None, primary_key=True)
+    text: str = Field(min_length=1, max_length=500)  # what the wearer asked for
+    enabled: bool = True  # off: none of its triggers is checked
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
 class TriggerBase(SQLModel):
     name: str = Field(min_length=1, max_length=60)  # shown as the title on the glasses
     # What to look for, as a short caption of one visible thing; compared with every frame.
     watch_for: str = Field(min_length=1, max_length=300)
-    # What the AI model should tell the wearer when it fires, e.g. "Remind them to take the keys".
-    instruction: str = Field(min_length=1, max_length=1000)
     # Fires on a stream frame whose score reaches the trigger's level. The level is measured from
     # the trigger's own noise in the stream, this many spreads above it: 3 is quiet, 2 misses
     # less. See app/glasses/scores.py.
     sigmas: float = Field(default=3, ge=0, le=10)
-    enabled: bool = True
 
 
+# Each trigger has one embedding of `watch_for` in the trigger_embedding vector table, same id,
+# made on first use.
 class Trigger(TriggerBase, table=True):
-    owner_id: int = Field(default=0, index=True)
+    owner_id: int = Field(index=True)  # its goal's
+    goal_id: int = Field(index=True)
     id: int | None = Field(default=None, primary_key=True)
     last_fired_at: datetime | None = None  # when it last woke the chat model, message or not
     # The score a frame must reach, measured on the first stream that has enough frames; None
@@ -169,17 +180,30 @@ class Trigger(TriggerBase, table=True):
     level: float | None = None
 
 
-class TriggerCreate(TriggerBase):
-    pass
-
-
-class TriggerGoal(SQLModel):
-    """What the wearer wants the glasses to watch out for, in their own words."""
-
-    goal: str = Field(min_length=1, max_length=500)
+class TriggerDraft(TriggerBase):
+    """A trigger as it is written or edited."""
 
 
 class TriggerPublic(TriggerBase):
     id: int
+    goal_id: int
     last_fired_at: datetime | None
     level: float | None
+
+
+class GoalCreate(SQLModel):
+    text: str = Field(min_length=1, max_length=500)
+    # Given: these are the goal's triggers and Gemma is not asked. Left out: Gemma writes them.
+    triggers: list[TriggerDraft] | None = Field(default=None, min_length=1, max_length=10)
+
+
+class GoalUpdate(SQLModel):
+    enabled: bool
+
+
+class GoalPublic(SQLModel):
+    id: int
+    text: str
+    enabled: bool
+    created_at: datetime
+    triggers: list[TriggerPublic]

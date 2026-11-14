@@ -2,12 +2,11 @@
 the browser harness) and the backend, so the server can push warnings and frames skip the
 per-request overhead. The HTTP routes do the same work one request at a time.
 
-Messages are JSON text frames with a `type`. A photo or frame is a small JSON header followed by
-the JPEG as the next, binary, frame. Client to server:
+Messages are JSON text frames with a `type`. A frame is a small JSON header followed by the JPEG
+as the next, binary, frame. Client to server:
 
-- `command`: `text`, `action` or `question`, exactly as POST /api/glasses/command; answered with a
-  `reply` carrying the same `id`.
-- `photo` + JPEG: as POST /api/glasses/photos; answered with a `reply`.
+- `command`: `action` or `question`, exactly as POST /api/glasses/command; answered with a `reply`
+  carrying the same `id`.
 - `memory_frame` + JPEG: as POST /api/glasses/frames, with `source` (stream/single),
   `stream_id` and optional `seen_at`; answered with `memory_result` containing a FrameReply.
   One may be in flight per connection; another gets 429, keeping camera uploads bounded.
@@ -20,10 +19,10 @@ the JPEG as the next, binary, frame. Client to server:
 Server to client: `reply` (a GlassesReply to draw and speak), `watch_result`, `error` and `pong`.
 A warning is pushed as a `reply` without an `id`, after the `watch_result` that found it.
 
-Commands and photos run concurrently, frames one at a time beside them, each as a coroutine with
-its own database session: the queries and model calls are awaited, so one slow client cannot
-stall the others. One client runs at most WORKERS of them at a time; on disconnect, commands and
-frames still running are cancelled, while photos finish and are stored.
+Commands run concurrently, frames one at a time beside them, each as a coroutine with its own
+database session: the queries and model calls are awaited, so one slow client cannot stall the
+others. One client runs at most WORKERS of them at a time; on disconnect, commands and frames
+still running are cancelled.
 
 Auth: the user's login (app/auth.py), as for every /api/glasses route. A browser sends its
 `session` cookie with the handshake; a native client sends `Authorization: Bearer <token>`, or
@@ -57,7 +56,7 @@ log = logging.getLogger(__name__)
 REFUSED = 1008
 # How long a client has to send its `auth` message.
 AUTH_TIMEOUT_S = 10
-# Commands, photos and frames one client may have running at once.
+# Commands and frames one client may have running at once.
 WORKERS = 4
 
 
@@ -66,13 +65,6 @@ WORKERS = 4
 
 class CommandMessage(Command):
     type: Literal["command"]
-    id: int | None = None
-
-
-class PhotoMessage(BaseModel):
-    """The header of a photo; the JPEG is the next, binary, frame."""
-
-    type: Literal["photo"]
     id: int | None = None
 
 
@@ -110,13 +102,7 @@ class AuthMessage(BaseModel):
 
 
 ClientMessage = Annotated[
-    CommandMessage
-    | PhotoMessage
-    | FrameMessage
-    | MemoryFrameMessage
-    | WatchMessage
-    | PingMessage
-    | AuthMessage,
+    CommandMessage | FrameMessage | MemoryFrameMessage | WatchMessage | PingMessage | AuthMessage,
     Field(discriminator="type"),
 ]
 client_message: TypeAdapter[ClientMessage] = TypeAdapter(ClientMessage)
@@ -127,7 +113,7 @@ client_message: TypeAdapter[ClientMessage] = TypeAdapter(ClientMessage)
 
 class ReplyMessage(BaseModel):
     type: Literal["reply"] = "reply"
-    id: int | None  # the command's or photo's; None for a pushed warning
+    id: int | None  # the command's; None for a pushed warning
     reply: GlassesReply
 
 
@@ -232,7 +218,7 @@ class Channel:
             text = event.get("text")
             if text is None:
                 await self.send(
-                    ErrorMessage(status=400, detail="a JPEG must follow a photo or frame header")
+                    ErrorMessage(status=400, detail="a JPEG must follow a frame header")
                 )
                 continue
             try:
@@ -252,10 +238,6 @@ class Channel:
                         self.frame, self.dropped = None, 0
                 case CommandMessage():
                     tasks.start_soon(self.run_command, message)
-                case PhotoMessage():
-                    data = await self.receive_jpeg(message.id)
-                    if data is not None:
-                        tasks.start_soon(self.run_photo, message.id, data)
                 case MemoryFrameMessage():
                     data = await self.receive_jpeg(message.id)
                     if data is None:
@@ -315,20 +297,12 @@ class Channel:
                 await self.send(ReplyMessage(id=None, reply=result.warning))
 
     async def run_command(self, message: CommandMessage) -> None:
-        body = Command(text=message.text, action=message.action, question=message.question)
+        body = Command(action=message.action, question=message.question)
         reply = await self.work(
             message.id, actions.command, self.viewer, body, self.chat, self.embed
         )
         if reply is not None:
             await self.send(ReplyMessage(id=message.id, reply=reply))
-
-    async def run_photo(self, id: int | None, data: bytes) -> None:
-        # Shielded: a photo the wearer took is saved, described and stored even when the client
-        # disconnects meanwhile, so a later question still finds it.
-        with anyio.CancelScope(shield=True):
-            reply = await self.work(id, actions.photo, self.viewer, data, self.chat, self.embed)
-        if reply is not None:
-            await self.send(ReplyMessage(id=id, reply=reply))
 
     async def run_memory_frame(self, message: MemoryFrameMessage, data: bytes) -> None:
         try:
