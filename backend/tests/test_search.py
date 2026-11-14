@@ -30,7 +30,7 @@ def unit(*axes: int) -> list[float]:
 PHRASES = {"keys": unit(0), "keys on a table": unit(0), "dog": unit(1), "coffee": unit(2)}
 
 
-async def fake_embed(texts):
+async def fake_embed(texts, input_type="query"):
     """Images (data: URLs) all embed like "keys"."""
     return [
         unit(0) if t.startswith("data:image/") else PHRASES.get(t, unit(WIDTH - 1)) for t in texts
@@ -302,7 +302,7 @@ def test_upload_rejects_what_is_not_an_image_and_keeps_no_file(client):
 
 
 def test_failed_embedding_keeps_no_memory(client):
-    async def broken(texts):
+    async def broken(texts, input_type="query"):
         raise UpstreamError("Could not reach the embedding model")
 
     app.dependency_overrides[get_embedder] = lambda: broken
@@ -331,8 +331,25 @@ def test_add_a_text_memory(client):
     assert response.json()["kind"] == "text" and response.json()["image_url"] is None
 
 
+def test_a_note_is_embedded_as_a_document_and_a_search_as_a_query(client):
+    calls = []
+
+    async def recording(texts, input_type="query"):
+        calls.append((list(texts), input_type))
+        return await fake_embed(texts)
+
+    app.dependency_overrides[get_embedder] = lambda: recording
+    try:
+        client.post("/api/memories/text", json={"text": "The keys are in the hall drawer."})
+        client.post("/api/search", json={"user_query": "keys"})
+    finally:
+        app.dependency_overrides.clear()
+
+    assert calls == [(["The keys are in the hall drawer."], "document"), (["keys"], "query")]
+
+
 def test_a_model_of_another_width_is_reported(client, memories):
-    async def too_narrow(texts):
+    async def too_narrow(texts, input_type="query"):
         return [[0.1] * 512 for _ in texts]
 
     app.dependency_overrides[get_embedder] = lambda: too_narrow

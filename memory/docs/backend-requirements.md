@@ -135,6 +135,9 @@ need its base URL, API key and model name.
 
 - `input` is a list of 1 to 6 strings. A search sends short texts (the query plus up to 5
   alternatives).
+- `input_type` says what the texts are: `"query"` for a search, `"document"` for a text memory
+  being stored, so each side gets EmbeddingGemma 2's prompt for it (`SearchQuery` or
+  `Document`, from its model card). The backend always sends it; images ignore it.
 - **Images arrive in the same field** as `data:image/jpeg;base64,...` strings, one per request,
   when someone uploads a memory on the backend's Memory lab page. Any input that starts with
   `data:image/` must go through the **image** encoder; everything else through the text encoder.

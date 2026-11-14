@@ -277,7 +277,8 @@ export interface paths {
         put?: never;
         /**
          * Add Text
-         * @description Store a text memory, embedded with the text model. demo=true (admin only) shares it.
+         * @description Store a text memory, embedded as a document for searches to find. demo=true (admin only)
+         *     shares it.
          */
         post: operations["add_text_api_memories_text_post"];
         delete?: never;

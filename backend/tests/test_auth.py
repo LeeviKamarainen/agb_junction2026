@@ -16,7 +16,7 @@ from app.search import TABLE
 WIDTH = vectors.VECTOR_TABLES[TABLE].dimensions
 
 
-async def fake_embed(texts):
+async def fake_embed(texts, input_type="query"):
     return [[1.0] + [0.0] * (WIDTH - 1) for _ in texts]
 
 

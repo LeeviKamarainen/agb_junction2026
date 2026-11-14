@@ -13,7 +13,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from app import agent, media, vectors
 from app.auth import DEMO_OWNER, Viewer, ViewerDep
 from app.db import SessionDep, new_session
-from app.llm import Chat, Embedder, UpstreamError, get_chat, get_embedder
+from app.llm import Chat, Embedder, InputType, UpstreamError, get_chat, get_embedder
 from app.models import (
     CollectionCount,
     Memory,
@@ -92,9 +92,9 @@ def _owner_for(viewer: Viewer, demo: bool) -> int:
     return DEMO_OWNER if demo else viewer.id
 
 
-async def _embed_one(embed: Embedder, input: str) -> list[float]:
+async def _embed_one(embed: Embedder, input: str, input_type: InputType = "query") -> list[float]:
     try:
-        (vector,) = await embed([input])
+        (vector,) = await embed([input], input_type)
     except UpstreamError as error:
         raise HTTPException(502, str(error)) from error
     if problem := width_error(len(vector)):
@@ -192,10 +192,11 @@ async def add_image(
 async def add_text(
     body: TextMemoryCreate, session: SessionDep, viewer: ViewerDep, embed: EmbedderDep
 ):
-    """Store a text memory, embedded with the text model. demo=true (admin only) shares it."""
+    """Store a text memory, embedded as a document for searches to find. demo=true (admin only)
+    shares it."""
     collection = _collection(body.collection)
     owner = _owner_for(viewer, body.demo)
-    vector = await _embed_one(embed, body.text)
+    vector = await _embed_one(embed, body.text, "document")
     memory = await add_memory(
         session,
         "text",

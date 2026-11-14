@@ -39,7 +39,7 @@ class Scene:
         self.asked += 1
         return {"role": "assistant", "content": json.dumps({"say": self.say})}
 
-    async def __call__(self, inputs):
+    async def __call__(self, inputs, input_type="query"):
         self.calls += 1
         return [
             self.image if i.startswith("data:image/") else self.texts.get(i, unit(WIDTH - 1))
@@ -523,7 +523,7 @@ def test_socket_memory_frames_do_not_queue_and_ping_stays_responsive(client, sce
 
     checking, release = threading.Event(), threading.Event()
 
-    async def slow(inputs):
+    async def slow(inputs, input_type="query"):
         checking.set()
         assert await anyio.to_thread.run_sync(release.wait, 5)
         return await scene(inputs)

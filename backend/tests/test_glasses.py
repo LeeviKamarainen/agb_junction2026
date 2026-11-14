@@ -42,7 +42,7 @@ def use_models(chat=None, embed=None):
         app.dependency_overrides[optional_embedder] = lambda: embed
 
 
-async def fake_embed(texts):
+async def fake_embed(texts, input_type="query"):
     return [[1.0] + [0.0] * (WIDTH - 1) for _ in texts]
 
 
