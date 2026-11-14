@@ -28,6 +28,22 @@ android {
         resValue("string", "mwdat_application_id", localProps.getProperty("mwdat.applicationId", "0"))
         resValue("string", "mwdat_client_token", localProps.getProperty("mwdat.clientToken", "0"))
 
+        // Segmentation API (see SegmentApi.kt). The token is a secret: keep it in local.properties
+        // (git-ignored). Note it is compiled into the APK, which is fine for a hackathon build.
+        val segmentUrl = localProps.getProperty("segment.url", "https://65-108-32-171.sslip.io/segment")
+        buildConfigField("String", "SEGMENT_URL", "\"$segmentUrl\"")
+        // The 3x3-grid variant lives next to it: <segment.url>-grid unless segment.gridUrl overrides it.
+        buildConfigField(
+            "String",
+            "SEGMENT_GRID_URL",
+            "\"${localProps.getProperty("segment.gridUrl", "$segmentUrl-grid")}\"",
+        )
+        buildConfigField(
+            "String",
+            "SEGMENT_TOKEN",
+            "\"${localProps.getProperty("segment.token", "")}\"",
+        )
+
         buildConfigField(
             "String",
             "BACKEND_URL",

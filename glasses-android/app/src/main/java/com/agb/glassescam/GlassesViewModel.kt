@@ -31,8 +31,17 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
+import com.meta.wearable.dat.display.views.Alignment
+import com.meta.wearable.dat.display.views.CornerRadius
+import com.meta.wearable.dat.display.views.ImageSize
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlin.coroutines.resume
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
@@ -68,6 +77,14 @@ data class UiState(
     val photoProfile: String = "Balanced",
     val useDisplay: Boolean = false, // show messages on Ray-Ban Display glasses (can interfere with photo transfer)
     val snapArmed: Boolean = false, // snapshot mode: stream is open, trigger saves the next frame
+    val liveArmed: Boolean = false, // live segment mode: segments a frame every liveIntervalMs
+    val liveIntervalMs: Long = 1000L,
+    val liveCrosshair: Boolean = true, // draw the target crosshair (glasses + phone)
+    val liveFrameOnPhone: Boolean = true,    // phone view: full camera frame with the object highlighted
+    val liveFrameOnGlasses: Boolean = false, // glasses view: same (adds light everywhere on a see-through display)
+    val segmentGrid: Boolean = false,  // segment with a 3x3 grid of points (/segment-grid) instead of one pixel
+    val liveStatus: String = "",
+    val liveImage: Bitmap? = null,  // what was last drawn on the glasses (shown on the phone too)
     val quickArmed: Boolean = false, // quick-shot mode: no stream, glasses button/gesture takes a photo
     val photos: List<java.io.File> = emptyList(), // gallery, newest first
     val message: String = "",
@@ -83,7 +100,20 @@ class GlassesViewModel : ViewModel() {
     private var stream: Stream? = null
     private var streamJobs = mutableListOf<Job>()
 
-    private enum class Mode { NONE, STREAM, QUICK, SNAP }
+    private enum class Mode { NONE, STREAM, QUICK, SNAP, LIVE }
+
+    // Live segment: the loop, and a way to push a bitmap to the glasses display (set when a display attaches).
+    private var liveJob: Job? = null
+    private var showBitmapOnGlasses: (suspend (Bitmap) -> Unit)? = null
+
+    // The last live frame and what was found in it, so "move crosshair to object" and the crosshair
+    // switch can redraw immediately instead of waiting for the next cycle.
+    private var lastLiveJpeg: ByteArray? = null
+    private var lastLiveResult: SegmentResult? = null
+    private var lastLiveW = 0
+    private var lastLiveH = 0
+    private var liveFlash: String? = null // one-off text shown on the next drawing, e.g. "Crosshair moved"
+    private val liveRenderMutex = Mutex() // never push two images to the display at once
 
     // Snapshot-from-stream mode: the video stream stays open and a trigger saves the next decoded frame.
     private var snapDecoder: SnapshotDecoder? = null
@@ -133,6 +163,8 @@ class GlassesViewModel : ViewModel() {
         if (_ui.value.initialized) return
         appContext = context.applicationContext
         feedback = CaptureFeedback(context.applicationContext)
+        SegmentSettings.load(context.applicationContext)
+        _ui.update { it.copy(segmentGrid = SegmentSettings.useGrid) }
         _ui.update { it.copy(photos = PhotoStore.list(context.applicationContext)) }
         // A second initialize() in the same process returns ALREADY_INITIALIZED; that's fine.
         Wearables.initialize(context)
@@ -276,6 +308,7 @@ class GlassesViewModel : ViewModel() {
                     DeviceSessionState.STARTED -> when (mode) {
                         Mode.QUICK -> startQuick(s)
                         Mode.SNAP -> startSnap(s)
+                        Mode.LIVE -> startSnapStream(s, live = true)
                         else -> startCamera(s)
                     }
                     DeviceSessionState.STOPPED -> cleanup()
@@ -451,9 +484,24 @@ class GlassesViewModel : ViewModel() {
                         }
                     }
                 }
+                // Full-screen image (live segment mode). image(bitmap = ...) replaces the whole display, so
+                // it must be one flexBox with a single image; FILL stretches it over the 600x600 screen.
+                showBitmapOnGlasses = { bitmap ->
+                    if (d.state.value == DisplayState.STARTED) {
+                        d.sendContent {
+                            flexBox(
+                                direction = Direction.COLUMN,
+                                alignment = Alignment.CENTER,
+                                crossAlignment = Alignment.CENTER,
+                            ) {
+                                image(bitmap = bitmap, sizePreset = ImageSize.FILL, cornerRadius = CornerRadius.NONE)
+                            }
+                        }
+                    }
+                }
                 streamJobs += viewModelScope.launch {
                     d.state.first { it == DisplayState.STARTED }
-                    showOnGlasses?.invoke("Ready - press to capture")
+                    showOnGlasses?.invoke(if (mode == Mode.LIVE) "Live segment starting..." else "Ready - press to capture")
                 }
             },
             onFailure = { error, _ -> Log.i("GlassesVM", "no glasses display: ${error.description}") },
@@ -481,10 +529,15 @@ class GlassesViewModel : ViewModel() {
     fun armSnapshot(requestPermission: suspend (Permission) -> PermissionStatus) =
         openSession(Mode.SNAP, requestPermission)
 
-    private fun startSnap(s: DeviceSession) {
+    private fun startSnap(s: DeviceSession) = startSnapStream(s, live = false)
+
+    /** Shared by snapshot mode and live segment mode: open the stream and feed [SnapshotDecoder]. */
+    private fun startSnapStream(s: DeviceSession, live: Boolean) {
         if (camera != null) return
         val config = StreamConfiguration(
-            videoQuality = VideoQuality.HIGH, // 720x1280, the best a stream frame can be
+            // Snapshots want the best frame (720x1280). Live mode sends a frame to the API every second and
+            // shares Bluetooth with display updates, so it uses the smaller 504x896.
+            videoQuality = if (live) VideoQuality.MEDIUM else VideoQuality.HIGH,
             frameRate = 7,                    // low frame rate keeps Bluetooth bandwidth for resolution
             compressVideo = true,
         )
@@ -516,14 +569,188 @@ class GlassesViewModel : ViewModel() {
                         handleSnapFrame(it)
                     }
                 }
-                startGlassesInputs(s)
-                if (_ui.value.useDisplay) startGlassesDisplay(s)
-                st.start().onFailure { error, _ -> say("Stream start failed: ${error.description}") }
-                _ui.update { it.copy(snapArmed = true) }
-                say("Snapshot mode armed. Press the glasses capture button or use a Neural Band gesture.")
+                if (live) {
+                    startGlassesInputs(s)  // capture button / Neural Band = "move crosshair to the object"
+                    startGlassesDisplay(s) // live mode renders on the glasses screen, so the display is required
+                    st.start().onFailure { error, _ -> say("Stream start failed: ${error.description}") }
+                    _ui.update { it.copy(liveArmed = true) }
+                    say("Live segment armed. Put the object on the cyan crosshair.")
+                    startLiveLoop()
+                } else {
+                    startGlassesInputs(s)
+                    if (_ui.value.useDisplay) startGlassesDisplay(s)
+                    st.start().onFailure { error, _ -> say("Stream start failed: ${error.description}") }
+                    _ui.update { it.copy(snapArmed = true) }
+                    say("Snapshot mode armed. Press the glasses capture button or use a Neural Band gesture.")
+                }
             },
             onFailure = { error, _ -> say("Camera failed: ${error.description}") },
         )
+    }
+
+    // -------------------------------------------------------------- live segment
+
+    /**
+     * Live segment: every [UiState.liveIntervalMs] a frame from the stream is segmented at the calibrated eye
+     * point and the result (cut-out, boxes, target crosshair) is drawn on the glasses, so the wearer can move
+     * the object onto the crosshair. Runs one request at a time: the next one starts [liveIntervalMs] after
+     * the previous started, or right after it finishes if it took longer.
+     */
+    fun armLive(requestPermission: suspend (Permission) -> PermissionStatus) =
+        openSession(Mode.LIVE, requestPermission)
+
+    /** Change how often a frame is sent (takes effect on the next cycle). Clamped to 250 ms .. 10 s. */
+    fun changeLiveInterval(deltaMs: Long) {
+        _ui.update { it.copy(liveIntervalMs = (it.liveIntervalMs + deltaMs).coerceIn(250L, 10_000L)) }
+    }
+
+    private fun startLiveLoop() {
+        liveJob?.cancel()
+        liveJob = viewModelScope.launch {
+            while (isActive) {
+                val started = SystemClock.elapsedRealtime()
+                runCatching { liveCycle() }.onFailure {
+                    if (it is CancellationException) throw it
+                    Log.w("GlassesVM", "live cycle failed", it)
+                    _ui.update { ui -> ui.copy(liveStatus = "Error: ${it.message}") }
+                }
+                val wait = _ui.value.liveIntervalMs - (SystemClock.elapsedRealtime() - started)
+                delay(wait.coerceAtLeast(100L))
+            }
+        }
+    }
+
+    private suspend fun liveCycle() {
+        val decoder = synchronized(snapLock) { snapDecoder }
+            ?: return _ui.update { it.copy(liveStatus = "Waiting for video...") }
+
+        // 1. Grab the next decoded frame as a JPEG.
+        val jpeg = withTimeoutOrNull(3_000) {
+            suspendCancellableCoroutine<ByteArray> { cont ->
+                decoder.requestSnapshot { cont.resume(it) }
+                cont.invokeOnCancellation { decoder.cancelSnapshot() }
+            }
+        } ?: run {
+            decoder.cancelSnapshot()
+            return _ui.update { it.copy(liveStatus = "No video frame") }
+        }
+        val (w, h) = withContext(Dispatchers.Default) {
+            val o = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            android.graphics.BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size, o)
+            o.outWidth to o.outHeight
+        }
+
+        // 2. Segment at the eye point (where the object should be placed).
+        val (fx, fy) = appContext?.let { EyeCalibration.get(it) } ?: (0.5f to 0.5f)
+        val t0 = SystemClock.elapsedRealtime()
+        val outcome = if (SegmentApi.configured) SegmentApi.segment(jpeg, fx * w, fy * h) else null
+        val took = SystemClock.elapsedRealtime() - t0
+        val result = (outcome as? SegmentOutcome.Ok)?.result
+        val baseLabel = when (outcome) {
+            is SegmentOutcome.Ok ->
+                "object ${String.format(java.util.Locale.US, "%.2f", outcome.result.score)}"
+            is SegmentOutcome.Fail -> outcome.message
+            null -> "set segment.token"
+        }
+
+        // Remember this frame for "move crosshair to object".
+        lastLiveJpeg = jpeg
+        lastLiveResult = result
+        lastLiveW = w
+        lastLiveH = h
+
+        // 3. Draw it and show it on the glasses (and on the phone).
+        val flash = liveFlash
+        liveFlash = null
+        renderAndShow(jpeg, w, h, result, flash ?: baseLabel, "(${took} ms${if (SegmentSettings.useGrid) ", 3x3 grid" else ""})")
+    }
+
+    /**
+     * Draws the live picture twice: the glasses version (cut-out on black) and the phone version (the same on top
+     * of the dimmed camera frame), shows the phone one in the app and pushes the glasses one to the display.
+     */
+    private suspend fun renderAndShow(
+        jpeg: ByteArray,
+        w: Int,
+        h: Int,
+        result: SegmentResult?,
+        label: String,
+        timing: String = "",
+    ) {
+        val (fx, fy) = appContext?.let { EyeCalibration.get(it) } ?: (0.5f to 0.5f)
+        val crosshair = _ui.value.liveCrosshair
+        val frameOnPhone = _ui.value.liveFrameOnPhone
+        val frameOnGlasses = _ui.value.liveFrameOnGlasses
+        val (glasses, phone) = withContext(Dispatchers.Default) {
+            val g = LiveRenderer.compose(jpeg, w, h, result, fx, fy, label, showFrame = frameOnGlasses, showCrosshair = crosshair)
+            // Same setting for both: draw once and use the picture for both.
+            val p = if (frameOnPhone == frameOnGlasses) g else
+                LiveRenderer.compose(jpeg, w, h, result, fx, fy, label, showFrame = frameOnPhone, showCrosshair = crosshair)
+            g to p
+        }
+        liveRenderMutex.withLock {
+            _ui.update { it.copy(liveImage = phone, liveStatus = "$label $timing".trim()) }
+            showBitmapOnGlasses?.invoke(glasses)
+        }
+    }
+
+    /**
+     * The wearer has lined the camera up on the object and presses the button (phone, glasses capture button or
+     * Neural Band): the crosshair (the calibrated eye point) moves to where the object currently is in the frame.
+     * Later cycles then segment and draw the crosshair there.
+     */
+    fun setCrosshairToObject() {
+        val r = lastLiveResult
+        val w = lastLiveW
+        val h = lastLiveH
+        val ctx = appContext
+        if (mode != Mode.LIVE || r == null || r.box.size != 4 || w == 0 || h == 0 || ctx == null) {
+            feedback?.failed()
+            say("No object found yet. Aim the glasses at the object, wait for the green box, then press again.")
+            return
+        }
+        val fx = ((r.box[0] + r.box[2]) / 2f) / w
+        val fy = ((r.box[1] + r.box[3]) / 2f) / h
+        EyeCalibration.set(ctx, fx, fy)
+        feedback?.done()
+        say("Crosshair moved to the object (${(fx * 100).toInt()}%, ${(fy * 100).toInt()}% of the frame).")
+        val jpeg = lastLiveJpeg ?: return
+        viewModelScope.launch { renderAndShow(jpeg, w, h, r, "crosshair moved") }
+    }
+
+    /** Segment with a 3x3 grid of points (/segment-grid) instead of a single pixel. Applies to every request. */
+    fun setSegmentGrid(enabled: Boolean) {
+        appContext?.let { SegmentSettings.setUseGrid(it, enabled) } ?: run { SegmentSettings.useGrid = enabled }
+        _ui.update { it.copy(segmentGrid = enabled) }
+    }
+
+    /** Full camera frame (object highlighted) in the phone's live view, instead of only the cut-out. */
+    fun setLiveFrameOnPhone(enabled: Boolean) {
+        _ui.update { it.copy(liveFrameOnPhone = enabled) }
+        redrawLive(if (enabled) "full frame on phone" else "cut-out only on phone")
+    }
+
+    /** Full camera frame (object highlighted) on the glasses display too. Off by default. */
+    fun setLiveFrameOnGlasses(enabled: Boolean) {
+        _ui.update { it.copy(liveFrameOnGlasses = enabled) }
+        redrawLive(if (enabled) "full frame on glasses" else "cut-out only on glasses")
+    }
+
+    /** Redraws the last live frame with the current display settings, without waiting for the next cycle. */
+    private fun redrawLive(label: String) {
+        val jpeg = lastLiveJpeg ?: return
+        if (mode == Mode.LIVE) viewModelScope.launch {
+            renderAndShow(jpeg, lastLiveW, lastLiveH, lastLiveResult, label)
+        }
+    }
+
+    /** Show or hide the crosshair on the glasses and the phone preview. */
+    fun setLiveCrosshair(visible: Boolean) {
+        _ui.update { it.copy(liveCrosshair = visible) }
+        val jpeg = lastLiveJpeg ?: return
+        if (mode == Mode.LIVE) viewModelScope.launch {
+            renderAndShow(jpeg, lastLiveW, lastLiveH, lastLiveResult, if (visible) "crosshair on" else "crosshair off")
+        }
     }
 
     private fun handleSnapFrame(frame: VideoFrame) {
@@ -547,8 +774,40 @@ class GlassesViewModel : ViewModel() {
         }
     }
 
+    /**
+     * Sends the photo to the segmentation API with the point at the image centre (the object the wearer
+     * was looking at) and stores the answer next to the photo. Returns a short summary, or "" if the API
+     * isn't configured. Tap an object in the gallery to segment a different point.
+     */
+    private suspend fun runSegmentation(
+        photo: java.io.File,
+        width: Int,
+        height: Int,
+        jpeg: ByteArray? = null,
+    ): String {
+        if (!SegmentApi.configured) return ""
+        // The calibrated "straight ahead" spot (the middle of the glasses), not the middle of the photo.
+        val (fx, fy) = appContext?.let { EyeCalibration.get(it) } ?: (0.5f to 0.5f)
+        val x = fx * width
+        val y = fy * height
+        setStage(CaptureStage.SENDING, 0f, "Segmenting at the eye point (${x.toInt()}, ${y.toInt()})")
+        val bytes = jpeg ?: withContext(Dispatchers.IO) { photo.readBytes() }
+        return when (val out = SegmentApi.segment(bytes, x, y)) {
+            is SegmentOutcome.Ok -> {
+                PhotoStore.saveSegmentJson(photo, out.result.rawJson)
+                "Segment${if (SegmentSettings.useGrid) " (3x3 grid)" else ""}: score " +
+                    "${String.format(java.util.Locale.US, "%.2f", out.result.score)} box ${out.result.box}"
+            }
+            is SegmentOutcome.Fail -> "Segment failed: ${out.message}"
+        }
+    }
+
     private fun triggerCapture() {
-        if (mode == Mode.SNAP) triggerSnapshot() else triggerQuickCapture()
+        when (mode) {
+            Mode.SNAP -> triggerSnapshot()
+            Mode.LIVE -> setCrosshairToObject() // glasses capture button / Neural Band select
+            else -> triggerQuickCapture()
+        }
     }
 
     private fun triggerSnapshot() {
@@ -585,7 +844,7 @@ class GlassesViewModel : ViewModel() {
                 android.graphics.BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size, o)
                 o.outWidth to o.outHeight
             }
-            PhotoStore.saveJpeg(ctx, jpeg)
+            val savedFile = PhotoStore.saveJpeg(ctx, jpeg)
             _ui.update { it.copy(photos = PhotoStore.list(ctx)) }
 
             val hasBackend = BuildConfig.BACKEND_URL.isNotBlank()
@@ -593,7 +852,9 @@ class GlassesViewModel : ViewModel() {
                 setStage(CaptureStage.SENDING, 0f, "Uploading to backend")
                 showOnGlasses?.invoke("Saved. Sending...")
             }
-            val sendResult = PhotoSink.sendJpeg(jpeg, size.first, size.second)
+            val segment = runSegmentation(savedFile, size.first, size.second, jpeg)
+            val sendResult = PhotoSink.sendJpeg(jpeg, size.first, size.second) +
+                (if (segment.isNotEmpty()) " | $segment" else "")
             say("Snapshot ${size.first}x${size.second} (${jpeg.size / 1024} KB). $sendResult")
 
             feedback?.done()
@@ -686,7 +947,7 @@ class GlassesViewModel : ViewModel() {
             }
             receivedCount++
             Log.i("GlassesVM", "photo received: ${bytes.size} bytes, arrived at $captureTimestamp ms (phone time, not shutter time)")
-            PhotoStore.save(ctx, bitmap)
+            val savedFile = PhotoStore.save(ctx, bitmap)
             _ui.update { it.copy(photos = PhotoStore.list(ctx)) }
 
             // After the transfer finished, so display updates are no longer held back.
@@ -695,7 +956,8 @@ class GlassesViewModel : ViewModel() {
                 setStage(CaptureStage.SENDING, 0f, "Uploading to backend")
                 showOnGlasses?.invoke("Saved. Sending...")
             }
-            val sendResult = PhotoSink.send(bitmap)
+            val segment = runSegmentation(savedFile, bitmap.width, bitmap.height)
+            val sendResult = PhotoSink.send(bitmap) + (if (segment.isNotEmpty()) " | $segment" else "")
             say("Saved ${bitmap.width}x${bitmap.height} (${bytes.size / 1024} KB). received $receivedCount of $requestedCount requested. $sendResult")
 
             feedback?.done()
@@ -722,6 +984,7 @@ class GlassesViewModel : ViewModel() {
      * saves it to the gallery, then hands it to [PhotoSink].
      */
     fun capturePhoto() {
+        if (mode == Mode.LIVE) return setCrosshairToObject() // in live mode the Capture button moves the crosshair
         if (mode == Mode.QUICK || mode == Mode.SNAP) return triggerCapture()
         val st = stream ?: return say("Start streaming first")
         val ctx = appContext ?: return say("Not initialized yet")
@@ -748,6 +1011,12 @@ class GlassesViewModel : ViewModel() {
                 }
                 .onFailure { error, _ -> say("Capture failed: ${error.description}") }
         }
+    }
+
+    /** Reloads the gallery list (e.g. after the gallery created an eye-centred crop). */
+    fun refreshPhotos() {
+        val ctx = appContext ?: return
+        _ui.update { it.copy(photos = PhotoStore.list(ctx)) }
     }
 
     fun deletePhoto(file: java.io.File) {
@@ -777,7 +1046,13 @@ class GlassesViewModel : ViewModel() {
         setStage(CaptureStage.IDLE)
         mode = Mode.NONE
         releaseSnapDecoder()
-        _ui.update { it.copy(quickArmed = false, snapArmed = false) }
+        liveJob?.cancel()
+        liveJob = null
+        showBitmapOnGlasses = null
+        lastLiveJpeg = null
+        lastLiveResult = null
+        liveFlash = null
+        _ui.update { it.copy(quickArmed = false, snapArmed = false, liveArmed = false, liveImage = null, liveStatus = "") }
         camera = null
         stream = null
         session = null // a stopped session can't be restarted; create a new one next time

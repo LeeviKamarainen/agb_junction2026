@@ -41,7 +41,59 @@ object PhotoStore {
         File(dir(context), "IMG_$stamp.jpg").also { it.writeBytes(jpeg) }
     }
 
-    suspend fun delete(file: File) = withContext(Dispatchers.IO) { file.delete() }
+    /** Segmentation answer for a photo is stored next to it as <name>.segment.json. */
+    private fun segmentFile(photo: File) = File(photo.parentFile, photo.nameWithoutExtension + ".segment.json")
+
+    suspend fun saveSegmentJson(photo: File, json: String) =
+        withContext(Dispatchers.IO) { segmentFile(photo).writeText(json) }
+
+    suspend fun loadSegment(photo: File): SegmentResult? = withContext(Dispatchers.IO) {
+        val f = segmentFile(photo)
+        if (f.exists()) runCatching { SegmentApi.parse(f.readText()) }.getOrNull() else null
+    }
+
+    /**
+     * Saves a copy of [photo] cropped so that the eye point ([fx], [fy], fractions of the photo) is exactly
+     * the middle of the new image. That is the largest window centred on that point that stays inside the
+     * photo, so the further the point is from the middle, the more of the edge is cut. Returns null if the
+     * window would be tiny.
+     */
+    suspend fun saveEyeCrop(photo: File, fx: Float, fy: Float): File? = withContext(Dispatchers.IO) {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeFile(photo.path, bounds)
+        val w = bounds.outWidth
+        val h = bounds.outHeight
+        val cx = fx * w
+        val cy = fy * h
+        val halfW = minOf(cx, w - cx)
+        val halfH = minOf(cy, h - cy)
+        val rect = android.graphics.Rect(
+            (cx - halfW).toInt(), (cy - halfH).toInt(), (cx + halfW).toInt(), (cy + halfH).toInt(),
+        )
+        if (rect.width() < 32 || rect.height() < 32) return@withContext null
+
+        val decoder = android.graphics.BitmapRegionDecoder.newInstance(photo.path)
+        try {
+            val crop = decoder.decodeRegion(rect, null)
+            val out = File(photo.parentFile, photo.nameWithoutExtension + "_eye.jpg")
+            FileOutputStream(out).use { crop.compress(Bitmap.CompressFormat.JPEG, 95, it) }
+            out
+        } finally {
+            decoder.recycle()
+        }
+    }
+
+    /** Pixel size of a saved photo without decoding it. */
+    suspend fun imageSize(photo: File): Pair<Int, Int> = withContext(Dispatchers.IO) {
+        val o = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeFile(photo.path, o)
+        o.outWidth to o.outHeight
+    }
+
+    suspend fun delete(file: File) = withContext(Dispatchers.IO) {
+        segmentFile(file).delete()
+        file.delete()
+    }
 
     /** HEIC bytes from the glasses -> upright Bitmap at the original resolution. */
     fun decodeHeic(bytes: ByteArray): Bitmap? {

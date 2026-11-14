@@ -1,6 +1,11 @@
 package com.agb.glassescam
 
 import androidx.compose.foundation.AndroidExternalSurface
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -98,6 +103,7 @@ fun GlassesScreen(
     onStart: () -> Unit,
     onArmQuick: () -> Unit,
     onArmSnap: () -> Unit,
+    onArmLive: () -> Unit,
 ) {
     val ui by viewModel.ui.collectAsStateWithLifecycle()
     var showGallery by rememberSaveable { mutableStateOf(false) }
@@ -106,7 +112,7 @@ fun GlassesScreen(
     // decoder keep running; the gallery is drawn over it.
     Box(modifier = Modifier.fillMaxSize()) {
         Column(
-            modifier = Modifier.statusBarsPadding().padding(16.dp),
+            modifier = Modifier.statusBarsPadding().verticalScroll(rememberScrollState()).padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Text("Registration: ${ui.registration}")
@@ -135,6 +141,17 @@ fun GlassesScreen(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
+                // Which segmentation endpoint: one pixel (/segment) or a 3x3 block of points (/segment-grid).
+                Switch(
+                    checked = ui.segmentGrid,
+                    onCheckedChange = viewModel::setSegmentGrid,
+                )
+                Text("Segment with 3x3 point grid (/segment-grid)")
+            }
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
                 Switch(
                     checked = ui.useDisplay,
                     onCheckedChange = viewModel::setUseDisplay,
@@ -148,18 +165,26 @@ fun GlassesScreen(
             ) {
                 Button(
                     onClick = onStart,
-                    enabled = ui.initialized && !ui.quickArmed && !ui.snapArmed,
+                    enabled = ui.initialized && !ui.quickArmed && !ui.snapArmed && !ui.liveArmed,
                 ) { Text("Start stream") }
                 // Quick shot: no video stream; the glasses take a full-res still (slow to transfer).
                 Button(
                     onClick = { if (ui.quickArmed) viewModel.stopStreaming() else onArmQuick() },
-                    enabled = ui.initialized && !ui.snapArmed,
+                    enabled = ui.initialized && !ui.snapArmed && !ui.liveArmed,
                 ) { Text(if (ui.quickArmed) "Disarm quick shot" else "Arm quick shot") }
                 // Snapshot: stream stays open, a trigger saves the next video frame (fast, up to 720x1280).
                 Button(
                     onClick = { if (ui.snapArmed) viewModel.stopStreaming() else onArmSnap() },
-                    enabled = ui.initialized && !ui.quickArmed,
+                    enabled = ui.initialized && !ui.quickArmed && !ui.liveArmed,
                 ) { Text(if (ui.snapArmed) "Disarm snapshot" else "Arm snapshot (fast)") }
+                // Live segment: every N seconds a frame is segmented and the result is drawn on the glasses.
+                Button(
+                    onClick = { if (ui.liveArmed) viewModel.stopStreaming() else onArmLive() },
+                    enabled = ui.initialized && !ui.quickArmed && !ui.snapArmed,
+                ) { Text(if (ui.liveArmed) "Disarm live segment" else "Arm live segment") }
+                OutlinedButton(onClick = { viewModel.changeLiveInterval(-250) }) { Text("-") }
+                Text("every ${String.format(java.util.Locale.US, "%.2f", ui.liveIntervalMs / 1000.0)} s")
+                OutlinedButton(onClick = { viewModel.changeLiveInterval(250) }) { Text("+") }
                 OutlinedButton(onClick = viewModel::stopStreaming) { Text("Stop") }
                 Button(onClick = viewModel::capturePhoto) { Text("Capture") }
                 OutlinedButton(onClick = viewModel::cycleProfile) { Text("Photo: ${ui.photoProfile}") }
@@ -168,15 +193,56 @@ fun GlassesScreen(
 
             CaptureStatusCard(ui)
 
+            if (ui.liveArmed) {
+                // Live segment: what the glasses are showing, plus the camera frame dimmed behind it.
+                Text("Live: ${ui.liveStatus}")
+                ui.liveImage?.let { bmp ->
+                    val img = remember(bmp) { bmp.asImageBitmap() }
+                    Image(
+                        bitmap = img,
+                        contentDescription = "Live segmentation",
+                        modifier = Modifier.fillMaxWidth().aspectRatio(1f),
+                    )
+                }
+                Button(onClick = viewModel::setCrosshairToObject, modifier = Modifier.fillMaxWidth()) {
+                    Text("Move crosshair to object")
+                }
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Switch(checked = ui.liveCrosshair, onCheckedChange = viewModel::setLiveCrosshair)
+                    Text("Show crosshair (glasses and phone)")
+                }
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Switch(checked = ui.liveFrameOnPhone, onCheckedChange = viewModel::setLiveFrameOnPhone)
+                    Text("Full camera feed on phone (object highlighted)")
+                }
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Switch(checked = ui.liveFrameOnGlasses, onCheckedChange = viewModel::setLiveFrameOnGlasses)
+                    Text("Full camera feed on glasses too")
+                }
+                Text("Tip: the glasses capture button or a Neural Band tap also moves the crosshair.")
+            }
+
             if (ui.message.isNotBlank()) Text(ui.message)
 
-            // Live preview: HevcDecoder renders decoded frames straight into this surface.
-            AndroidExternalSurface(
-                modifier = Modifier.fillMaxWidth().height(420.dp),
-            ) {
-                onSurface { surface, _, _ ->
-                    viewModel.setSurface(surface)
-                    surface.onDestroyed { viewModel.setSurface(null) }
+            // Plain stream preview: HevcDecoder renders decoded frames straight into this surface. Only
+            // shown when no armed mode is using the stream for something else.
+            if (!ui.liveArmed && !ui.snapArmed && !ui.quickArmed) {
+                AndroidExternalSurface(
+                    modifier = Modifier.fillMaxWidth().height(420.dp),
+                ) {
+                    onSurface { surface, _, _ ->
+                        viewModel.setSurface(surface)
+                        surface.onDestroyed { viewModel.setSurface(null) }
+                    }
                 }
             }
         }
@@ -186,6 +252,7 @@ fun GlassesScreen(
                 photos = ui.photos,
                 onClose = { showGallery = false },
                 onDelete = viewModel::deletePhoto,
+                onRefresh = viewModel::refreshPhotos,
             )
         }
     }
