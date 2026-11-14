@@ -13,7 +13,7 @@ from app.search import TABLE
 WIDTH = vectors.VECTOR_TABLES[TABLE].dimensions
 
 
-def fake_embed(texts):
+async def fake_embed(texts):
     return [[1.0] + [0.0] * (WIDTH - 1) for _ in texts]
 
 
@@ -191,7 +191,7 @@ def test_only_the_admin_adds_and_deletes_demo_memories(client, guest):
 def searching_model(seen: list):
     """A chat model that searches for keys, then answers; `seen` collects every message it gets."""
 
-    def chat(messages, tools):
+    async def chat(messages, tools):
         seen.extend(messages)
         if tools:
             arguments = {"user_query": "keys", "keywords": ["keys", "car", "private", "photo"]}

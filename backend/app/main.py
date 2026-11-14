@@ -1,20 +1,20 @@
 from contextlib import asynccontextmanager
 
 from fastapi import APIRouter, FastAPI
-from sqlmodel import Session
 
 from app import auth
-from app.db import get_engine, init_db
+from app.db import get_engine, init_db, new_session
 from app.routes import auth as auth_routes
 from app.routes import glasses, memories, notes
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    init_db()
-    with Session(get_engine()) as session:
-        auth.ensure_admin(session)
+    await init_db()
+    async with new_session() as session:
+        await auth.ensure_admin(session)
     yield
+    await get_engine().dispose()
 
 
 # Everything lives under /api: in production Caddy sends /api/* here and the rest to Next.js.

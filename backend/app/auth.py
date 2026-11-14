@@ -20,8 +20,10 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
+import anyio
 from fastapi import Depends, HTTPException, Request
-from sqlmodel import Session, select
+from sqlmodel import select
+from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.db import SessionDep
 from app.models import AuthSession, User
@@ -36,6 +38,7 @@ USERNAME = re.compile(r"[a-z0-9][a-z0-9_.-]{2,31}")
 _SCRYPT = {"n": 2**14, "r": 8, "p": 1}  # about 50 ms and 16 MB per hash
 
 
+# scrypt is CPU work on purpose (about 50 ms): the async helpers run it off the event loop.
 def hash_password(password: str) -> str:
     salt = secrets.token_bytes(16)
     digest = hashlib.scrypt(password.encode(), salt=salt, dklen=32, **_SCRYPT)
@@ -54,6 +57,14 @@ def verify_password(password: str, stored: str) -> bool:
     return hmac.compare_digest(got, expected)
 
 
+async def hash_password_async(password: str) -> str:
+    return await anyio.to_thread.run_sync(hash_password, password)
+
+
+async def verify_password_async(password: str, stored: str) -> bool:
+    return await anyio.to_thread.run_sync(verify_password, password, stored)
+
+
 def clean_username(name: str) -> str:
     """Lower case and trimmed. Raises ValueError unless it is 3 to 32 of a-z, 0-9, _ . and -."""
     cleaned = name.strip().lower()
@@ -68,7 +79,7 @@ def _token_hash(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
 
-def start_session(session: Session, user: User) -> str:
+def start_session(session: AsyncSession, user: User) -> str:
     """A new login for `user`; returns the token. The caller commits."""
     assert user.id is not None
     token = secrets.token_urlsafe(32)
@@ -77,10 +88,10 @@ def start_session(session: Session, user: User) -> str:
     return token
 
 
-def end_session(session: Session, token: str) -> None:
-    row = session.get(AuthSession, _token_hash(token))
+async def end_session(session: AsyncSession, token: str) -> None:
+    row = await session.get(AuthSession, _token_hash(token))
     if row is not None:
-        session.delete(row)
+        await session.delete(row)
 
 
 def token_of(request: Request) -> str | None:
@@ -90,18 +101,18 @@ def token_of(request: Request) -> str | None:
     return request.cookies.get(COOKIE)
 
 
-def user_for(session: Session, token: str | None) -> User | None:
+async def user_for(session: AsyncSession, token: str | None) -> User | None:
     if not token:
         return None
-    row = session.get(AuthSession, _token_hash(token))
+    row = await session.get(AuthSession, _token_hash(token))
     if row is None:
         return None
     expires = row.expires_at if row.expires_at.tzinfo else row.expires_at.replace(tzinfo=UTC)
     if expires <= datetime.now(UTC):
-        session.delete(row)
-        session.commit()
+        await session.delete(row)
+        await session.commit()
         return None
-    return session.get(User, row.user_id)
+    return await session.get(User, row.user_id)
 
 
 @dataclass(frozen=True)
@@ -132,8 +143,8 @@ class Viewer:
         return self.is_admin or owner_id == self.id
 
 
-def optional_viewer(request: Request, session: SessionDep) -> Viewer | None:
-    user = user_for(session, token_of(request))
+async def optional_viewer(request: Request, session: SessionDep) -> Viewer | None:
+    user = await user_for(session, token_of(request))
     return Viewer(user) if user else None
 
 
@@ -147,18 +158,18 @@ ViewerDep = Annotated[Viewer, Depends(viewer)]
 OptionalViewerDep = Annotated[Viewer | None, Depends(optional_viewer)]
 
 
-def ensure_admin(session: Session) -> None:
+async def ensure_admin(session: AsyncSession) -> None:
     """Create the admin account, or reset its password to ADMIN_PASSWORD, on every start."""
     settings = get_settings()
     name = clean_username(settings.admin_username)
-    admin = session.exec(select(User).where(User.username == name)).first()
+    admin = (await session.exec(select(User).where(User.username == name))).first()
     password = settings.admin_password
     if admin is not None:
-        if password and not verify_password(password, admin.password_hash):
-            admin.password_hash = hash_password(password)
+        if password and not await verify_password_async(password, admin.password_hash):
+            admin.password_hash = await hash_password_async(password)
         admin.role = "admin"
         session.add(admin)
-        session.commit()
+        await session.commit()
         return
     if not password:
         password = secrets.token_urlsafe(12)
@@ -170,9 +181,9 @@ def ensure_admin(session: Session) -> None:
         )
     admin = User(
         username=name,
-        password_hash=hash_password(password),
+        password_hash=await hash_password_async(password),
         role="admin",
         created_at=datetime.now(UTC),
     )
     session.add(admin)
-    session.commit()
+    await session.commit()

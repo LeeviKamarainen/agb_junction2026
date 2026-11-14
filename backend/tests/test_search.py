@@ -4,10 +4,8 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from PIL import Image
-from sqlmodel import Session
 
 from app import media, vectors
-from app.db import get_engine
 from app.llm import UpstreamError, get_chat, get_embedder
 from app.main import app
 from app.search import (
@@ -32,7 +30,7 @@ def unit(*axes: int) -> list[float]:
 PHRASES = {"keys": unit(0), "keys on a table": unit(0), "dog": unit(1), "coffee": unit(2)}
 
 
-def fake_embed(texts):
+async def fake_embed(texts):
     """Images (data: URLs) all embed like "keys"."""
     return [
         unit(0) if t.startswith("data:image/") else PHRASES.get(t, unit(WIDTH - 1)) for t in texts
@@ -46,26 +44,32 @@ def jpeg(colour="red", size=(40, 30)) -> bytes:
 
 
 @pytest.fixture
-def memories(client):
+def memories(client, db):
     """Four memories, an hour apart, the newest at noon."""
-    with Session(get_engine()) as session:
+
+    async def add(session):
+        image = media.save_image(jpeg())
         rows = [
-            add_memory(
-                session, "image", unit(0), NOON - timedelta(hours=3), "", media.save_image(jpeg())
+            await add_memory(session, "image", unit(0), NOON - timedelta(hours=3), "", image),
+            await add_memory(
+                session, "image", unit(1), NOON - timedelta(hours=2), "A dog called Rex"
             ),
-            add_memory(session, "image", unit(1), NOON - timedelta(hours=2), "A dog called Rex"),
-            add_memory(session, "text", unit(2), NOON - timedelta(hours=1), "Coffee with Aino"),
-            add_memory(session, "image", unit(0, 1), NOON, "Rex sniffing the keys"),
+            await add_memory(
+                session, "text", unit(2), NOON - timedelta(hours=1), "Coffee with Aino"
+            ),
+            await add_memory(session, "image", unit(0, 1), NOON, "Rex sniffing the keys"),
         ]
-        session.commit()
-        ids = [row.id for row in rows]
-    yield ids
+        await session.commit()
+        return [row.id for row in rows]
+
+    return db(add)
 
 
 @pytest.fixture
-def session(memories):
-    with Session(get_engine()) as session:
-        yield session
+def search(db):
+    """vector_search with the fake embedder over every memory (owners None), in a session of its
+    own."""
+    return lambda args: db(lambda session: vector_search(session, args, fake_embed, None))
 
 
 def test_tool_definition_matches_the_arguments_model():
@@ -74,8 +78,8 @@ def test_tool_definition_matches_the_arguments_model():
     assert VECTOR_SEARCH_TOOL["function"]["parameters"]["required"] == ["user_query"]
 
 
-def test_closest_memory_comes_first(memories, session):
-    results = vector_search(session, VectorSearchArgs(user_query="keys"), fake_embed, None)
+def test_closest_memory_comes_first(memories, search):
+    results = search(VectorSearchArgs(user_query="keys"))
 
     assert results[0].id == memories[0]
     assert results[0].distance == pytest.approx(0.0, abs=1e-6)
@@ -83,10 +87,10 @@ def test_closest_memory_comes_first(memories, session):
     assert results[0].created_at == NOON - timedelta(hours=3)
 
 
-def test_queries_and_keywords_that_agree_win(memories, session):
+def test_queries_and_keywords_that_agree_win(memories, search):
     args = VectorSearchArgs(user_query="keys", alternative_queries=["dog"], keywords=["rex"])
 
-    results = vector_search(session, args, fake_embed, None)
+    results = search(args)
 
     # The last memory is second for both queries and a keyword match: it beats each query's top.
     assert results[0].id == memories[3]
@@ -96,26 +100,19 @@ def test_queries_and_keywords_that_agree_win(memories, session):
     assert by_id[memories[0]].matched_keywords == []
 
 
-def test_keyword_only_hits_are_returned(memories, session):
+def test_keyword_only_hits_are_returned(memories, search):
     args = VectorSearchArgs(user_query="something unknown", keywords=["aino"], limit=1)
 
-    (result,) = vector_search(session, args, fake_embed, None)
+    (result,) = search(args)
 
     assert result.id == memories[2]
     assert result.matched_keywords == ["aino"]
 
 
-def test_timespan_and_kinds_filter(memories, session):
+def test_timespan_and_kinds_filter(memories, search):
     window = Timespan(start=NOON - timedelta(hours=2), end=NOON)
-    in_window = vector_search(
-        session,
-        VectorSearchArgs(user_query="keys", keywords=["rex"], timespan=window),
-        fake_embed,
-        None,
-    )
-    texts = vector_search(
-        session, VectorSearchArgs(user_query="keys", kinds=["text"]), fake_embed, None
-    )
+    in_window = search(VectorSearchArgs(user_query="keys", keywords=["rex"], timespan=window))
+    texts = search(VectorSearchArgs(user_query="keys", kinds=["text"]))
 
     assert {result.id for result in in_window} == {memories[1], memories[2]}  # end is exclusive
     assert [result.id for result in texts] == [memories[2]]
@@ -125,12 +122,14 @@ def test_naive_timespan_is_utc():
     assert Timespan(start=datetime(2026, 11, 14, 9)).start == datetime(2026, 11, 14, 9, tzinfo=UTC)
 
 
-def test_add_memory_rejects_bad_input(client):
-    with Session(get_engine()) as session:
+def test_add_memory_rejects_bad_input(db):
+    async def bad(session):
         with pytest.raises(ValueError, match="timezone-aware"):
-            add_memory(session, "image", unit(0), datetime(2026, 11, 14))
+            await add_memory(session, "image", unit(0), datetime(2026, 11, 14))
         with pytest.raises(ValueError, match="kind"):
-            add_memory(session, "video", unit(0))  # type: ignore[arg-type]
+            await add_memory(session, "video", unit(0))  # type: ignore[arg-type]
+
+    db(bad)
 
 
 def test_search_endpoint(client, memories):
@@ -155,7 +154,7 @@ class FakeGemma:
     def __init__(self, *replies):
         self.replies, self.calls = list(replies), []
 
-    def __call__(self, messages, tools):
+    async def __call__(self, messages, tools):
         self.calls.append((json.loads(json.dumps(messages)), tools))
         return self.replies.pop(0)
 
@@ -246,7 +245,7 @@ def test_ask_stream_sends_one_step_per_line(client, memories):
 
 
 def test_ask_stream_reports_a_failing_model_server(client, memories):
-    def broken(messages, tools):
+    async def broken(messages, tools):
         raise UpstreamError("The chat model answered 400: tool choice not enabled")
 
     app.dependency_overrides[get_embedder] = lambda: fake_embed
@@ -303,7 +302,7 @@ def test_upload_rejects_what_is_not_an_image_and_keeps_no_file(client):
 
 
 def test_failed_embedding_keeps_no_memory(client):
-    def broken(texts):
+    async def broken(texts):
         raise UpstreamError("Could not reach the embedding model")
 
     app.dependency_overrides[get_embedder] = lambda: broken
@@ -333,7 +332,10 @@ def test_add_a_text_memory(client):
 
 
 def test_a_model_of_another_width_is_reported(client, memories):
-    app.dependency_overrides[get_embedder] = lambda: lambda texts: [[0.1] * 512 for _ in texts]
+    async def too_narrow(texts):
+        return [[0.1] * 512 for _ in texts]
+
+    app.dependency_overrides[get_embedder] = lambda: too_narrow
     try:
         search = client.post("/api/search", json={"user_query": "keys"})
         note = client.post("/api/memories/text", json={"text": "coffee"})
@@ -347,28 +349,21 @@ def test_a_model_of_another_width_is_reported(client, memories):
         )
 
 
-def test_collections_group_memories_and_filter_searches(client):
-    with Session(get_engine()) as session:
-        glasses = add_memory(session, "image", unit(0), NOON, "keys", collection=" Glasses ")
-        manual = add_memory(session, "image", unit(0), NOON, "keys")
-        session.commit()
-        glasses_id, manual_id = glasses.id, manual.id
+def test_collections_group_memories_and_filter_searches(client, db, search):
+    async def add(session):
+        glasses = await add_memory(session, "image", unit(0), NOON, "keys", collection=" Glasses ")
+        manual = await add_memory(session, "image", unit(0), NOON, "keys")
+        await session.commit()
         assert glasses.collection == "glasses" and manual.collection == "manual"
-
-        only_glasses = vector_search(
-            session,
-            VectorSearchArgs(user_query="keys", keywords=["keys"], collections=["GLASSES"]),
-            fake_embed,
-            None,
-        )
-        nowhere = vector_search(
-            session,
-            VectorSearchArgs(user_query="keys", collections=["no such"]),
-            fake_embed,
-            None,
-        )
         with pytest.raises(ValueError, match="Collection"):
-            add_memory(session, "text", unit(2), NOON, "x", collection="not ok!")
+            await add_memory(session, "text", unit(2), NOON, "x", collection="not ok!")
+        return glasses.id, manual.id
+
+    glasses_id, manual_id = db(add)
+    only_glasses = search(
+        VectorSearchArgs(user_query="keys", keywords=["keys"], collections=["GLASSES"])
+    )
+    nowhere = search(VectorSearchArgs(user_query="keys", collections=["no such"]))
 
     assert [result.id for result in only_glasses] == [glasses_id]
     assert only_glasses[0].collection == "glasses"

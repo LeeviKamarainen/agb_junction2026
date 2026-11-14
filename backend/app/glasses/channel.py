@@ -17,12 +17,10 @@ the JPEG as the next, binary, frame. Client to server:
 Server to client: `reply` (a GlassesReply to draw and speak), `watch_result`, `error` and `pong`.
 A warning is pushed as a `reply` without an `id`, after the `watch_result` that found it.
 
-Commands and photos run concurrently, frames one at a time beside them; every model call is
-blocking httpx, so each runs in a worker thread with its own database session and one slow client
-cannot stall the others.
-
-Commands and photos from one client run at most WORKERS at a time; on disconnect the socket
-closes at once and the threads still running finish on their own.
+Commands and photos run concurrently, frames one at a time beside them, each as a coroutine with
+its own database session: the queries and model calls are awaited, so one slow client cannot
+stall the others. One client runs at most WORKERS of them at a time; on disconnect, commands and
+frames still running are cancelled, while photos finish and are stored.
 
 Auth: the user's login (app/auth.py), as for every /api/glasses route. A browser sends its
 `session` cookie with the handshake; a native client sends `Authorization: Bearer <token>`, or
@@ -33,18 +31,17 @@ Everything the socket does then is scoped to that user, like the HTTP routes.
 
 import logging
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from typing import Annotated, Literal
 
 import anyio
 from anyio.abc import TaskGroup
 from fastapi import HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field, TypeAdapter, ValidationError
-from sqlmodel import Session
 
 from app import auth
 from app.auth import Viewer
-from app.db import get_engine
+from app.db import new_session
 from app.glasses import actions
 from app.glasses.actions import Command, WatchResult
 from app.glasses.layout import GlassesReply
@@ -56,7 +53,7 @@ log = logging.getLogger(__name__)
 REFUSED = 1008
 # How long a client has to send its `auth` message.
 AUTH_TIMEOUT_S = 10
-# Worker threads one client may hold for commands, photos and frames.
+# Commands, photos and frames one client may have running at once.
 WORKERS = 4
 
 
@@ -139,9 +136,9 @@ class PongMessage(BaseModel):
 ServerMessage = ReplyMessage | WatchResultMessage | ErrorMessage | PongMessage
 
 
-def _viewer_for(token: str | None) -> Viewer | None:
-    with Session(get_engine()) as session:
-        user = auth.user_for(session, token)
+async def _viewer_for(token: str | None) -> Viewer | None:
+    async with new_session() as session:
+        user = await auth.user_for(session, token)
         return Viewer(user) if user else None
 
 
@@ -151,7 +148,7 @@ async def authenticated(websocket: WebSocket) -> Viewer | None:
     given = header[7:].strip() if header.lower().startswith("bearer ") else None
     given = given or websocket.cookies.get(auth.COOKIE)
     if given:
-        return await anyio.to_thread.run_sync(_viewer_for, given)
+        return await _viewer_for(given)
     with anyio.move_on_after(AUTH_TIMEOUT_S):
         event = await websocket.receive()
         text = event.get("text")
@@ -162,13 +159,8 @@ async def authenticated(websocket: WebSocket) -> Viewer | None:
         except ValidationError:
             return None
         if isinstance(message, AuthMessage):
-            return await anyio.to_thread.run_sync(_viewer_for, message.token)
+            return await _viewer_for(message.token)
     return None
-
-
-def _in_session[T](work: Callable[..., T], *args) -> T:
-    with Session(get_engine()) as session:
-        return work(session, *args)
 
 
 class _Left(Exception):
@@ -184,7 +176,7 @@ class Channel:
         self.chat = chat
         self.embed = embed
         self.send_lock = anyio.Lock()
-        self.limiter = anyio.CapacityLimiter(WORKERS)
+        self.running = anyio.Semaphore(WORKERS)
         self.watching = False
         # The newest frame not yet checked, and how many it and its predecessors replaced.
         self.frame: tuple[int | None, bytes] | None = None
@@ -285,17 +277,19 @@ class Channel:
             await self.send(ReplyMessage(id=message.id, reply=reply))
 
     async def run_photo(self, id: int | None, data: bytes) -> None:
-        reply = await self.work(id, actions.photo, self.viewer, data, self.chat, self.embed)
+        # Shielded: a photo the wearer took is saved, described and stored even when the client
+        # disconnects meanwhile, so a later question still finds it.
+        with anyio.CancelScope(shield=True):
+            reply = await self.work(id, actions.photo, self.viewer, data, self.chat, self.embed)
         if reply is not None:
             await self.send(ReplyMessage(id=id, reply=reply))
 
-    async def work[T](self, id: int | None, work: Callable[..., T], *args) -> T | None:
-        """Runs `work(session, *args)` in a worker thread with its own session; a failure becomes
-        an `error` message, not a closed socket."""
+    async def work[T](self, id: int | None, work: Callable[..., Awaitable[T]], *args) -> T | None:
+        """Awaits `work(session, *args)` with a session of its own; a failure becomes an `error`
+        message, not a closed socket."""
         try:
-            return await anyio.to_thread.run_sync(
-                _in_session, work, *args, limiter=self.limiter, abandon_on_cancel=True
-            )
+            async with self.running, new_session() as session:
+                return await work(session, *args)
         except HTTPException as error:
             await self.send(ErrorMessage(id=id, status=error.status_code, detail=error.detail))
         except Exception as error:

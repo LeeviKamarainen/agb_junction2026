@@ -1,7 +1,8 @@
+import anyio
 import pytest
 from fastapi.testclient import TestClient
 
-from app.db import get_engine
+from app.db import get_engine, new_session
 from app.main import app
 from app.settings import get_settings
 
@@ -18,7 +19,7 @@ def db_path(tmp_path, monkeypatch):
     get_settings.cache_clear()
     get_engine.cache_clear()
     yield path
-    get_engine().dispose()
+    anyio.run(get_engine().dispose)
     get_settings.cache_clear()
     get_engine.cache_clear()
 
@@ -58,3 +59,20 @@ def guest(anonymous):
         return {"Authorization": f"Bearer {reply.json()['token']}"}
 
     return register
+
+
+@pytest.fixture
+def db(anonymous):
+    """Runs `await work(session)` with a session of its own, on the app's event loop (the test
+    client's), so the test and the app share one connection pool: `db(lambda s: s.get(...))`."""
+
+    async def in_session(work):
+        async with new_session() as session:
+            return await work(session)
+
+    return lambda work: anonymous.portal.call(in_session, work)
+
+
+@pytest.fixture
+def anyio_backend():
+    return "asyncio"
