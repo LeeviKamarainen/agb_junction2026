@@ -15,6 +15,7 @@ import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api/browser";
 
 import { errorText, formatTime, type Memory, toLocalInput } from "./types";
+import { WebcamCapture } from "./webcam-capture";
 
 type Pending = {
   key: string;
@@ -70,6 +71,10 @@ export function MemoryLibrary({ refreshKey = 0 }: LibraryProps = {}) {
   function choose(event: ChangeEvent<HTMLInputElement>) {
     const files = Array.from(event.target.files ?? []);
     event.target.value = ""; // so choosing the same file again still fires
+    addFiles(files);
+  }
+
+  function addFiles(files: File[]) {
     setPending((current) => [
       ...current,
       ...files.map((file) => ({
@@ -211,6 +216,10 @@ export function MemoryLibrary({ refreshKey = 0 }: LibraryProps = {}) {
             disabled={uploading}
           />
         </label>
+        <WebcamCapture
+          onCapture={(file) => addFiles([file])}
+          disabled={uploading}
+        />
 
         {pending.length > 0 && (
           <>
