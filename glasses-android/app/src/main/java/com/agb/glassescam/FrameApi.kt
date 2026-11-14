@@ -5,7 +5,18 @@ import org.json.JSONObject
 /** Anything unknown is drawn as a reply. */
 enum class MessageType { TEXT_REPLY, TRIGGER }
 
-data class GlassesMessage(val type: MessageType, val title: String, val text: String)
+/** [speech] is what the backend wants said aloud, when it sent something other than the screen's text. */
+data class GlassesMessage(
+    val type: MessageType,
+    val title: String,
+    val text: String,
+    val speech: String? = null,
+) {
+    /** What to read aloud: the backend's `speech`, else a trigger's title and text, else the text. */
+    val spoken: String
+        get() = speech?.takeIf { it.isNotBlank() }
+            ?: if (type == MessageType.TRIGGER && title.isNotBlank() && title != text) "$title. $text" else text
+}
 
 sealed interface FrameOutcome {
     data class Ok(val stored: Boolean, val note: String?, val message: GlassesMessage?) : FrameOutcome
@@ -55,5 +66,7 @@ internal fun parsePushedReply(reply: JSONObject): GlassesMessage? {
         type = if (reply.optString("intent") == "warning") MessageType.TRIGGER else MessageType.TEXT_REPLY,
         title = texts.first(),
         text = texts.drop(1).joinToString("\n").ifBlank { texts.first() },
+        // org.json's optString turns a JSON null into the string "null"
+        speech = if (reply.isNull("speech")) null else reply.optString("speech"),
     )
 }

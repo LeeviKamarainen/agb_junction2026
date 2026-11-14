@@ -7,8 +7,7 @@ from fastapi import WebSocketDisconnect
 from PIL import Image
 
 from app import vectors
-from app.glasses import reminders, remote_memory
-from app.glasses.intents import interpret
+from app.glasses import reminders
 from app.llm import UpstreamError
 from app.main import app
 from app.routes.glasses import optional_chat, optional_embedder
@@ -27,9 +26,8 @@ JPEG = make_jpeg()
 
 
 @pytest.fixture(autouse=True)
-def no_models(monkeypatch):
-    """No models or memory API unless a test sets them, even when backend/.env has them."""
-    monkeypatch.setattr(remote_memory, "configured", lambda: False)
+def no_models():
+    """No models unless a test sets them, even when backend/.env has them."""
     app.dependency_overrides[optional_chat] = lambda: None
     app.dependency_overrides[optional_embedder] = lambda: None
     yield
@@ -44,7 +42,7 @@ def use_models(chat=None, embed=None):
         app.dependency_overrides[optional_embedder] = lambda: embed
 
 
-async def fake_embed(texts):
+async def fake_embed(texts, input_type="query"):
     return [[1.0] + [0.0] * (WIDTH - 1) for _ in texts]
 
 
@@ -55,15 +53,6 @@ def says(text):
         return {"role": "assistant", "content": text}
 
     return chat
-
-
-def returns(value):
-    """A stand-in coroutine function that ignores its arguments and returns `value`."""
-
-    async def stub(*_args):
-        return value
-
-    return stub
 
 
 async def broken(*_args):
@@ -83,29 +72,6 @@ def texts(node: dict) -> str:
     return " ".join(texts(child) for child in node.get("children", []))
 
 
-@pytest.mark.parametrize(
-    ("said", "intent"),
-    [
-        ("Take a photo", "take_photo"),
-        ("What am I looking at?", "take_photo"),
-        ("describe this", "take_photo"),
-        ("snap a picture please", "take_photo"),
-        ("Show my photos", "gallery"),
-        ("open the gallery", "gallery"),
-        ("Where did I leave my keys?", "ask_memory"),
-        ("what was on the table", "ask_memory"),
-        ("go back", "home"),
-        ("help", "help"),
-        ("Remind me not to trip over the stool", "remind"),
-        ("remind me to take a photo of the bill", "remind"),
-        ("banana", "unknown"),
-        ("   ", "unknown"),
-    ],
-)
-def test_interpret(said, intent):
-    assert interpret(said).name == intent
-
-
 def test_home_is_an_empty_display(client):
     reply = client.get("/api/glasses/home").json()
 
@@ -113,15 +79,12 @@ def test_home_is_an_empty_display(client):
 
 
 def test_no_screen_has_buttons(client):
-    """The wearer acts through the glasses and the Neural Band, never on the display."""
-    client.post("/api/glasses/photos", files={"photo": ("a.jpg", JPEG, "image/jpeg")})
+    """The wearer acts through the Neural Band, never on the display."""
     for body in [
-        {"action": "help"},
-        {"action": "gallery"},
         {"action": "ask"},
         {"question": "where are my keys?"},
         {"question": "remind me about the stool"},
-        {"text": "banana"},
+        {"question": "banana"},
     ]:
         reply = client.post("/api/glasses/command", json=body).json()
         assert buttons(reply["screen"]) == [], body
@@ -140,7 +103,9 @@ def test_ask_opens_the_microphone(client):
     assert reply["client_action"] == "listen_question"
 
 
-@pytest.mark.parametrize("asked", ["what's this", "take a photo of my keys", "keys"])
+@pytest.mark.parametrize(
+    "asked", ["what's this", "take a photo of my keys", "keys", "I can't find my wallet"]
+)
 def test_a_question_always_asks_the_memory(client, asked):
     reply = client.post("/api/glasses/command", json={"question": asked}).json()
 
@@ -153,81 +118,27 @@ def test_an_empty_question_goes_home(client):
     assert reply["intent"] == "home"
 
 
-def test_saying_take_a_photo_asks_the_client_to_capture(client):
-    reply = client.post("/api/glasses/command", json={"text": "take a picture"}).json()
-
-    assert reply["intent"] == "take_photo"
-    assert reply["client_action"] == "capture_photo"
-
-
-def test_a_button_does_what_its_words_do(client):
-    by_button = client.post("/api/glasses/command", json={"action": "help"}).json()
-    by_voice = client.post("/api/glasses/command", json={"text": "help"}).json()
-
-    assert by_button == by_voice
-
-
 @pytest.mark.parametrize(
     "body",
-    [{}, {"text": "help", "action": "help"}, {"text": "a", "question": "b"}, {"action": "explode"}],
+    [
+        {},
+        {"action": "ask", "question": "where?"},
+        {"action": "explode"},
+        # Words come as a question and go to the memory; nothing interprets them as commands.
+        {"text": "where are my keys"},
+        {"action": "help"},
+        {"action": "home"},
+        # The glasses take no photos: no capture button, no gallery.
+        {"action": "take_photo"},
+        {"action": "gallery"},
+    ],
 )
 def test_bad_commands_are_rejected(client, body):
     assert client.post("/api/glasses/command", json=body).status_code == 422
 
 
-def test_uploaded_photo_is_shown_and_listed(client):
-    upload = client.post("/api/glasses/photos", files={"photo": ("a.jpg", JPEG, "image/jpeg")})
-
-    assert upload.status_code == 201
-    assert "Photo saved" in texts(upload.json()["screen"])
-
-    gallery = client.post("/api/glasses/command", json={"text": "show my photos"}).json()
-    assert "Latest 1 photos" in texts(gallery["screen"])
-    image = gallery["screen"]["children"][1]["children"][0]
-    fetched = client.get(image["src"])
-    assert fetched.status_code == 200
-    assert fetched.content == JPEG
-
-
-def test_photo_is_described_and_becomes_a_memory(client):
-    use_models(chat=says("A desk with a laptop and keys."), embed=fake_embed)
-
-    reply = client.post("/api/glasses/photos", files={"photo": ("a.jpg", JPEG, "image/jpeg")})
-
-    assert reply.status_code == 201
-    assert reply.json()["intent"] == "photo_described"
-    assert reply.json()["speech"] == "A desk with a laptop and keys."
-    assert "Saved to memory" in texts(reply.json()["screen"])
-    memories = client.get("/api/memories").json()
-    assert [(m["kind"], m["text"], m["collection"]) for m in memories] == [
-        ("image", "A desk with a laptop and keys.", "glasses")
-    ]
-
-
-def test_photo_is_kept_when_the_models_are_down(client):
-    use_models(chat=broken, embed=broken)
-
-    reply = client.post("/api/glasses/photos", files={"photo": ("a.jpg", JPEG, "image/jpeg")})
-
-    assert reply.status_code == 201
-    assert reply.json()["intent"] == "photo_saved"
-    assert "Couldn’t describe it; couldn’t save it to memory" in texts(reply.json()["screen"])
-    assert client.get("/api/memories").json() == []
-
-
-def test_non_jpeg_photo_is_rejected(client):
-    upload = client.post("/api/glasses/photos", files={"photo": ("a.png", b"\x89PNG", "image/png")})
-
-    assert upload.status_code == 415
-
-
-@pytest.mark.parametrize("name", ["../app.db", "nope.jpg", "20260101T000000000000.jpg"])
-def test_unknown_photo_is_404(client, name):
-    assert client.get(f"/api/glasses/photos/{name}").status_code == 404
-
-
 def test_question_without_models_says_so(client):
-    reply = client.post("/api/glasses/command", json={"text": "where are my keys?"}).json()
+    reply = client.post("/api/glasses/command", json={"question": "where are my keys?"}).json()
 
     assert reply["intent"] == "ask_memory"
     assert "isn’t set up" in reply["speech"]
@@ -236,7 +147,7 @@ def test_question_without_models_says_so(client):
 def test_question_goes_through_the_question_loop(client):
     use_models(chat=says("On the kitchen table, at 09:12."), embed=fake_embed)
 
-    reply = client.post("/api/glasses/command", json={"text": "Where are my keys?"}).json()
+    reply = client.post("/api/glasses/command", json={"question": "Where are my keys?"}).json()
 
     assert reply["intent"] == "ask_memory"
     assert reply["speech"] == "On the kitchen table, at 09:12."
@@ -246,83 +157,19 @@ def test_question_goes_through_the_question_loop(client):
 def test_unreachable_memory_is_spoken_not_raised(client):
     use_models(chat=broken, embed=fake_embed)
 
-    reply = client.post("/api/glasses/command", json={"text": "where is the remote?"})
+    reply = client.post("/api/glasses/command", json={"question": "where is the remote?"})
 
     assert reply.status_code == 200
     assert "can’t reach" in reply.json()["speech"]
 
 
-def test_photo_falls_back_to_the_memory_api(client, monkeypatch):
-    use_models(chat=broken)
-    monkeypatch.setattr(remote_memory, "configured", lambda: True)
-    monkeypatch.setattr(remote_memory, "describe", returns("A watering can."))
-
-    reply = client.post("/api/glasses/photos", files={"photo": ("a.jpg", JPEG, "image/jpeg")})
-
-    assert reply.json()["intent"] == "photo_described"
-    assert reply.json()["speech"] == "A watering can."
-    assert "couldn’t" not in texts(reply.json()["screen"])
-
-
-def test_question_falls_back_to_the_memory_api(client, monkeypatch):
-    use_models(chat=broken, embed=fake_embed)
-    monkeypatch.setattr(remote_memory, "configured", lambda: True)
-    url = "/api/glasses/memory/20261114T120000000000/keyframes/a.jpg"
-    monkeypatch.setattr(remote_memory, "ask", returns(("By the door.", [url])))
-
-    reply = client.post("/api/glasses/command", json={"text": "where is the can?"}).json()
-
-    assert reply["speech"] == "By the door."
-    assert url not in str(reply["screen"])  # answers are text only
-
-
 def test_answers_are_plain_text_without_images(client):
     use_models(chat=says("On the desk: * a **blue** mug * your keys"), embed=fake_embed)
-    client.post("/api/glasses/photos", files={"photo": ("a.jpg", JPEG, "image/jpeg")})
 
     reply = client.post("/api/glasses/command", json={"question": "what's on the desk"}).json()
 
     assert reply["speech"] == "On the desk: a blue mug, your keys"
     assert "image" not in str(reply["screen"])
-
-
-def test_memory_api_batch_holds_every_photo(client, monkeypatch):
-    posted = []
-
-    class FakeClient:
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *_):
-            return False
-
-        async def post(self, path, **kwargs):
-            class Reply:
-                def raise_for_status(self):
-                    pass
-
-                def json(self):
-                    if path == "/batches":
-                        posted.append(len(kwargs["files"]))
-                        return {"batch": f"20261114T12000000000{len(posted)}", "summary": "x"}
-                    return {"answer": "On the table.", "keyframes": ["0.jpg"]}
-
-            return Reply()
-
-    monkeypatch.setattr(remote_memory, "configured", lambda: True)
-    monkeypatch.setattr(remote_memory, "_client", FakeClient)
-    for _ in range(2):
-        client.post("/api/glasses/photos", files={"photo": ("a.jpg", JPEG, "image/jpeg")})
-    posted.clear()  # the two one-photo batches that described them
-
-    assert client.portal.call(remote_memory.ask, "where?", 1, None)[0] == "On the table."
-    assert client.portal.call(remote_memory.ask, "again?", 1, None)[0] == "On the table."
-    assert posted == [2]  # one batch with both photos, reused for the second question
-
-
-@pytest.mark.parametrize("path", ["../x/keyframes/a.jpg", "20261114T120000000000/keyframes/a.png"])
-def test_bad_keyframe_paths_are_404(client, path):
-    assert client.get(f"/api/glasses/memory/{path}").status_code == 404
 
 
 def test_double_tap_opens_the_microphone(client):
@@ -355,7 +202,7 @@ def test_saying_remind_me_adds_a_reminder(client):
 
 
 def test_reminder_without_an_object_asks_again(client):
-    reply = client.post("/api/glasses/command", json={"text": "remind me"}).json()
+    reply = client.post("/api/glasses/command", json={"question": "remind me"}).json()
 
     assert reply["intent"] == "remind"
     assert client.get("/api/glasses/reminders").json() == []
@@ -407,17 +254,6 @@ def test_watch_only_cools_down_the_reminder_it_shows(client):
     assert watch(client)["warning"] is None
 
 
-def test_watch_falls_back_to_the_memory_apis_description(client, monkeypatch):
-    client.post("/api/glasses/reminders", json={"text": "warn me about the stool"})
-    monkeypatch.setattr(remote_memory, "configured", lambda: True)
-    monkeypatch.setattr(remote_memory, "describe", returns("Two stools by a counter."))
-
-    result = watch(client)
-
-    assert result["seen"] == ["stool"]
-    assert result["warning"] is not None
-
-
 def test_watch_without_a_vision_model_says_so(client):
     client.post("/api/glasses/reminders", json={"text": "warn me about the stool"})
 
@@ -459,7 +295,9 @@ def test_socket_answers_ping_and_commands(client):
         assert message["type"] == "reply" and message["id"] == 2
         assert message["reply"]["client_action"] == "listen_question"
 
-        ws.send_json({"type": "command", "id": 3, "text": "remind me not to trip over the stool"})
+        ws.send_json(
+            {"type": "command", "id": 3, "question": "remind me not to trip over the stool"}
+        )
         assert ws.receive_json()["reply"]["intent"] == "remind"
     assert [r["target"] for r in client.get("/api/glasses/reminders").json()] == ["stool"]
 
@@ -468,7 +306,7 @@ def test_socket_answers_ping_and_commands(client):
     "message",
     [
         {"type": "command", "id": 4, "action": "self_destruct"},
-        {"type": "command", "id": 4, "text": "hi", "action": "home"},
+        {"type": "command", "id": 4, "question": "hi", "action": "ask"},
         {"type": "nonsense", "id": 4},
     ],
 )
@@ -481,22 +319,18 @@ def test_socket_reports_bad_messages_and_stays_open(client, message):
         assert ws.receive_json()["type"] == "pong"
 
 
-def test_socket_takes_photos_as_binary_frames(client):
+def test_socket_rejects_a_watched_frame_that_is_not_a_jpeg(client):
     with client.websocket_connect("/api/glasses/ws") as ws:
-        send_jpeg(ws, "photo", 5)
-        message = ws.receive_json()
-        assert message["type"] == "reply" and message["id"] == 5
-        assert "Photo saved" in texts(message["reply"]["screen"])
-
-        send_jpeg(ws, "photo", 6, b"not a jpeg")
+        ws.send_json({"type": "watch", "on": True})
+        send_jpeg(ws, "frame", 6, b"not a jpeg")
         assert ws.receive_json() == {
             "type": "error",
             "id": 6,
             "status": 415,
-            "detail": "photo must be a JPEG",
+            "detail": "frame must be a JPEG",
         }
-        ws.send_json({"type": "command", "id": 7, "text": "show my photos"})
-        assert "Latest 1 photos" in texts(ws.receive_json()["reply"]["screen"])
+        ws.send_json({"type": "ping"})
+        assert ws.receive_json()["type"] == "pong"
 
 
 def test_socket_checks_frames_only_while_watching(client):
@@ -558,7 +392,7 @@ def test_socket_checks_only_the_latest_frame(client):
     [
         {"type": "ping"},
         {"type": "auth", "token": "wrong"},
-        {"type": "command", "id": 1, "action": "take_photo"},
+        {"type": "command", "id": 1, "action": "double_tap"},
     ],
 )
 def test_socket_refuses_a_client_that_is_not_logged_in(anonymous, first):

@@ -97,6 +97,7 @@ data class UiState(
     val memoryStatus: String = "",
     val memoryConnection: String = "Disconnected",
     val glassesMessage: GlassesMessage? = null, // the trigger message on the glasses right now
+    val speakReplies: Boolean = true, // read messages aloud (Speaker), through the glasses' speakers
     // Voice: recording = the glasses' mic is open, sending = the transcript is on its way to the backend,
     // voiceText = what was heard so far, voiceQuestion = the backend asked for a question about the photos.
     val voiceRecording: Boolean = false,
@@ -144,6 +145,7 @@ class GlassesViewModel : ViewModel() {
         FULL("Full", PhotoResolution.FULL, PhotoQuality.HIGH),
     }
     private var feedback: CaptureFeedback? = null
+    private var speaker: Speaker? = null // started when memory mode arms, since the engine takes a moment
     private var doneResetJob: Job? = null
     private var captureWatchdog: Job? = null
 
@@ -183,6 +185,7 @@ class GlassesViewModel : ViewModel() {
         feedback = CaptureFeedback(context.applicationContext)
         SegmentSettings.load(context.applicationContext)
         _ui.update { it.copy(segmentGrid = SegmentSettings.useGrid) }
+        _ui.update { it.copy(speakReplies = speakRepliesSetting(context.applicationContext)) }
         _ui.update { it.copy(photos = PhotoStore.list(context.applicationContext)) }
         // A second initialize() in the same process returns ALREADY_INITIALIZED; that's fine.
         Wearables.initialize(context)
@@ -586,6 +589,21 @@ class GlassesViewModel : ViewModel() {
     fun setUseDisplay(enabled: Boolean) {
         _ui.update { it.copy(useDisplay = enabled) }
     }
+
+    /** Reading messages aloud on or off, remembered across app starts. Turning it off cuts off what is being read. */
+    fun setSpeakReplies(enabled: Boolean) {
+        appContext?.getSharedPreferences(PREFS, android.content.Context.MODE_PRIVATE)
+            ?.edit()?.putBoolean(KEY_SPEAK_REPLIES, enabled)?.apply()
+        _ui.update { it.copy(speakReplies = enabled) }
+        if (enabled) speaker() else speaker?.stop()
+    }
+
+    private fun speakRepliesSetting(context: android.content.Context) =
+        context.getSharedPreferences(PREFS, android.content.Context.MODE_PRIVATE)
+            .getBoolean(KEY_SPEAK_REPLIES, true)
+
+    /** The speech engine, started on first use. */
+    private fun speaker(): Speaker? = speaker ?: appContext?.let { Speaker(it) }?.also { speaker = it }
 
     /** Cycles the quick-shot photo size: Fast (480p) -> Balanced (1080p) -> Full (4032x3024). */
     fun cycleProfile() {
@@ -1137,6 +1155,7 @@ class GlassesViewModel : ViewModel() {
             )
         }
         memoryChannel.start()
+        if (_ui.value.speakReplies) speaker() // warm the engine up: its first start takes a moment
         say("Memory mode armed. Double tap or double press to stream, tap or press once for one photo, hold to talk.")
     }
 
@@ -1280,6 +1299,7 @@ class GlassesViewModel : ViewModel() {
     private var voice: VoiceInput? = null
     private var voiceStart: Job? = null
     private var voiceLimit: Job? = null
+    private var voiceGeneration = 0 // counts voice messages started, so a reply's auto-listen can tell it is stale
     private var voiceStoppedAtMs = 0L
     private var lastVoiceRenderMs = 0L
 
@@ -1289,7 +1309,7 @@ class GlassesViewModel : ViewModel() {
 
     /**
      * Opens the glasses' microphone (see [VoiceInput]) until [stopVoice]: a press of the capture button, a
-     * tap, or the phone's button. Only the transcript goes to the backend, as a command over the memory
+     * tap, or the phone's button. Only the transcript goes to the backend, as a question over the memory
      * WebSocket. [asQuestion]: the backend's last reply asked for a question about the photos.
      */
     fun startVoice(asQuestion: Boolean = false) {
@@ -1318,6 +1338,8 @@ class GlassesViewModel : ViewModel() {
             },
         ).also { voice = it }
         messageClearJob?.cancel()
+        speaker?.stop() // the microphone must not hear a reply still being read
+        voiceGeneration++
         _ui.update {
             it.copy(
                 voiceRecording = true, voiceQuestion = asQuestion, voiceText = "", glassesMessage = null,
@@ -1347,7 +1369,7 @@ class GlassesViewModel : ViewModel() {
         if (!_ui.value.voiceRecording) return
         voiceLimit?.cancel()
         voiceStoppedAtMs = SystemClock.elapsedRealtime()
-        val asQuestion = _ui.value.voiceQuestion
+        val generation = voiceGeneration // the recording that is ending now
         _ui.update { it.copy(voiceRecording = false, voiceSending = true, memoryStatus = "Finishing...") }
         viewModelScope.launch {
             var listenAgain = false
@@ -1363,7 +1385,7 @@ class GlassesViewModel : ViewModel() {
                 }
                 _ui.update { it.copy(memoryStatus = "Sending \"$text\"") }
                 renderMemoryOnGlasses?.invoke()
-                when (val out = memoryChannel.command(text, asQuestion)) {
+                when (val out = memoryChannel.command(text)) {
                     is CommandOutcome.Ok -> {
                         _ui.update { it.copy(memoryStatus = "Sent \"$text\"") }
                         listenAgain = out.listenQuestion
@@ -1384,8 +1406,11 @@ class GlassesViewModel : ViewModel() {
                 _ui.update { it.copy(voiceSending = false, voiceQuestion = false) }
                 renderMemoryOnGlasses?.invoke()
             }
-            // The reply asked for a question about the photos: listen for it straight away.
-            if (listenAgain && _ui.value.memoryArmed) startVoice(asQuestion = true)
+            // The reply asked for a question about the photos: listen for it straight away, once the reply has
+            // been read, or the microphone would hear it.
+            if (listenAgain && speaker?.awaitDone() == true) delay(BLUETOOTH_TAIL_MS)
+            // Skip it if the wearer started talking themselves while the reply was read.
+            if (listenAgain && _ui.value.memoryArmed && voiceGeneration == generation) startVoice(asQuestion = true)
         }
     }
 
@@ -1496,6 +1521,8 @@ class GlassesViewModel : ViewModel() {
     private suspend fun showGlassesMessage(message: GlassesMessage) {
         _ui.update { it.copy(glassesMessage = message) }
         feedback?.done()
+        // Not while the microphone is open: the voice message would pick it up, and this one is replaced anyway.
+        if (_ui.value.speakReplies && !_ui.value.voiceRecording) speaker()?.speak(message.spoken)
         renderMemoryOnGlasses?.invoke()
         messageClearJob?.cancel()
         messageClearJob = viewModelScope.launch {
@@ -1507,6 +1534,7 @@ class GlassesViewModel : ViewModel() {
 
     fun dismissGlassesMessage() {
         messageClearJob?.cancel()
+        speaker?.stop()
         _ui.update { it.copy(glassesMessage = null) }
         viewModelScope.launch { renderMemoryOnGlasses?.invoke() }
     }
@@ -1597,6 +1625,7 @@ class GlassesViewModel : ViewModel() {
         memoryPhotoJob?.cancel()
         memoryPhotoJob = null
         cancelVoice()
+        speaker?.stop()
         singleRequested = false
         renderMemoryOnGlasses = null
         _ui.update {
@@ -1627,8 +1656,11 @@ class GlassesViewModel : ViewModel() {
         const val MEMORY_FRAME_MS = 500L // 2 frames a second
         const val DOUBLE_TAP_MS = 450L // two taps closer than this are a double tap
         const val SINGLE_WARMUP_MS = 1_200L // after the camera opens, before a single photo is taken
+        const val PREFS = "glasses_settings"
+        const val KEY_SPEAK_REPLIES = "speak_replies"
         const val MESSAGE_MS = 10_000L // how long a trigger message stays on the glasses
         const val VOICE_MAX_MS = 60_000L // a voice message ends by itself after this
+        const val BLUETOOTH_TAIL_MS = 300L // after a reply is read, for its last audio to reach the glasses
         const val VOICE_STOP_GRACE_MS = 800L // presses this soon after ending a voice message are ignored
         const val VOICE_RENDER_MS = 500L // at most two display updates a second while listening
         const val VOICE_SHOWN_CHARS = 160 // the end of a long transcript, on the glasses
@@ -1638,5 +1670,6 @@ class GlassesViewModel : ViewModel() {
         feedback?.release()
         stopStreaming()
         cleanup()
+        speaker?.release()
     }
 }

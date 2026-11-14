@@ -24,13 +24,13 @@ const REFRESH_EVERY_MS = 5_000; // while streaming, reload the library and map a
 /**
  * The memories on the left; on the right, either the Ask chat (Gemma's searches step by step) or
  * the glasses harness (what the wearer sees and hears). Both stay mounted, so switching tabs
- * keeps the conversation and the display; photos the glasses store show up in the library.
- * The Stream tab streams the webcam as the glasses would, with the triggers it is checked against.
+ * keeps the conversation and the display. The Stream tab streams the webcam as the glasses would,
+ * with the triggers it is checked against; the frames it stores show up in the library.
  * Below, the map of every stored vector, ringing what the latest question found.
  */
 export function MemoryLab() {
   const [tab, setTab] = useState<Tab>("ask");
-  const [refreshKey, setRefreshKey] = useState(0); // the glasses stored a photo
+  const [refreshKey, setRefreshKey] = useState(0); // the Stream tab stored a frame
   const [version, setVersion] = useState(0); // memories changed here or on the glasses
   const [found, setFound] = useState<number[]>([]);
   const collections = useCollections(version);
@@ -122,14 +122,7 @@ export function MemoryLab() {
             aria-labelledby="lab-tab-glasses"
             hidden={tab !== "glasses"}
           >
-            <GlassesHarness
-              embedded
-              active={tab === "glasses"}
-              onPhotoStored={() => {
-                setRefreshKey((key) => key + 1);
-                changed();
-              }}
-            />
+            <GlassesHarness embedded active={tab === "glasses"} />
           </div>
         </div>
       </main>

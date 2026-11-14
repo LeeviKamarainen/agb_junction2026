@@ -263,7 +263,7 @@ def test_gemma_removes_a_goal_asked_by_voice_on_the_glasses(client):
     )
     talking(client, gemma)
 
-    reply = client.post("/api/glasses/command", json={"text": "stop watching for my bus"})
+    reply = client.post("/api/glasses/command", json={"question": "stop watching for my bus"})
 
     assert reply.status_code == 200 and "no more bus alerts" in json.dumps(reply.json())
     assert client.get("/api/glasses/goals").json() == []

@@ -25,12 +25,6 @@ class Settings(BaseSettings):
     embed_api_key: str | None = None
     embed_model: str = "google/embeddinggemma-2"
 
-    # The glass-memory API (memory/) on the Gemma server, over HTTPS with a bearer token. It runs
-    # Gemma itself, so the glasses fall back to it when the chat or embedding model above is not
-    # set or not reachable: it describes photos and answers questions about them.
-    memory_api_url: str | None = None
-    memory_api_token: str | None = None
-
     # The one admin account, who sees every user's memories. It is created (or its password reset)
     # on every start from these. Without ADMIN_PASSWORD a random one is made and printed in the
     # log once. Everyone else registers a guest account on /register.

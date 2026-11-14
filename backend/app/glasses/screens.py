@@ -1,16 +1,15 @@
 """The screens the glasses show. Each returns the full reply for one intent.
 
 The display is a 600x600 see-through screen where black is transparent, so it stays empty while
-nothing is happening: no buttons. The wearer acts through the glasses' capture button and the
-Neural Band (double index-finger tap to ask), which arrive as actions. A reply that shows
+nothing is happening: no buttons. The wearer acts through the Neural Band: a double index-finger
+tap opens the microphone for a question, and arrives as an action. A reply that shows
 something sets `dismiss_after_s`, and the client goes back to the empty screen after it. While
 the microphone records, the client draws its own red light in a corner.
 """
 
 import re
 
-from app.glasses import photos
-from app.glasses.layout import FlexBox, GlassesReply, Icon, Image, Text
+from app.glasses.layout import FlexBox, GlassesReply, Icon, Text
 
 PAD = 32
 
@@ -43,77 +42,6 @@ def listen() -> GlassesReply:
     """The microphone is open: the client sends what it hears as `{"question": ...}`. The
     screen stays clear; the client's red recording light is all the wearer sees."""
     return GlassesReply(intent="ask", screen=FlexBox(), client_action="listen_question")
-
-
-def help_() -> GlassesReply:
-    text = "Press the capture button for a photo. Double tap to ask about your photos."
-    return GlassesReply(
-        intent="help",
-        screen=_screen(
-            _title("help", "Help"),
-            Text(value="Capture button: take a photo"),
-            Text(value="Double tap: ask about your photos"),
-        ),
-        speech=text,
-        dismiss_after_s=10,
-    )
-
-
-def capture() -> GlassesReply:
-    return GlassesReply(intent="take_photo", screen=FlexBox(), client_action="capture_photo")
-
-
-def photo_saved(name: str, note: str | None = None) -> GlassesReply:
-    """A photo kept on the backend only: memory is not set up, or `note` says what failed."""
-    return GlassesReply(
-        intent="photo_saved",
-        screen=_screen(
-            _title("check", "Photo saved"),
-            *([Text(value=note.capitalize(), style="CAPTION")] if note else []),
-        ),
-        speech="Photo saved.",
-        dismiss_after_s=3,
-    )
-
-
-def photo_described(name: str, description: str, note: str | None = None) -> GlassesReply:
-    """A photo with the chat model's description; `note` says whether it reached memory."""
-    children = [
-        _title("check", "Photo saved"),
-        # The model writes a sentence or two; smaller text keeps a long one on the display.
-        Text(value=description, style="BODY" if len(description) <= 160 else "CAPTION"),
-    ]
-    if note:
-        children.append(Text(value=note.capitalize(), style="CAPTION"))
-    return GlassesReply(
-        intent="photo_described",
-        screen=_screen(*children),
-        speech=description,
-        dismiss_after_s=_seconds_to_read(description),
-    )
-
-
-def gallery(owners: list[int] | None) -> GlassesReply:
-    """The newest photos the wearer may see (app.auth.Viewer.owners)."""
-    names = photos.latest(4, owners)
-    if not names:
-        return GlassesReply(
-            intent="gallery",
-            screen=_screen(_title("image", "No photos yet")),
-            speech="No photos yet.",
-            dismiss_after_s=3,
-        )
-    thumbs = [Image(src=photos.url(n), alt=f"Photo {n}", width=260, height=146) for n in names]
-    rows = [FlexBox(direction="row", gap=16, children=thumbs[i : i + 2]) for i in (0, 2)]
-    return GlassesReply(
-        intent="gallery",
-        screen=_screen(
-            _title("image", f"Latest {len(names)} photos"),
-            *[row for row in rows if row.children],
-            justify="center",
-        ),
-        dismiss_after_s=8,
-    )
 
 
 def memory_answer(question: str, answer: str) -> GlassesReply:
@@ -189,16 +117,4 @@ def memory_problem(question: str, problem: str) -> GlassesReply:
         ),
         speech=problem,
         dismiss_after_s=5,
-    )
-
-
-def unknown(heard: str) -> GlassesReply:
-    return GlassesReply(
-        intent="unknown",
-        screen=_screen(
-            _title("mic", "Didn’t catch that"),
-            Text(value=f"Heard: “{heard}”" if heard else "Heard nothing.", style="CAPTION"),
-        ),
-        speech="Sorry, I didn't catch that.",
-        dismiss_after_s=4,
     )

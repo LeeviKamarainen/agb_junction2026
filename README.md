@@ -46,8 +46,6 @@ LLM_URL=...          # chat model, any OpenAI-style server with tool calling (Ge
 LLM_API_KEY=...
 EMBED_URL=...        # embeddings server: must be EmbeddingGemma 2, the model the memories use
 EMBED_API_KEY=...
-MEMORY_API_URL=...   # optional: the memory API, used as a fallback to describe photos
-MEMORY_API_TOKEN=...
 ADMIN_PASSWORD=...   # optional: otherwise a random admin password is printed in the backend log
 ```
 
@@ -64,7 +62,7 @@ Open http://localhost:3000 and start a **guest**: a generated name, no password,
 - **Library:** add memories by uploading images, taking a webcam picture, or writing a note; group them into collections.
 - **Ask tab:** ask Gemma a question and watch it search the memories step by step.
 - **Map:** every stored vector projected to 2D and 3D; the memories found by the last question are ringed.
-- **Glasses tab:** the glasses harness inside the lab, so photos it takes appear in the library.
+- **Glasses tab:** the glasses harness inside the lab: what the wearer sees and hears.
 - **Stream tab:** the webcam acts as the glasses (frames go to the backend as the Android app sends them), next to the editor for what the glasses watch out for: you say a goal, Gemma writes its triggers, and each shows its score on the latest frame against its level.
 
 ### Glasses harness (`/glasses`)
@@ -73,13 +71,13 @@ Stands in for the glasses and the Android app, so the glasses UI can be built an
 
 It calls the same `/api/glasses/*` endpoints and WebSocket the Android app uses. The backend decides what to show, as layouts made of the glasses SDK's display components in `backend/app/glasses/screens.py`, and the harness draws them on a 600×600 display. "See-through" blends the display over the webcam the way the real display adds light to the world.
 
-Things to try: take a photo ("take a photo"), ask "where did I leave my keys?", say "remind me about the stool" and point the webcam at one.
+Things to try: ask "where did I leave my keys?", say "remind me about the stool" and point the webcam at one.
 
 ### The real glasses
 
 1. Pair the glasses in the Meta AI app, turn on Developer Mode, and build `glasses-android` in Android Studio (setup is in [its README](glasses-android/README.md)).
 2. Copy `local.properties.example` to `local.properties` and set `glasses.api` to the backend's address (without `/api`). Without `glasses.token` the app starts a guest account by itself.
-3. In the app press **Register**, then **Arm memory mode**. A double tap or double press of the capture button starts and stops the 2 fps stream; one tap or short press sends one photo; holding the capture button records a voice message, which is turned into text on the phone and sent as a command.
+3. In the app press **Register**, then **Arm memory mode**. A double tap or double press of the capture button starts and stops the 2 fps stream; one tap or short press sends one photo; holding the capture button records a voice message, which is turned into text on the phone and sent to Gemma as a question.
 4. Triggers and reminders now warn you on the display. Memories show up in the Memory lab.
 
 The memory service itself (embedding, the map page, deploying to the Gemma server) is described in [memory/README.md](memory/README.md).
