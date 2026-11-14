@@ -31,8 +31,9 @@ class Settings(BaseSettings):
     memory_api_url: str | None = None
     memory_api_token: str | None = None
 
-    # The token glasses clients give when opening the WebSocket (/api/glasses/ws, as ?token= or
-    # a bearer header). Optional: without it the socket is open, as the other glasses routes are.
+    # The token glasses clients give when opening the WebSocket (/api/glasses/ws, as a bearer
+    # header or a first `auth` message). Optional: without it the socket is open, as the other
+    # glasses routes are.
     glasses_token: str | None = None
 
 

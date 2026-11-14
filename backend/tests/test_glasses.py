@@ -538,21 +538,46 @@ def token(monkeypatch):
     get_settings.cache_clear()
 
 
-@pytest.mark.parametrize("url", ["/api/glasses/ws", "/api/glasses/ws?token=wrong"])
-def test_socket_refuses_a_missing_or_wrong_token(client, token, url):
+@pytest.mark.parametrize(
+    "first",
+    [
+        {"type": "ping"},
+        {"type": "auth", "token": "wrong"},
+        {"type": "command", "id": 1, "action": "take_photo"},
+    ],
+)
+def test_socket_refuses_a_missing_or_wrong_token(client, token, first):
     with pytest.raises(WebSocketDisconnect) as refused:
-        with client.websocket_connect(url) as ws:
+        with client.websocket_connect("/api/glasses/ws") as ws:
+            ws.send_json(first)
             ws.receive_json()
     assert refused.value.code == 1008
 
 
-@pytest.mark.parametrize("how", ["query", "header"])
+def test_socket_refuses_a_wrong_bearer_header(client, token):
+    with pytest.raises(WebSocketDisconnect) as refused:
+        with client.websocket_connect(
+            "/api/glasses/ws", headers={"Authorization": "Bearer wrong"}
+        ) as ws:
+            ws.receive_json()
+    assert refused.value.code == 1008
+
+
+@pytest.mark.parametrize("how", ["message", "header"])
 def test_socket_accepts_the_token(client, token, how):
-    url, headers = "/api/glasses/ws", {}
-    if how == "query":
-        url += f"?token={token}"
-    else:
-        headers["Authorization"] = f"Bearer {token}"
-    with client.websocket_connect(url, headers=headers) as ws:
+    headers = {"Authorization": f"Bearer {token}"} if how == "header" else {}
+    with client.websocket_connect("/api/glasses/ws", headers=headers) as ws:
+        if how == "message":
+            ws.send_json({"type": "auth", "token": token})
+        ws.send_json({"type": "ping"})
+        assert ws.receive_json()["type"] == "pong"
+
+
+def test_socket_survives_a_refused_client_leaving_first(client, token):
+    with client.websocket_connect("/api/glasses/ws") as ws:
+        ws.close()  # before sending its auth message
+    with client.websocket_connect(
+        "/api/glasses/ws", headers={"Authorization": f"Bearer {token}"}
+    ) as ws:
         ws.send_json({"type": "ping"})
         assert ws.receive_json()["type"] == "pong"

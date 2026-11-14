@@ -36,7 +36,6 @@ import {
   GlassesSocket,
   type ServerMessage,
   type SocketState,
-  socketUrl,
 } from "./channel";
 import { Display } from "./display";
 import {
@@ -76,8 +75,6 @@ const subscribeToNothing = () => () => {};
 const WATCH_EVERY_MS = 1000;
 // An idle socket is pinged this often, so a dead connection shows in the status line.
 const PING_EVERY_MS = 20_000;
-// A frame's answer that never came stops counting as pending after this long.
-const PENDING_FRAME_MS = 120_000;
 // Two taps of the key within this time are a double tap.
 const DOUBLE_TAP_MS = 400;
 
@@ -228,7 +225,8 @@ export function GlassesHarness({
    * goes as a binary frame right after a photo's or frame's header. False when not sent.
    */
   function send(
-    message: ClientMessage,
+    // The socket sends `auth` itself, on opening.
+    message: Exclude<ClientMessage, { type: "auth" }>,
     request: string,
     jpeg?: { blob: Blob; width: number; height: number },
   ): boolean {
@@ -326,11 +324,11 @@ export function GlassesHarness({
       apply(`↓ reply${label}`, message.reply, pending?.started);
       if (pending?.kind === "photo") onPhotoStored?.();
     }
-    // Frames dropped by the backend never get an answer; don't keep them forever.
-    const now = performance.now();
-    for (const [id, waiting] of pendingRef.current)
-      if (waiting.kind === "frame" && now - waiting.started > PENDING_FRAME_MS)
-        pendingRef.current.delete(id);
+    // Frames the backend dropped for a newer one never get an answer.
+    if (message.type === "watch_result" && message.id !== null)
+      for (const [id, waiting] of pendingRef.current)
+        if (waiting.kind === "frame" && id < message.id)
+          pendingRef.current.delete(id);
   }
 
   function socketChanged(next: SocketState) {
@@ -624,14 +622,14 @@ export function GlassesHarness({
     } else void command({ text }, `said “${text}” (typed)`);
   }
 
-  // One socket per harness, reconnecting with backoff. ?token= in the page address is passed on,
-  // for a backend with GLASSES_TOKEN set.
+  // One socket per harness, reconnecting with backoff. For a backend with GLASSES_TOKEN set,
+  // ?token= in the page address is sent as the socket's first message.
   const onSocketMessage = useEffectEvent(received);
   const onSocketState = useEffectEvent(socketChanged);
   const onPing = useEffectEvent(ping);
   useEffect(() => {
     const token = new URLSearchParams(window.location.search).get("token");
-    const socket = new GlassesSocket(socketUrl(token), {
+    const socket = new GlassesSocket(token, {
       onState: (state) => onSocketState(state),
       onMessage: (message) => onSocketMessage(message),
     });
@@ -656,9 +654,14 @@ export function GlassesHarness({
   const onWatchTick = useEffectEvent((stopped: () => boolean) =>
     watchOnce(stopped),
   );
-  const onWatching = useEffectEvent((on: boolean) =>
-    send({ type: "watch", on }, on ? "start watching" : "stop watching"),
-  );
+  const onWatching = useEffectEvent((on: boolean) => {
+    // Leaving the page closes the socket first: nothing to tell it then.
+    if (!socketRef.current) return;
+    if (!on)
+      for (const [id, waiting] of pendingRef.current)
+        if (waiting.kind === "frame") pendingRef.current.delete(id);
+    send({ type: "watch", on }, on ? "start watching" : "stop watching");
+  });
   useEffect(() => {
     if (!watching) return;
     onWatching(true);

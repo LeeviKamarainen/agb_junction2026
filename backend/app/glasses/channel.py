@@ -21,8 +21,13 @@ Commands and photos run concurrently, frames one at a time beside them; every mo
 blocking httpx, so each runs in a worker thread with its own database session and one slow client
 cannot stall the others.
 
-Auth: with GLASSES_TOKEN set, connect with `?token=` or `Authorization: Bearer`, else the socket
-is closed with 1008 as soon as it opens. Without it the socket is open, as the HTTP routes are.
+Commands and photos from one client run at most WORKERS at a time; on disconnect the socket
+closes at once and the threads still running finish on their own.
+
+Auth: with GLASSES_TOKEN set, connect with `Authorization: Bearer <token>` (native clients) or
+send `{"type": "auth", "token": ...}` as the first message (browsers cannot set headers), else
+the socket is closed with 1008. Not a query parameter: uvicorn logs the URL. Without the setting
+the socket is open, as the HTTP routes are.
 """
 
 import logging
@@ -48,6 +53,10 @@ log = logging.getLogger(__name__)
 
 # The WebSocket close code for a refused token (policy violation).
 REFUSED = 1008
+# How long a client has to send its `auth` message.
+AUTH_TIMEOUT_S = 10
+# Worker threads one client may hold for commands, photos and frames.
+WORKERS = 4
 
 
 # --- Client to server --------------------------------------------------------
@@ -82,8 +91,15 @@ class PingMessage(BaseModel):
     id: int | None = None
 
 
+class AuthMessage(BaseModel):
+    """The first message, when GLASSES_TOKEN is set and no bearer header came; ignored later."""
+
+    type: Literal["auth"]
+    token: str
+
+
 ClientMessage = Annotated[
-    CommandMessage | PhotoMessage | FrameMessage | WatchMessage | PingMessage,
+    CommandMessage | PhotoMessage | FrameMessage | WatchMessage | PingMessage | AuthMessage,
     Field(discriminator="type"),
 ]
 client_message: TypeAdapter[ClientMessage] = TypeAdapter(ClientMessage)
@@ -121,15 +137,29 @@ class PongMessage(BaseModel):
 ServerMessage = ReplyMessage | WatchResultMessage | ErrorMessage | PongMessage
 
 
-def allowed(websocket: WebSocket, token: str | None) -> bool:
+def _matches(given: str, expected: str) -> bool:
+    return secrets.compare_digest(given.encode(), expected.encode())
+
+
+async def authenticated(websocket: WebSocket) -> bool:
+    """The bearer header, or else the first message, carries GLASSES_TOKEN (when it is set)."""
     expected = get_settings().glasses_token
     if not expected:
         return True
-    given = token
     header = websocket.headers.get("authorization", "")
-    if given is None and header.lower().startswith("bearer "):
-        given = header[7:].strip()
-    return given is not None and secrets.compare_digest(given.encode(), expected.encode())
+    if header.lower().startswith("bearer "):
+        return _matches(header[7:].strip(), expected)
+    with anyio.move_on_after(AUTH_TIMEOUT_S):
+        event = await websocket.receive()
+        text = event.get("text")
+        if text is None:
+            return False
+        try:
+            message = client_message.validate_json(text)
+        except ValidationError:
+            return False
+        return isinstance(message, AuthMessage) and _matches(message.token, expected)
+    return False
 
 
 def _in_session[T](work: Callable[..., T], *args) -> T:
@@ -147,6 +177,7 @@ class Channel:
         self.chat = chat
         self.embed = embed
         self.send_lock = anyio.Lock()
+        self.limiter = anyio.CapacityLimiter(WORKERS)
         self.watching = False
         # The newest frame not yet checked, and how many it and its predecessors replaced.
         self.frame: tuple[int | None, bytes] | None = None
@@ -181,6 +212,8 @@ class Channel:
             match message:
                 case PingMessage():
                     await self.send(PongMessage(id=message.id))
+                case AuthMessage():
+                    pass
                 case WatchMessage():
                     self.watching = message.on
                     if not message.on:
@@ -251,7 +284,9 @@ class Channel:
         """Runs `work(session, *args)` in a worker thread with its own session; a failure becomes
         an `error` message, not a closed socket."""
         try:
-            return await anyio.to_thread.run_sync(_in_session, work, *args)
+            return await anyio.to_thread.run_sync(
+                _in_session, work, *args, limiter=self.limiter, abandon_on_cancel=True
+            )
         except HTTPException as error:
             await self.send(ErrorMessage(id=id, status=error.status_code, detail=error.detail))
         except Exception as error:
@@ -271,13 +306,18 @@ def _id_of(text: str) -> int | None:
     return id if isinstance(id, int) else None
 
 
-async def serve(
-    websocket: WebSocket, chat: Chat | None, embed: Embedder | None, token: str | None
-) -> None:
-    await websocket.accept()
+async def serve(websocket: WebSocket, chat: Chat | None, embed: Embedder | None) -> None:
     # Refused after accepting: a browser only learns the close code of an opened socket.
-    if not allowed(websocket, token):
-        await websocket.close(code=REFUSED, reason="wrong or missing token")
+    await websocket.accept()
+    try:
+        ok = await authenticated(websocket)
+    except WebSocketDisconnect:
+        return
+    if not ok:
+        try:
+            await websocket.close(code=REFUSED, reason="wrong or missing token")
+        except (WebSocketDisconnect, RuntimeError):
+            pass  # it left first
         return
     channel = Channel(websocket, chat, embed)
     async with anyio.create_task_group() as tasks:

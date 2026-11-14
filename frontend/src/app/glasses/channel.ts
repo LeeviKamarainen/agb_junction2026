@@ -12,7 +12,8 @@ export type ClientMessage =
   | { type: "photo"; id: number }
   | { type: "frame"; id: number }
   | { type: "watch"; on: boolean }
-  | { type: "ping"; id: number };
+  | { type: "ping"; id: number }
+  | { type: "auth"; token: string };
 
 export type ServerMessage =
   | { type: "reply"; id: number | null; reply: GlassesReply }
@@ -39,27 +40,33 @@ type Handlers = {
 
 const FIRST_RETRY_MS = 500;
 const MAX_RETRY_MS = 10_000;
-// A frame or photo is not sent while this much is still waiting to go out: the network is slow.
+// The backoff starts over only after a socket stayed open this long, so a backend that accepts
+// and then fails at once is not hammered every half second.
+const STABLE_MS = 5_000;
+// A frame is not sent while this much is still waiting to go out: the network is slow.
 const MAX_BUFFERED = 2_000_000;
 
 /** Same origin: Caddy passes the upgrade in production, `next dev`'s /api rewrite does locally. */
-export function socketUrl(token: string | null): string {
+function socketUrl(): string {
   const url = new URL("/api/glasses/ws", window.location.href);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-  if (token) url.searchParams.set("token", token);
   return url.toString();
 }
 
-/** One socket that reconnects with backoff until `close()`. */
+/**
+ * One socket that reconnects with backoff until `close()`. A token goes in the first message,
+ * not the address, so it stays out of the server's logs.
+ */
 export class GlassesSocket {
   private socket: WebSocket | null = null;
   private retryMs = FIRST_RETRY_MS;
   private attempt = 0;
+  private openedAt: number | null = null;
   private timer: ReturnType<typeof setTimeout> | undefined;
   private closed = false;
 
   constructor(
-    private readonly url: string,
+    private readonly token: string | null,
     private readonly handlers: Handlers,
   ) {
     this.connect();
@@ -95,25 +102,34 @@ export class GlassesSocket {
   private connect() {
     this.attempt += 1;
     this.handlers.onState({ state: "connecting", attempt: this.attempt });
-    const socket = new WebSocket(this.url);
+    const socket = new WebSocket(socketUrl());
     this.socket = socket;
     socket.onopen = () => {
-      this.retryMs = FIRST_RETRY_MS;
+      if (this.token) this.send({ type: "auth", token: this.token });
+      this.openedAt = performance.now();
       this.attempt = 0;
       this.handlers.onState({ state: "open" });
     };
     socket.onmessage = (event) => {
       if (typeof event.data !== "string") return;
+      let message: ServerMessage;
       try {
-        this.handlers.onMessage(JSON.parse(event.data) as ServerMessage);
+        message = JSON.parse(event.data) as ServerMessage;
       } catch {
-        // Not JSON: nothing the backend sends.
+        return; // Not JSON: nothing the backend sends.
       }
+      this.handlers.onMessage(message);
     };
     socket.onclose = (event) => {
       if (this.socket !== socket) return;
       this.socket = null;
       if (this.closed) return;
+      if (
+        this.openedAt !== null &&
+        performance.now() - this.openedAt >= STABLE_MS
+      )
+        this.retryMs = FIRST_RETRY_MS;
+      this.openedAt = null;
       if (event.code === 1008) {
         this.handlers.onState({
           state: "closed",

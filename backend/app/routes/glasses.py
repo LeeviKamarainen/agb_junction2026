@@ -41,9 +41,9 @@ EmbedderDep = Annotated[Embedder | None, Depends(optional_embedder)]
 
 
 @router.websocket("/ws")
-async def socket(websocket: WebSocket, chat: ChatDep, embed: EmbedderDep, token: str | None = None):
+async def socket(websocket: WebSocket, chat: ChatDep, embed: EmbedderDep):
     """The live channel; its protocol is in app/glasses/channel.py."""
-    await channel.serve(websocket, chat, embed, token)
+    await channel.serve(websocket, chat, embed)
 
 
 @router.get("/home", response_model=GlassesReply)
