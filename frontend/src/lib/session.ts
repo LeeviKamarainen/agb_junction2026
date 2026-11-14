@@ -38,6 +38,12 @@ export function useSession() {
     };
   }, []);
 
+  useEffect(() => {
+    const changed = () => { void refresh(); };
+    window.addEventListener("session-changed", changed);
+    return () => window.removeEventListener("session-changed", changed);
+  }, [refresh]);
+
   return { user, refresh };
 }
 

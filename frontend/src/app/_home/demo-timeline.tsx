@@ -138,12 +138,12 @@ export function DemoTimeline() {
           className="demo-moment flex flex-col gap-3 py-8"
         >
           <p className="flex items-baseline gap-3">
-            <span className="font-mono text-5xl font-semibold tracking-tight text-primary md:text-6xl">
+            <span className="font-mono text-2xl font-semibold tracking-tight text-primary md:text-3xl">
               {clock(moment.time)}
             </span>
             <span className="text-lg font-medium">{moment.place}</span>
           </p>
-          <figcaption className="max-w-2xl text-xl leading-snug text-balance md:text-2xl">
+          <figcaption className="max-w-2xl text-base leading-snug text-balance md:text-lg">
             {moment.text}
           </figcaption>
         </div>

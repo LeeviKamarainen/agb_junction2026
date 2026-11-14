@@ -15,7 +15,7 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "Glass memory — your glasses remember the day",
   description:
-    "A visual memory for smart glasses: watch a recorded day play back as a timeline and ask Gemma about what the glasses saw.",
+    "Ask about your day, explore curated demos, and try a visual memory for smart glasses.",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
@@ -24,6 +24,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
     // loads; this silences the hydration warning for this one element only, not its children.
     <html
       lang="en"
+      data-scroll-behavior="smooth"
       suppressHydrationWarning
       className={`${geistSans.variable} ${geistMono.variable} dark h-full antialiased`}
     >
