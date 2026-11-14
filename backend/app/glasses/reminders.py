@@ -1,18 +1,17 @@
 """Warnings the wearer sets up by voice: "remind me not to trip over the stool in the kitchen".
 
 A reminder names one object (its `target`). While the glasses watch, the client posts a frame
-every few seconds; `detect` asks the chat model which targets are in view, or, without it,
-matches the glass-memory API's description of the frame. A target in view gives a warning, at
-most once a minute per reminder.
+every few seconds; `detect` asks the chat model which targets are in view. A target in view gives
+a warning, at most once a minute per reminder.
 """
 
+import base64
 import re
 from datetime import UTC, datetime, timedelta
 
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from app.glasses import memory, remote_memory
 from app.llm import Chat, UpstreamError
 from app.models import Reminder
 
@@ -102,51 +101,38 @@ DETECT_PROMPT = (
 )
 
 
-def _singular(word: str) -> str:
-    return word[:-1] if len(word) > 3 and word.endswith("s") else word
-
-
-def mentions(description: str, target: str) -> bool:
-    said = {_singular(w) for w in _words(description).split()}
-    return all(_singular(w) in said for w in target.split())
+def _data_url(jpeg: bytes) -> str:
+    return "data:image/jpeg;base64," + base64.b64encode(jpeg).decode()
 
 
 class Unavailable(Exception):
-    """Neither the chat model nor the glass-memory API can look at the frame."""
+    """The chat model is not set up or cannot be reached, so nothing looks at the frame."""
 
 
 async def detect(jpeg: bytes, targets: list[str], chat: Chat | None) -> tuple[list[int], str]:
     """Indexes into `targets` of the objects in view, and how that was decided."""
     if not targets:
         return [], "no reminders"
-    if chat is not None:
-        items = "\n".join(f"{i}. {t}" for i, t in enumerate(targets, start=1))
-        try:
-            reply = await chat(
-                [
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": DETECT_PROMPT.format(items=items)},
-                            {"type": "image_url", "image_url": {"url": memory.data_url(jpeg)}},
-                        ],
-                    }
-                ],
-                None,
-            )
-            numbers = {int(n) for n in re.findall(r"\d+", reply.get("content") or "")}
-            return [i for i in range(len(targets)) if i + 1 in numbers], "chat model"
-        except UpstreamError:
-            if not remote_memory.configured():
-                raise Unavailable("the chat model is unreachable") from None
-    if remote_memory.configured():
-        try:
-            description = await remote_memory.describe(jpeg, "watch.jpg")
-        except remote_memory.Unavailable as error:
-            raise Unavailable(str(error)) from error
-        found = [i for i, t in enumerate(targets) if mentions(description, t)]
-        return found, f"memory API: “{description}”"
-    raise Unavailable("no vision model is set up (LLM_URL or MEMORY_API_URL)")
+    if chat is None:
+        raise Unavailable("no vision model is set up (LLM_URL)")
+    items = "\n".join(f"{i}. {t}" for i, t in enumerate(targets, start=1))
+    try:
+        reply = await chat(
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": DETECT_PROMPT.format(items=items)},
+                        {"type": "image_url", "image_url": {"url": _data_url(jpeg)}},
+                    ],
+                }
+            ],
+            None,
+        )
+    except UpstreamError:
+        raise Unavailable("the chat model is unreachable") from None
+    numbers = {int(n) for n in re.findall(r"\d+", reply.get("content") or "")}
+    return [i for i in range(len(targets)) if i + 1 in numbers], "chat model"
 
 
 def due(reminder: Reminder, now: datetime) -> bool:

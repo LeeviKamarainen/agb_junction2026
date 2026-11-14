@@ -9,7 +9,7 @@ only: their captions are what the embedding model and Gemma see.
 
 import logging
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta, timezone
+from datetime import UTC, datetime
 
 from sqlmodel import col, select
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -17,24 +17,23 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from app import vectors
 from app.llm import Embedder
 from app.models import Memory
-from app.search import DEMO_OWNER, TABLE, add_memory
+from app.search import DEMO_OWNER, LOCAL_TIMEZONE, TABLE, add_memory
 
 log = logging.getLogger(__name__)
 
 COLLECTION = "demo"
 DAY = "2026-11-14"
-ZONE = timezone(timedelta(hours=2))  # Espoo in November (EET)
 
 
 @dataclass(frozen=True)
 class Moment:
-    time: str  # HH:MM on DAY, local time
+    time: str  # HH:MM on DAY, the wearer's local time, as the chat model reads and writes times
     place: str  # a short label for the timeline
     text: str  # what the glasses saw: the memory's caption, which is embedded and searched
 
     @property
     def at(self) -> datetime:
-        return datetime.fromisoformat(f"{DAY}T{self.time}:00").replace(tzinfo=ZONE)
+        return datetime.fromisoformat(f"{DAY}T{self.time}:00").replace(tzinfo=LOCAL_TIMEZONE)
 
 
 # Keep these in time order; the timeline and the tests rely on it.
@@ -171,7 +170,8 @@ async def load_demo_memories(session: AsyncSession, embed: Embedder) -> bool:
     if await is_loaded(session):
         return False
     moments = timeline()
-    embeddings = await embed([moment.text for moment in moments])  # before deleting anything
+    # Before deleting anything. As documents: captions are what searches find, like notes.
+    embeddings = await embed([moment.text for moment in moments], input_type="document")
     for memory in await _stored(session):
         assert memory.id is not None
         await vectors.delete(await session.connection(), TABLE, memory.id)

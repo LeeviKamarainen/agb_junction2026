@@ -7,6 +7,9 @@ then answers. On the last round the tool is withheld, so it has to answer.
 run() yields a Step for everything that happens, so the page can show the process as it goes;
 answer() collects them into one Answer.
 
+The model is also told what the user's glasses are watching out for (their goals,
+app/glasses/triggers.py) and gets a second tool, stop_watching, to remove one when they ask.
+
 The server must have tool calling on: for vLLM, `--enable-auto-tool-choice` and the tool call
 parser that matches the model (memory/docs/backend-requirements.md).
 """
@@ -22,9 +25,18 @@ from pydantic import BaseModel, Field, ValidationError
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app import media
+from app.glasses import triggers
 from app.llm import Chat, Embedder
-from app.models import Memory
-from app.search import VECTOR_SEARCH_TOOL, SearchResult, VectorSearchArgs, for_model, vector_search
+from app.models import Goal, Memory
+from app.search import (
+    LOCAL_TIMEZONE,
+    VECTOR_SEARCH_TOOL,
+    SearchResult,
+    VectorSearchArgs,
+    for_model,
+    local,
+    vector_search,
+)
 
 MAX_ROUNDS = 4  # model calls per question, the last one without the tool
 MAX_IMAGES = 16  # stills shown to the model per question; each costs a few hundred tokens
@@ -41,7 +53,35 @@ question, search again with other wording or a wider timespan.
 Answer from the memories only, briefly, and say when you saw it. If nothing relevant was found, \
 say so instead of guessing.
 
-The current time is {now} (UTC). Write times in tool calls as ISO 8601 in UTC."""
+The current time is {now}, the user's local time ({zone}). Every time you read or write is \
+local time: write times in tool calls as ISO 8601 with the offset, like the current \
+time.{watching}"""
+
+WATCHING = """
+
+The user's glasses are also watching out for these, because the user asked for them:
+{goals}
+When the user tells you to stop watching for one of them, or that they no longer need it, do not \
+search: call stop_watching with that goal's number, then confirm in one short sentence. Never \
+stop one they did not ask you to stop."""
+
+STOP_WATCHING_TOOL: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "stop_watching",
+        "description": (
+            "Stop the user's glasses watching out for one of the things the user asked for: the "
+            "goal is removed with all its triggers. Call it only when the user asks you to."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "goal_id": {"type": "integer", "description": "The goal's number, as listed."}
+            },
+            "required": ["goal_id"],
+        },
+    },
+}
 
 
 class AskRequest(BaseModel):
@@ -62,7 +102,9 @@ class Step(BaseModel):
     ]
     round: int  # which model call it belongs to, from 1
     elapsed_ms: int  # since the question arrived
-    content: str | None = None  # model_text, answer: what the model wrote; *error: what failed
+    # model_text, answer: what the model wrote; *error: what failed; tool_result of
+    # stop_watching: what was removed
+    content: str | None = None
     tools_offered: bool | None = None  # model_call: false on the last round, which must answer
     images_sent: int | None = None  # model_call: stills attached to this call
     call_id: str | None = None  # tool_*: which call it belongs to
@@ -88,6 +130,18 @@ def _raw_arguments(call: dict[str, Any]) -> Any:
     return raw
 
 
+async def _own_goal(session: AsyncSession, arguments: Any, owner_id: int | None) -> Goal | None:
+    """The goal a stop_watching call names, when it is the asking account's own."""
+    try:
+        goal_id = int(arguments["goal_id"])
+    except (KeyError, TypeError, ValueError, OverflowError):
+        return None
+    if not 0 < goal_id < 2**63:  # what the database can hold
+        return None
+    goal = await session.get(Goal, goal_id)
+    return goal if goal is not None and goal.owner_id == owner_id else None
+
+
 def error_line(message: str) -> str:
     """The last line of a stream that failed: a model server is down, for example."""
     return Step(type="error", round=0, elapsed_ms=0, content=message).model_dump_json() + "\n"
@@ -101,22 +155,33 @@ async def run(
     owners: list[int] | None,
     now: datetime | None = None,
     collections: list[str] | None = None,
+    owner_id: int | None = None,
 ) -> AsyncIterator[Step]:
     """Answer `question`, yielding each step; the last one is the answer.
 
     `owners` is whose memories the model may reach (app.auth.Viewer.owners; None for all): every
     vector_search it makes is limited to them, and only their stills are attached. With
-    `collections`, every search is limited to them too, whatever the model asks for.
+    `collections`, every search is limited to them too, whatever the model asks for. `owner_id`
+    is the account asking: the model is told that account's goals and may remove one of them.
 
     Raises UpstreamError when a model server fails.
     """
     started = time.monotonic()
     now = now or datetime.now(UTC)
+    watched = await triggers.of(session, owner_id) if owner_id is not None else []
+    watching = WATCHING.format(goals="\n".join(f"- goal {g.id}: “{g.text}”" for g in watched))
+    tools = [VECTOR_SEARCH_TOOL, STOP_WATCHING_TOOL] if watched else [VECTOR_SEARCH_TOOL]
     messages: list[dict[str, Any]] = [
-        {"role": "system", "content": SYSTEM.format(now=now.isoformat(timespec="seconds"))},
+        {
+            "role": "system",
+            "content": SYSTEM.format(
+                now=local(now), zone=LOCAL_TIMEZONE.key, watching=watching if watched else ""
+            ),
+        },
         {"role": "user", "content": question},
     ]
     shown: set[int] = set()
+    stopped: set[str] = set()  # the goals stop_watching removed during this answer
     images_pending = 0
 
     def step(type, round, **fields) -> Step:
@@ -126,7 +191,7 @@ async def run(
     for round in range(1, MAX_ROUNDS + 1):
         last = round == MAX_ROUNDS
         yield step("model_call", round, tools_offered=not last, images_sent=images_pending)
-        message = await chat(messages, None if last else [VECTOR_SEARCH_TOOL])
+        message = await chat(messages, None if last else tools)
         calls = message.get("tool_calls") or []
         text = (message.get("content") or "").strip()
         if not calls or last:
@@ -141,7 +206,24 @@ async def run(
             call_id, name = call.get("id", ""), call["function"]["name"]
             arguments = _raw_arguments(call)
             yield step("tool_call", round, call_id=call_id, name=name, arguments=arguments)
-            if name != VECTOR_SEARCH_TOOL["function"]["name"]:
+            if name == STOP_WATCHING_TOOL["function"]["name"] and watched:
+                goal = await _own_goal(session, arguments, owner_id)
+                again = isinstance(arguments, dict) and str(arguments.get("goal_id")) in stopped
+                if goal is None and again:
+                    # The list in the prompt is from before this answer began.
+                    content = json.dumps({"already_stopped": True})
+                    yield step("tool_result", round, call_id=call_id, content="Already stopped")
+                elif goal is None:
+                    error = "No such goal of this user; use a goal number from the list"
+                    content = json.dumps({"error": error})
+                    yield step("tool_error", round, call_id=call_id, content=error)
+                else:
+                    stopped.add(str(goal.id))
+                    await triggers.remove(session, goal)
+                    content = json.dumps({"stopped_watching": goal.text})
+                    done = f"Stopped watching: {goal.text}"
+                    yield step("tool_result", round, call_id=call_id, content=done)
+            elif name != VECTOR_SEARCH_TOOL["function"]["name"]:
                 error = f"No tool named {name}"
                 content = json.dumps({"error": error})
                 yield step("tool_error", round, call_id=call_id, content=error)
@@ -173,7 +255,7 @@ async def run(
                     continue
                 if owners is not None and memory.owner_id not in owners:
                     continue  # never happens through vector_search; checked again all the same
-                seen = result.created_at.isoformat(timespec="seconds")
+                seen = local(result.created_at)
                 parts.append({"type": "text", "text": f"Memory {result.id}, seen at {seen}:"})
                 url = await anyio.to_thread.run_sync(media.data_url, memory.image_file)
                 parts.append({"type": "image_url", "image_url": {"url": url}})
@@ -189,8 +271,11 @@ async def answer(
     owners: list[int] | None,
     now: datetime | None = None,
     collections: list[str] | None = None,
+    owner_id: int | None = None,
 ) -> Answer:
-    steps = [s async for s in run(session, question, chat, embed, owners, now, collections)]
+    steps = [
+        s async for s in run(session, question, chat, embed, owners, now, collections, owner_id)
+    ]
     searches: list[VectorSearchArgs] = []
     sources: dict[int, SearchResult] = {}
     for step in steps:

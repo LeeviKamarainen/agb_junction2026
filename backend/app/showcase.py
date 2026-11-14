@@ -7,6 +7,7 @@ from pathlib import Path
 
 from PIL import Image, ImageOps, UnidentifiedImageError
 
+from app import faces
 from app.settings import get_settings
 
 MAX_UPLOAD = 200 * 1024 * 1024
@@ -34,7 +35,7 @@ def save(data: bytes, kind: str) -> tuple[str, str]:
     if len(data) > MAX_IMAGE:
         raise ValueError("Each image must be at most 15 MB")
     try:
-        with Image.open(io.BytesIO(data)) as original:
+        with Image.open(io.BytesIO(faces.anonymise(data))) as original:
             image = ImageOps.exif_transpose(original).convert("RGB")
             image.thumbnail((1600, 1600))
             name = f"{uuid.uuid4().hex}.jpg"

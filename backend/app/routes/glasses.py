@@ -1,39 +1,32 @@
 """The glasses' API: every response is a `GlassesReply` the client draws and speaks.
 
 Clients: the browser harness (frontend /glasses) and, later, glasses-android. The live traffic
-(commands, photos, watched frames, pushed warnings) also runs over one WebSocket per client at
-/ws (app/glasses/channel.py); both call the same code in app/glasses/actions.py.
+(commands, frames, pushed warnings) also runs over one WebSocket per client at /ws
+(app/glasses/channel.py); both call the same code in app/glasses/actions.py.
 """
 
 from datetime import datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, WebSocket
-from fastapi.responses import FileResponse, Response
 from sqlmodel import col, select
 
-from app.auth import ViewerDep
+from app.auth import Viewer, ViewerDep
 from app.db import SessionDep
-from app.glasses import (
-    actions,
-    channel,
-    frames,
-    photos,
-    reminders,
-    remote_memory,
-    screens,
-    triggers,
-)
+from app.glasses import actions, channel, frames, reminders, screens, triggers
 from app.glasses.actions import Command, WatchResult
 from app.glasses.layout import GlassesReply
 from app.llm import Chat, Embedder, UpstreamError, get_chat, get_embedder
 from app.models import (
+    Goal,
+    GoalCreate,
+    GoalPublic,
+    GoalUpdate,
     Reminder,
     ReminderCreate,
     ReminderPublic,
     Trigger,
-    TriggerCreate,
-    TriggerGoal,
+    TriggerDraft,
     TriggerPublic,
 )
 
@@ -78,58 +71,6 @@ async def command(
     return await actions.command(session, viewer, body, chat, embed)
 
 
-@router.post(
-    "/photos",
-    response_model=GlassesReply,
-    status_code=201,
-    description=(
-        "Saves the still. With a chat model the glasses describe it; with an embedding model it "
-        "also becomes an image memory, captioned with that description."
-    ),
-)
-async def upload_photo(
-    photo: Annotated[UploadFile, File(description="One JPEG still")],
-    session: SessionDep,
-    viewer: ViewerDep,
-    chat: ChatDep,
-    embed: EmbedderDep,
-):
-    data = await photo.read(photos.MAX_BYTES + 1)
-    return await actions.photo(session, viewer, data, chat, embed)
-
-
-@router.get(
-    "/photos/{name}",
-    response_class=FileResponse,
-    responses={200: {"content": {"image/jpeg": {}}}, 404: {}},
-)
-async def get_photo(name: str, viewer: ViewerDep):
-    """Your own photos only (the admin's: everyone's); 404 for anyone else's."""
-    file = photos.path(name, viewer.owners)
-    if file is None:
-        raise HTTPException(404, "no such photo")
-    return FileResponse(file, media_type="image/jpeg")
-
-
-@router.get(
-    "/memory/{batch}/keyframes/{name}",
-    response_class=Response,
-    responses={200: {"content": {"image/jpeg": {}}}, 404: {}, 502: {}},
-)
-async def get_memory_keyframe(batch: str, name: str, viewer: ViewerDep):
-    """A still from the glass-memory API, fetched with the backend's token: only from your own
-    batch (the admin: any)."""
-    if not viewer.is_admin and batch != remote_memory.current_batch(viewer.id):
-        raise HTTPException(404, "no such keyframe")
-    try:
-        data = await remote_memory.keyframe(batch, name)
-    except remote_memory.Unavailable:
-        raise HTTPException(502, "the memory API is unreachable") from None
-    if data is None:
-        raise HTTPException(404, "no such keyframe")
-    return Response(data, media_type="image/jpeg")
-
-
 @router.get("/reminders", response_model=list[ReminderPublic])
 async def list_reminders(session: SessionDep, viewer: ViewerDep):
     """Your reminders; the admin's list holds everyone's."""
@@ -171,8 +112,9 @@ async def trigger_reminder(reminder_id: int, session: SessionDep, viewer: Viewer
     "/watch",
     response_model=WatchResult,
     description=(
-        "One frame from the camera while the glasses watch for reminders. Not stored. A target in "
-        "view gives a warning, at most once a minute per reminder."
+        "One frame from the camera while the glasses watch for reminders, with every face in it "
+        "filled before the chat model sees it. Not stored. A target in view gives a warning, at "
+        "most once a minute per reminder."
     ),
 )
 async def watch(
@@ -181,7 +123,7 @@ async def watch(
     viewer: ViewerDep,
     chat: ChatDep,
 ):
-    return await actions.watch(session, viewer, await photo.read(photos.MAX_BYTES + 1), chat)
+    return await actions.watch(session, viewer, await photo.read(actions.MAX_FRAME + 1), chat)
 
 
 @router.post("/frames", response_model=frames.FrameReply)
@@ -195,8 +137,8 @@ async def upload_frame(
     stream_id: Annotated[str, Form(max_length=100)] = "",
     seen_at: Annotated[datetime | None, Form()] = None,
 ):
-    """One frame from the glasses: embedded, stored as a memory in the glasses collection, and
-    checked against the triggers.
+    """One frame from the glasses, with every face in it filled first: embedded, stored as a
+    memory in the glasses collection, and checked against the triggers.
 
     `source` is "stream" for frames of a running stream (twice a second; a frame much like the
     last one stored from the same `stream_id` is not stored again) or "single" for a photo the
@@ -215,48 +157,64 @@ async def upload_frame(
     )
 
 
+async def _own_goal(session: SessionDep, viewer: Viewer, id: int) -> Goal:
+    goal = await session.get(Goal, id)
+    if goal is None or goal.owner_id != viewer.id:  # the admin's own only, too
+        raise HTTPException(404, "No such goal")
+    return goal
+
+
+@router.get("/goals", response_model=list[GoalPublic])
+async def list_goals(session: SessionDep, viewer: ViewerDep):
+    """What you asked the glasses to watch out for, each with its triggers. Yours only."""
+    return await triggers.of(session, viewer.id)
+
+
+@router.post("/goals", response_model=GoalPublic, status_code=201)
+async def create_goal(body: GoalCreate, session: SessionDep, viewer: ViewerDep, chat: ChatDep):
+    """Say what the glasses should watch out for ("tell me when my bus comes"): Gemma writes the
+    triggers, and the goal is saved with them, enabled. With `triggers` they are used as given.
+    503 without a chat model; 502 when it fails or its answer holds no trigger."""
+    drafts = body.triggers
+    if drafts is None:
+        if chat is None:
+            raise HTTPException(503, "No chat model configured: set LLM_URL (and LLM_API_KEY)")
+        try:
+            drafts = await triggers.write(chat, body.text)
+        except (UpstreamError, ValueError) as error:
+            raise HTTPException(502, str(error)) from error
+    goal = await triggers.add(session, viewer.id, body.text, drafts)
+    return next(g for g in await triggers.of(session, viewer.id) if g.id == goal.id)
+
+
+@router.put("/goals/{id}", response_model=GoalPublic)
+async def update_goal(id: int, body: GoalUpdate, session: SessionDep, viewer: ViewerDep):
+    """Switch a goal, and so all its triggers, on or off."""
+    goal = await _own_goal(session, viewer, id)
+    goal.enabled = body.enabled
+    session.add(goal)
+    await session.commit()
+    return next(g for g in await triggers.of(session, viewer.id) if g.id == id)
+
+
+@router.delete("/goals/{id}", status_code=204)
+async def delete_goal(id: int, session: SessionDep, viewer: ViewerDep):
+    """Remove a goal with all its triggers."""
+    await triggers.remove(session, await _own_goal(session, viewer, id))
+
+
 @router.get("/triggers", response_model=list[TriggerPublic])
 async def list_triggers(session: SessionDep, viewer: ViewerDep):
-    query = select(Trigger).order_by(col(Trigger.id))
-    if viewer.owners is not None:
-        query = query.where(col(Trigger.owner_id).in_(viewer.owners))
+    """Every trigger of your goals, with the level measured for it."""
+    query = select(Trigger).where(Trigger.owner_id == viewer.id).order_by(col(Trigger.id))
     return (await session.exec(query)).all()
 
 
-@router.post("/triggers", response_model=TriggerPublic, status_code=201)
-async def create_trigger(body: TriggerCreate, session: SessionDep, viewer: ViewerDep):
-    trigger = Trigger.model_validate(body, update={"owner_id": viewer.id})
-    session.add(trigger)
-    await session.commit()
-    await session.refresh(trigger)
-    return trigger
-
-
-@router.post("/triggers/generate", response_model=list[TriggerPublic], status_code=201)
-async def generate_triggers(
-    body: TriggerGoal, session: SessionDep, viewer: ViewerDep, chat: ChatDep
-):
-    """Gemma writes the triggers for what the wearer wants watched ("tell me when my bus comes")
-    and they are saved, enabled. 503 without a chat model; 502 when it fails or its answer holds
-    no trigger."""
-    if chat is None:
-        raise HTTPException(503, "No chat model configured: set LLM_URL (and LLM_API_KEY)")
-    try:
-        written = await triggers.write(chat, body.goal)
-    except (UpstreamError, ValueError) as error:
-        raise HTTPException(502, str(error)) from error
-    made = [Trigger.model_validate(trigger, update={"owner_id": viewer.id}) for trigger in written]
-    session.add_all(made)
-    await session.commit()
-    for trigger in made:
-        await session.refresh(trigger)
-    return made
-
-
 @router.put("/triggers/{id}", response_model=TriggerPublic)
-async def update_trigger(id: int, body: TriggerCreate, session: SessionDep, viewer: ViewerDep):
+async def update_trigger(id: int, body: TriggerDraft, session: SessionDep, viewer: ViewerDep):
+    """Reword or retune one trigger of a goal."""
     trigger = await session.get(Trigger, id)
-    if trigger is None or not viewer.can_change(trigger.owner_id):
+    if trigger is None or trigger.owner_id != viewer.id:
         raise HTTPException(404, "No such trigger")
     if body.watch_for != trigger.watch_for:
         await frames.forget_trigger_vector(session, id)
@@ -271,9 +229,16 @@ async def update_trigger(id: int, body: TriggerCreate, session: SessionDep, view
 
 @router.delete("/triggers/{id}", status_code=204)
 async def delete_trigger(id: int, session: SessionDep, viewer: ViewerDep):
+    """Drop one trigger from its goal; a goal left with none goes with it."""
     trigger = await session.get(Trigger, id)
-    if trigger is None or not viewer.can_change(trigger.owner_id):
+    if trigger is None or trigger.owner_id != viewer.id:
         raise HTTPException(404, "No such trigger")
+    goal = await session.get(Goal, trigger.goal_id)
+    others = await session.exec(
+        select(Trigger).where(Trigger.goal_id == trigger.goal_id, Trigger.id != id)
+    )
     await frames.forget_trigger_vector(session, id)
     await session.delete(trigger)
+    if goal is not None and others.first() is None:
+        await session.delete(goal)
     await session.commit()

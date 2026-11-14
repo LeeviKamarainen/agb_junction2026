@@ -58,15 +58,14 @@ FlexBox.model_rebuild()
 class GlassesReply(BaseModel):
     """What a client does after any request: draw `screen`, speak `speech`, run `client_action`."""
 
-    # What the backend understood, e.g. "take_photo"; shown in the harness log.
+    # What the backend understood, e.g. "ask_memory"; shown in the harness log.
     intent: str
     screen: FlexBox
     # Said through the glasses' speakers when set.
     speech: str | None = None
-    # Hardware the client should use next. "capture_photo": take a still and POST it to
-    # /api/glasses/photos. "listen_question": open the microphone and send what it hears to
-    # /api/glasses/command as `{"question": ...}`.
-    client_action: Literal["capture_photo", "listen_question"] | None = None
+    # Hardware the client should use next. "listen_question": open the microphone and send what
+    # it hears to /api/glasses/command as `{"question": ...}`.
+    client_action: Literal["listen_question"] | None = None
     # Seconds after which the client goes back to the empty screen (GET /api/glasses/home). None:
     # keep this screen until the next reply.
     dismiss_after_s: float | None = None

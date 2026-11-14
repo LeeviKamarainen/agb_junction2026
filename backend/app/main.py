@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import APIRouter, FastAPI
 
-from app import auth, demo
+from app import auth, demo, faces
 from app.db import get_engine, init_db, new_session
 from app.llm import get_embedder
 from app.routes import auth as auth_routes
@@ -19,6 +19,7 @@ DEMO_RETRY_S = 60
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    faces.load()  # no face detector, no start: no image may be kept with its faces
     await init_db()
     async with new_session() as session:
         await auth.ensure_admin(session)

@@ -5,16 +5,23 @@ the memory map and for Gemma. Contracts, rules and pointers only, no history.
 
 ## Contracts
 
-- `embed.build(video, out_dir)`: writes `keyframes/*.jpg` (one upright still a second),
-  `embeddings.npy` (one L2-normalised float32 row per keyframe) and `index.parquet` (`t_s`,
+- `faces.anonymise(jpeg)`: the image with every face found filled, upright, as a JPEG without
+  metadata; `ValueError` for bytes that are not an image. Every still that `/batches` or
+  `embed.build` stores, and every image `/v1/embeddings` embeds, goes through it first;
+  `/v1/chat/completions` passes images to Gemma as they came. The same file as
+  `backend/app/faces.py`, beside the same model; a backend test fails when they differ. Why and
+  how well it works: `docs/adr/0002-anonymise-faces.md` at the repo root.
+- `embed.build(video, out_dir)`: writes `keyframes/*.jpg` (one upright still a second, faces
+  filled), `embeddings.npy` (one L2-normalised float32 row per keyframe) and `index.parquet` (`t_s`,
   `keyframe`, `x`, `y`), all in the same row order. `x` and `y` are the memory's place on the
   map (`embed.layout`: UMAP on cosine distance, a straight line for fewer than five memories).
   `embed.load(out_dir)` reads them back with full keyframe paths. CLI:
   `python -m glass_memory.embed VIDEO`.
 - `embed.store(frames, out_dir)`: the same files for stills already in `out_dir/keyframes/`,
   given as `(t_s, file name)` pairs in time order. `build` is `keyframes` then `store`.
-- `embed.embed_text(question)`: one vector in the same space, so `embeddings @ vector` is the
-  cosine similarity.
+- `embed.embed_text(text, input_type="query")`: one vector in the same space, so
+  `embeddings @ vector` is the cosine similarity. A question takes the model's `SearchQuery`
+  prompt; `input_type="document"` gives a text to be found (a stored note) its `Document` prompt.
 - `ask` has two backends for Gemma (`GEMMA_MODEL`, by default `google/gemma-4-31B-it`), chosen
   by `GEMMA_URL`; `ask.served()` is that address or None. Unset: `ask.gemma()` loads the model
   and its processor into this process once (transformers) and keeps them on the GPU. Set: an
@@ -59,9 +66,10 @@ Gemma is loaded when the app starts, before it serves a request, unless `GEMMA_U
   Gemma's image vectors beside the embedding map, with the same colours and rings on both.
 - `POST /batches`, multipart: `frames` = JPEG files in time order (repeated field, 1000 at
   most), `every_s` = seconds between them (default 1.0); frame i gets `t_s = i * every_s`.
-  Answers `{"batch", "memories", "summary"}`. When Gemma fails the batch is stored all the same
-  and `summary` is empty. 415 for a frame that is not a JPEG, 400 above 1000 frames, 422 for no
-  frames or an `every_s` that is not a positive finite number.
+  Every face in a frame is filled (`faces.anonymise`) before the frame is stored, embedded or
+  summarised. Answers `{"batch", "memories", "summary"}`. When Gemma fails the batch is stored all
+  the same and `summary` is empty. 415 for a frame that is not a JPEG or cannot be read, 400
+  above 1000 frames, 422 for no frames or an `every_s` that is not a positive finite number.
 - `GET /batches`: `[{"batch", "created", "memories", "summary"}]`, newest first; `created` is
   ISO 8601.
 - `GET /batches/{batch}`: one such object. 404 for an unknown batch, here and below.
@@ -75,12 +83,15 @@ Gemma is loaded when the app starts, before it serves a request, unless `GEMMA_U
   question, Gemma answers from their stills, or with `vectors` from its stored image vectors of
   them, and `keyframes` holds their bare file names; they are given and named in time order.
   400 for `vectors` when `GEMMA_URL` is set.
-- `POST /v1/embeddings`, OpenAI-style JSON `{"model": "google/embeddinggemma-2", "input": str | [str]}`
-  (1 to 16 strings): `{"object": "list", "data": [{"object", "index", "embedding"}], "model"}`,
+- `POST /v1/embeddings`, OpenAI-style JSON `{"model": "google/embeddinggemma-2", "input": str | [str],
+  "input_type": "query" | "document" = "query"}` (1 to 16 strings):
+  `{"object": "list", "data": [{"object", "index", "embedding"}], "model"}`,
   one 768-wide vector per input, in order, for the app backend's search over the same stills.
-  An input that starts with `data:image/` is a base64 data URL of an image and gets its
-  `embed.embed_images` vector; every other input gets its `embed.embed_text` vector. 400 for
-  another `model` or an image that cannot be read, 422 for no input.
+  An input that starts with `data:image/` is a base64 data URL of an image and gets the
+  `embed.embed_images` vector of it with its faces filled (`faces.anonymise`); every other input
+  gets its `embed.embed_text` vector for `input_type`: a search query, or a document to be found
+  (the backend's stored notes). 400 for another `model` or an image that cannot be read, 422 for
+  no input or another `input_type`.
 - `POST /v1/chat/completions`, an OpenAI-style chat request, tools and all: passed as it is to
   vLLM at `GEMMA_URL` with `GEMMA_API_KEY` (`ask.forward_chat`), so services that cannot reach
   port 8000 use the shared Gemma with this API's token. vLLM's status and JSON come back

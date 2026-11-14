@@ -14,6 +14,7 @@ import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api/browser";
 
 import { CollectionFilter } from "./collections";
+import { decode, pca } from "./pca";
 import {
   type CollectionCount,
   errorText,
@@ -28,7 +29,8 @@ import {
 type ColorBy = "time" | "collection" | "kind";
 type ViewMode = "2d" | "3d" | "both";
 type Point = { memory: MemoryVector; pos: [number, number, number] };
-type Projection = { points: Point[]; explained: number[] };
+type Projection = { points: Point[]; explained: number[]; axes: Float64Array[] };
+const EMPTY: Projection = { points: [], explained: [], axes: [] };
 
 // One hue from dark to light: early memories are dark, late ones light (as in memory/'s map).
 const RAMP = [
@@ -58,77 +60,19 @@ const FOUND = "#ff794f";
 const RADIUS = 5; // of a point, in CSS pixels
 const REACH = 32; // how far from a point the pointer may be and still pick it
 const TAP = 6; // pixels a pointer may move and still count as a tap, not a drag
+// The share of memories two maps must have in common for the second to start from the first's
+// axes. Measured on 2000 synthetic embeddings: refits with up to 10% of them replaced held 99.5%
+// or more of the variance a fit from scratch holds. Axes fitted on a few memories are no start
+// for many more.
+const MOSTLY_SAME = 0.9;
 
-function decode(base64: string): Float32Array {
-  const binary = atob(base64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-  return new Float32Array(bytes.buffer); // little-endian, as every browser's platform is
-}
-
-function dot(a: Float64Array, b: Float64Array): number {
-  let sum = 0;
-  for (let j = 0; j < a.length; j++) sum += a[j] * b[j];
-  return sum;
-}
-
-/**
- * The rows' coordinates on their first `k` principal components, by power iteration on the
- * centred rows (never forming the 768 × 768 covariance), and the share of the variance each
- * component explains. Deterministic: the same vectors always give the same map.
- */
-function pca(
-  rows: Float32Array[],
-  k = 3,
-): { coords: number[][]; explained: number[] } {
-  const n = rows.length;
-  const d = rows[0]?.length ?? 0;
-  const mean = new Float64Array(d);
-  for (const row of rows) for (let j = 0; j < d; j++) mean[j] += row[j] / n;
-  const centred = rows.map((row) => {
-    const x = new Float64Array(d);
-    for (let j = 0; j < d; j++) x[j] = row[j] - mean[j];
-    return x;
-  });
-  const total = centred.reduce((sum, x) => sum + dot(x, x), 0);
-
-  let seed = 7;
-  const random = () => (seed = (seed * 16807) % 2147483647) / 2147483647 - 0.5;
-  const components: Float64Array[] = [];
-  const explained: number[] = [];
-  for (let c = 0; c < k; c++) {
-    let v = new Float64Array(d).map(random);
-    let eigenvalue = 0;
-    for (let iteration = 0; iteration < 40; iteration++) {
-      const w = new Float64Array(d);
-      for (const x of centred) {
-        const s = dot(x, v);
-        for (let j = 0; j < d; j++) w[j] += s * x[j];
-      }
-      for (const u of components) {
-        const s = dot(w, u);
-        for (let j = 0; j < d; j++) w[j] -= s * u[j];
-      }
-      const norm = Math.sqrt(dot(w, w));
-      if (norm === 0) break;
-      for (let j = 0; j < d; j++) w[j] /= norm;
-      const settled = 1 - Math.abs(dot(w, v)) < 1e-8;
-      v = w;
-      eigenvalue = norm;
-      if (settled) break;
-    }
-    components.push(v);
-    explained.push(total > 0 ? eigenvalue / total : 0);
-  }
-  return {
-    coords: centred.map((x) => components.map((u) => dot(x, u))),
-    explained,
-  };
-}
-
-function project(memories: MemoryVector[]): Projection {
-  if (memories.length === 0) return { points: [], explained: [] };
-  const { coords, explained } = pca(memories.map((m) => decode(m.embedding)));
+/** The memories on the map; `start` is the axes of an earlier map of mostly the same ones. */
+function project(memories: MemoryVector[], start: Float64Array[]): Projection {
+  if (memories.length === 0) return EMPTY;
+  const { coords, explained, axes } = pca(
+    memories.map((m) => decode(m.embedding)),
+    start,
+  );
   // Scale into the unit ball, keeping the proportions between the axes.
   const radius = Math.max(1e-9, ...coords.map((c) => Math.hypot(...c)));
   return {
@@ -137,6 +81,7 @@ function project(memories: MemoryVector[]): Projection {
       pos: [0, 1, 2].map((a) => (coords[i][a] ?? 0) / radius) as Point["pos"],
     })),
     explained,
+    axes,
   };
 }
 
@@ -483,7 +428,10 @@ export function MemoryMap({
   found: number[];
 }) {
   const [shown, setShown] = useState<string[]>([]);
-  const [memories, setMemories] = useState<MemoryVector[] | null>(null);
+  const [projection, setProjection] = useState<Projection | null>(null);
+  // The last map's memories and axes. A map of mostly the same memories starts from those axes
+  // (pca.ts), so a refresh while streaming costs about a third of a fit from scratch.
+  const fitted = useRef<{ ids: Set<number>; axes: Float64Array[] } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [reload, setReload] = useState(0);
@@ -513,7 +461,13 @@ export function MemoryMap({
         if (!current) return;
         if (problem || !data)
           throw new Error(errorText(problem, "Could not load the vectors"));
-        setMemories(data);
+        const last = fitted.current;
+        const kept = last ? data.filter((m) => last.ids.has(m.id)).length : 0;
+        const mostlySame =
+          last && kept >= MOSTLY_SAME * Math.max(data.length, last.ids.size);
+        const next = project(data, mostlySame ? last.axes : []);
+        fitted.current = { ids: new Set(data.map((m) => m.id)), axes: next.axes };
+        setProjection(next);
         setError(null);
       })
       .catch((problem: unknown) => {
@@ -533,8 +487,7 @@ export function MemoryMap({
     };
   }, [activeKey, version, reload]);
 
-  const projection = useMemo(() => project(memories ?? []), [memories]);
-  const { points, explained } = projection;
+  const { points, explained } = projection ?? EMPTY;
 
   // Each collection keeps its colour, whatever the counts or the filter: by name, alphabetically.
   const collectionColors = useMemo(() => {
@@ -623,7 +576,7 @@ export function MemoryMap({
           <h2 id="map-title" className="font-semibold">
             Memory map{" "}
             <span className="text-sm font-normal text-muted-foreground">
-              {memories ? `${points.length} vectors` : ""}
+              {projection ? `${points.length} vectors` : ""}
             </span>
           </h2>
           <p className="text-xs text-muted-foreground">
@@ -684,7 +637,7 @@ export function MemoryMap({
           {error}
         </p>
       )}
-      {memories && points.length < 2 && !error && (
+      {projection && points.length < 2 && !error && (
         <p className="text-sm text-muted-foreground">
           The map needs at least two memories with embeddings. Add some above.
         </p>
