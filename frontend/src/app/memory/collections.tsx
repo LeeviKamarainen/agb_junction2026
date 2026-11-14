@@ -13,6 +13,13 @@ export function cleanCollection(name: string): string {
 
 export const COLLECTION_PATTERN = "[A-Za-z0-9][A-Za-z0-9_\\-]{0,39}";
 
+/** Why the backend would refuse this collection name, or null when it is fine. */
+export function collectionProblem(name: string): string | null {
+  return new RegExp(`^${COLLECTION_PATTERN}$`).test(cleanCollection(name))
+    ? null
+    : "Use up to 40 letters, digits, _ and -, starting with a letter or digit.";
+}
+
 /** The collections that hold memories, fetched again whenever `version` changes. */
 export function useCollections(version: number): CollectionCount[] {
   const [collections, setCollections] = useState<CollectionCount[]>([]);

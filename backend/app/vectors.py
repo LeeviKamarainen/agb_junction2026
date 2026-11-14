@@ -197,7 +197,7 @@ def stored(
     wanted = None if ids is None else set(ids)
     rows = connection.exec_driver_sql(f"SELECT id, embedding FROM {table}")
     return {
-        id: list(struct.unpack(f"{len(blob) // 4}f", blob))
+        id: list(struct.unpack(f"<{len(blob) // 4}f", blob))
         for id, blob in rows
         if wanted is None or id in wanted
     }

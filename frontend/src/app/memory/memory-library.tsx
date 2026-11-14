@@ -14,7 +14,11 @@ import { type ChangeEvent, useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api/browser";
 
-import { cleanCollection, COLLECTION_PATTERN } from "./collections";
+import {
+  cleanCollection,
+  COLLECTION_PATTERN,
+  collectionProblem,
+} from "./collections";
 import {
   type CollectionCount,
   errorText,
@@ -54,6 +58,7 @@ export function MemoryLibrary({
   const [memories, setMemories] = useState<Memory[] | null>(null);
   // The collection new images and notes go into: "manual" unless set, e.g. "glasses".
   const [collection, setCollection] = useState("manual");
+  const badCollection = collectionProblem(collection);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [pending, setPending] = useState<Pending[]>([]);
   const [uploading, setUploading] = useState(false);
@@ -225,7 +230,9 @@ export function MemoryLibrary({
       </div>
 
       <label className="flex items-center gap-2 text-sm">
-        <span className="shrink-0 text-muted-foreground">Add to collection</span>
+        <span className="shrink-0 text-muted-foreground">
+          Add to collection
+        </span>
         <input
           className={field}
           list="memory-collections"
@@ -245,6 +252,11 @@ export function MemoryLibrary({
             ))}
         </datalist>
       </label>
+      {badCollection && (
+        <p className="-mt-2 text-xs text-destructive" role="alert">
+          {badCollection}
+        </p>
+      )}
 
       {/* Images */}
       <div className="flex flex-col gap-3 rounded-lg border border-dashed border-border p-3">
@@ -333,7 +345,7 @@ export function MemoryLibrary({
             </ul>
             <Button
               onClick={() => void uploadAll()}
-              disabled={uploading || waiting === 0}
+              disabled={uploading || waiting === 0 || badCollection !== null}
             >
               {uploading ? (
                 <LoaderCircle className="animate-spin" aria-hidden="true" />
@@ -382,7 +394,9 @@ export function MemoryLibrary({
           <Button
             type="submit"
             variant="secondary"
-            disabled={noteState.saving || !note.trim()}
+            disabled={
+              noteState.saving || !note.trim() || badCollection !== null
+            }
           >
             {noteState.saving ? "Saving…" : "Add"}
           </Button>

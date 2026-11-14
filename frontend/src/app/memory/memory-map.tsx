@@ -99,7 +99,7 @@ function pca(
   for (let c = 0; c < k; c++) {
     let v = new Float64Array(d).map(random);
     let eigenvalue = 0;
-    for (let iteration = 0; iteration < 80; iteration++) {
+    for (let iteration = 0; iteration < 40; iteration++) {
       const w = new Float64Array(d);
       for (const x of centred) {
         const s = dot(x, v);
@@ -112,7 +112,7 @@ function pca(
       const norm = Math.sqrt(dot(w, w));
       if (norm === 0) break;
       for (let j = 0; j < d; j++) w[j] /= norm;
-      const settled = 1 - Math.abs(dot(w, v)) < 1e-10;
+      const settled = 1 - Math.abs(dot(w, v)) < 1e-8;
       v = w;
       eigenvalue = norm;
       if (settled) break;
@@ -392,6 +392,9 @@ function MapCanvas({
         onPointerDown={down}
         onPointerMove={move}
         onPointerUp={up}
+        onPointerCancel={() => {
+          drag.current = null;
+        }}
         onPointerLeave={(event) => {
           if (!drag.current && event.pointerType === "mouse")
             onPick(null, false);
@@ -486,8 +489,9 @@ export function MemoryMap({
   const [reload, setReload] = useState(0);
   const [mode, setMode] = useState<ViewMode>("both");
   const [colorBy, setColorBy] = useState<ColorBy>("collection");
-  const [hovered, setHovered] = useState<Point | null>(null);
-  const [pinned, setPinned] = useState<Point | null>(null);
+  // Ids, not points: a point that is deleted or filtered out then simply disappears.
+  const [hoveredId, setHoveredId] = useState<number | null>(null);
+  const [pinnedId, setPinnedId] = useState<number | null>(null);
 
   const active = shown.filter((name) =>
     collections.some((c) => c.name === name),
@@ -532,6 +536,12 @@ export function MemoryMap({
   const projection = useMemo(() => project(memories ?? []), [memories]);
   const { points, explained } = projection;
 
+  // Each collection keeps its colour, whatever the counts or the filter: by name, alphabetically.
+  const collectionColors = useMemo(() => {
+    const names = collections.map((c) => c.name).sort();
+    return new Map(names.map((name, i) => [name, PALETTE[i % PALETTE.length]]));
+  }, [collections]);
+
   const colors = useMemo(() => {
     const result = new Map<number, string>();
     if (colorBy === "time") {
@@ -549,23 +559,24 @@ export function MemoryMap({
         );
       }
     } else {
-      const names = collections.map((c) => c.name);
       for (const point of points) {
-        const index = names.indexOf(point.memory.collection);
         result.set(
           point.memory.id,
-          PALETTE[(index < 0 ? names.length : index) % PALETTE.length],
+          collectionColors.get(point.memory.collection) ?? "#b0b3a8",
         );
       }
     }
     return result;
-  }, [points, colorBy, collections]);
+  }, [points, colorBy, collectionColors]);
 
   const foundSet = useMemo(() => new Set(found), [found]);
+  const pinned = points.find((p) => p.memory.id === pinnedId) ?? null;
+  const hovered = points.find((p) => p.memory.id === hoveredId) ?? null;
   const shownPoint = pinned ?? hovered;
   const pick = useCallback((point: Point | null, pin: boolean) => {
-    if (pin) setPinned(point);
-    else setHovered(point);
+    const id = point?.memory.id ?? null;
+    if (pin) setPinnedId(id);
+    else setHoveredId(id);
   }, []);
   const missingFound = found.filter(
     (id) => !points.some((p) => p.memory.id === id),
@@ -591,7 +602,9 @@ export function MemoryMap({
     const entries: [string, string][] =
       colorBy === "kind"
         ? Object.entries(KIND_COLORS)
-        : collections.map((c, i) => [c.name, PALETTE[i % PALETTE.length]]);
+        : [...collectionColors].filter(
+            ([name]) => active.length === 0 || active.includes(name),
+          );
     return entries.map(([name, color]) => (
       <span key={name} className="flex items-center gap-1.5">
         <span className="size-2.5 rounded-full" style={{ background: color }} />
@@ -749,7 +762,7 @@ export function MemoryMap({
                     <Button
                       variant="ghost"
                       size="icon-xs"
-                      onClick={() => setPinned(null)}
+                      onClick={() => setPinnedId(null)}
                       aria-label="Unpin this memory"
                     >
                       <X aria-hidden="true" />

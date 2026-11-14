@@ -49,10 +49,18 @@ def _collection(name: str | None) -> str:
         raise HTTPException(422, str(error)) from error
 
 
+def _stored_name(name: str) -> str:
+    """A collection name as stored, or as given when it is not allowed (it then matches none)."""
+    try:
+        return clean_collection(name)
+    except ValueError:
+        return name
+
+
 def _newest(collections: list[str]):
     """Memories newest first, only in `collections` unless it is empty."""
     query = select(Memory).order_by(col(Memory.created_at).desc(), col(Memory.id).desc())
-    names = [name.strip().lower() for name in collections if name.strip()]
+    names = [_stored_name(name) for name in collections if name.strip()]
     return query.where(col(Memory.collection).in_(names)) if names else query
 
 
