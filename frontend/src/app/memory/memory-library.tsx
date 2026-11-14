@@ -14,7 +14,14 @@ import { type ChangeEvent, useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api/browser";
 
-import { errorText, formatTime, type Memory, toLocalInput } from "./types";
+import { cleanCollection, COLLECTION_PATTERN } from "./collections";
+import {
+  type CollectionCount,
+  errorText,
+  formatTime,
+  type Memory,
+  toLocalInput,
+} from "./types";
 import { WebcamCapture } from "./webcam-capture";
 
 type Pending = {
@@ -33,10 +40,20 @@ const field =
 type LibraryProps = {
   /** Changing it reloads the list, e.g. after the glasses stored a photo. */
   refreshKey?: number;
+  /** The collections that hold memories, offered when choosing one. */
+  collections?: CollectionCount[];
+  /** Called after memories were added or deleted here. */
+  onChange?: () => void;
 };
 
-export function MemoryLibrary({ refreshKey = 0 }: LibraryProps = {}) {
+export function MemoryLibrary({
+  refreshKey = 0,
+  collections = [],
+  onChange,
+}: LibraryProps = {}) {
   const [memories, setMemories] = useState<Memory[] | null>(null);
+  // The collection new images and notes go into: "manual" unless set, e.g. "glasses".
+  const [collection, setCollection] = useState("manual");
   const [loadError, setLoadError] = useState<string | null>(null);
   const [pending, setPending] = useState<Pending[]>([]);
   const [uploading, setUploading] = useState(false);
@@ -110,6 +127,7 @@ export function MemoryLibrary({ refreshKey = 0 }: LibraryProps = {}) {
       const form = new FormData();
       form.append("file", item.file);
       form.append("text", item.caption.trim());
+      form.append("collection", cleanCollection(collection));
       if (item.takenAt) {
         form.append("created_at", new Date(item.takenAt).toISOString());
       }
@@ -138,6 +156,7 @@ export function MemoryLibrary({ refreshKey = 0 }: LibraryProps = {}) {
       }
     }
     setUploading(false);
+    onChange?.();
     setPending((current) => {
       current
         .filter((entry) => entry.status === "done")
@@ -155,6 +174,7 @@ export function MemoryLibrary({ refreshKey = 0 }: LibraryProps = {}) {
         body: {
           text,
           created_at: noteTime ? new Date(noteTime).toISOString() : null,
+          collection: cleanCollection(collection),
         },
       });
       if (error || !data) {
@@ -166,6 +186,7 @@ export function MemoryLibrary({ refreshKey = 0 }: LibraryProps = {}) {
       }
       setNote("");
       setNoteState({ saving: false });
+      onChange?.();
       setMemories((current) =>
         current ? sortNewestFirst([data, ...current]) : current,
       );
@@ -180,6 +201,7 @@ export function MemoryLibrary({ refreshKey = 0 }: LibraryProps = {}) {
     });
     if (response.ok) {
       setMemories((current) => current?.filter((m) => m.id !== id) ?? null);
+      onChange?.();
     }
   }
 
@@ -201,6 +223,28 @@ export function MemoryLibrary({ refreshKey = 0 }: LibraryProps = {}) {
           <RefreshCw aria-hidden="true" /> Reload
         </Button>
       </div>
+
+      <label className="flex items-center gap-2 text-sm">
+        <span className="shrink-0 text-muted-foreground">Add to collection</span>
+        <input
+          className={field}
+          list="memory-collections"
+          value={collection}
+          onChange={(e) => setCollection(e.target.value)}
+          pattern={COLLECTION_PATTERN}
+          maxLength={40}
+          placeholder="manual"
+          title="A keyword grouping memories, e.g. manual or glasses: letters, digits, _ and -"
+          disabled={uploading || noteState.saving}
+        />
+        <datalist id="memory-collections">
+          {["manual", "glasses", ...collections.map((c) => c.name)]
+            .filter((name, index, all) => all.indexOf(name) === index)
+            .map((name) => (
+              <option key={name} value={name} />
+            ))}
+        </datalist>
+      </label>
 
       {/* Images */}
       <div className="flex flex-col gap-3 rounded-lg border border-dashed border-border p-3">
@@ -386,7 +430,8 @@ export function MemoryLibrary({ refreshKey = 0 }: LibraryProps = {}) {
               )}
               <div className="flex flex-col gap-0.5 p-1.5 text-[11px] text-muted-foreground">
                 <span>
-                  #{memory.id} · {formatTime(memory.created_at)}
+                  #{memory.id} · {formatTime(memory.created_at)} ·{" "}
+                  <span className="text-primary">{memory.collection}</span>
                 </span>
                 {memory.image_url && memory.text && (
                   <span className="truncate text-foreground">

@@ -340,3 +340,85 @@ def test_a_model_of_another_width_is_reported(client, memories):
         assert (
             f"gives 512 numbers per input, but {TABLE} holds {WIDTH}" in response.json()["detail"]
         )
+
+
+def test_collections_group_memories_and_filter_searches(client):
+    with Session(get_engine()) as session:
+        glasses = add_memory(session, "image", unit(0), NOON, "keys", collection=" Glasses ")
+        manual = add_memory(session, "image", unit(0), NOON, "keys")
+        session.commit()
+        glasses_id, manual_id = glasses.id, manual.id
+        assert glasses.collection == "glasses" and manual.collection == "manual"
+
+        only_glasses = vector_search(
+            session,
+            VectorSearchArgs(user_query="keys", keywords=["keys"], collections=["GLASSES"]),
+            fake_embed,
+        )
+        nowhere = vector_search(
+            session, VectorSearchArgs(user_query="keys", collections=["no such"]), fake_embed
+        )
+        with pytest.raises(ValueError, match="Collection"):
+            add_memory(session, "text", unit(2), NOON, "x", collection="not ok!")
+
+    assert [result.id for result in only_glasses] == [glasses_id]
+    assert only_glasses[0].collection == "glasses"
+    assert nowhere == []
+
+    assert client.get("/api/memories/collections").json() == [
+        {"name": "glasses", "count": 1},
+        {"name": "manual", "count": 1},
+    ]
+    listed = client.get("/api/memories", params={"collection": "manual"}).json()
+    assert [m["id"] for m in listed] == [manual_id]
+
+
+def test_uploads_take_a_collection_and_reject_a_bad_one(client):
+    app.dependency_overrides[get_embedder] = lambda: fake_embed
+    try:
+        image = client.post(
+            "/api/memories/image",
+            files={"file": ("a.png", jpeg(), "image/png")},
+            data={"collection": "glasses"},
+        )
+        note = client.post("/api/memories/text", json={"text": "coffee"})
+        bad = client.post("/api/memories/text", json={"text": "coffee", "collection": "a b"})
+    finally:
+        app.dependency_overrides.clear()
+
+    assert image.status_code == 201 and image.json()["collection"] == "glasses"
+    assert note.status_code == 201 and note.json()["collection"] == "manual"
+    assert bad.status_code == 422 and "Collection" in bad.json()["detail"]
+
+
+def test_vectors_endpoint_sends_the_stored_embeddings(client, memories):
+    import base64
+    import struct
+
+    body = client.get("/api/memories/vectors").json()
+    texts = client.get("/api/memories/vectors", params={"collection": "nothing"}).json()
+
+    assert [m["id"] for m in body] == list(reversed(memories))  # newest first
+    vector = struct.unpack(f"<{WIDTH}f", base64.b64decode(body[-1]["embedding"]))
+    assert list(vector) == pytest.approx(unit(0))
+    assert texts == []
+
+
+def test_ask_can_pin_the_collections_searched(client, memories):
+    gemma = FakeGemma(
+        {"content": None, "tool_calls": [tool_call("a", user_query="keys")]},
+        {"content": "Nothing from the glasses."},
+    )
+    app.dependency_overrides[get_embedder] = lambda: fake_embed
+    app.dependency_overrides[get_chat] = lambda: gemma
+    try:
+        response = client.post(
+            "/api/ask", json={"question": "Where are my keys?", "collections": ["glasses"]}
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    body = response.json()
+    assert body["sources"] == []  # every memory in the fixture is "manual"
+    tool_step = next(step for step in body["steps"] if step["type"] == "tool_result")
+    assert tool_step["results"] == []

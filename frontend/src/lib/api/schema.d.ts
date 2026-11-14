@@ -48,9 +48,52 @@ export interface paths {
         };
         /**
          * List Memories
-         * @description Every memory, newest first.
+         * @description The newest 500 memories, newest first.
          */
         get: operations["list_memories_api_memories_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/memories/collections": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Collections
+         * @description Every collection that holds a memory, with how many, largest first.
+         */
+        get: operations["list_collections_api_memories_collections_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/memories/vectors": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Memory Vectors
+         * @description The stored embeddings with their memories, for drawing a map: the newest 2000.
+         *
+         *     Each embedding is base64 of its float32 numbers, little-endian: a third of the size of a
+         *     JSON list.
+         */
+        get: operations["memory_vectors_api_memories_vectors_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -71,6 +114,8 @@ export interface paths {
         /**
          * Add Image
          * @description Store one image: shrink it, embed it with the image model, keep an optional caption.
+         *
+         *     collection groups it, e.g. "glasses" for stills from the glasses (default "manual").
          */
         post: operations["add_image_api_memories_image_post"];
         delete?: never;
@@ -305,6 +350,8 @@ export interface components {
         AskRequest: {
             /** Question */
             question: string;
+            /** Collections */
+            collections?: string[];
         };
         /** Body_add_image_api_memories_image_post */
         Body_add_image_api_memories_image_post: {
@@ -317,6 +364,11 @@ export interface components {
             text: string;
             /** Created At */
             created_at?: string | null;
+            /**
+             * Collection
+             * @default manual
+             */
+            collection: string;
         };
         /** Body_upload_photo_api_glasses_photos_post */
         Body_upload_photo_api_glasses_photos_post: {
@@ -337,6 +389,13 @@ export interface components {
             label: string;
             /** Action */
             action: string;
+        };
+        /** CollectionCount */
+        CollectionCount: {
+            /** Name */
+            name: string;
+            /** Count */
+            count: number;
         };
         /**
          * Command
@@ -451,6 +510,28 @@ export interface components {
             text: string;
             /** Image Url */
             image_url: string | null;
+            /** Collection */
+            collection: string;
+        };
+        /** MemoryVector */
+        MemoryVector: {
+            /** Id */
+            id: number;
+            /** Kind */
+            kind: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Text */
+            text: string;
+            /** Image Url */
+            image_url: string | null;
+            /** Collection */
+            collection: string;
+            /** Embedding */
+            embedding: string;
         };
         /** NoteCreate */
         NoteCreate: {
@@ -470,6 +551,8 @@ export interface components {
             id: number;
             /** Kind */
             kind: string;
+            /** Collection */
+            collection: string;
             /**
              * Created At
              * Format: date-time
@@ -537,6 +620,11 @@ export interface components {
             text: string;
             /** Created At */
             created_at?: string | null;
+            /**
+             * Collection
+             * @default manual
+             */
+            collection: string;
         };
         /** Timespan */
         Timespan: {
@@ -575,6 +663,8 @@ export interface components {
             timespan?: components["schemas"]["Timespan"] | null;
             /** Kinds */
             kinds?: ("image" | "text")[];
+            /** Collections */
+            collections?: string[];
             /**
              * Limit
              * @default 8
@@ -667,7 +757,10 @@ export interface operations {
     };
     list_memories_api_memories_get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Only these collections; leave out for every one */
+                collection?: string[];
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -681,6 +774,67 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MemoryPublic"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_collections_api_memories_collections_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CollectionCount"][];
+                };
+            };
+        };
+    };
+    memory_vectors_api_memories_vectors_get: {
+        parameters: {
+            query?: {
+                /** @description Only these collections; leave out for every one */
+                collection?: string[];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MemoryVector"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

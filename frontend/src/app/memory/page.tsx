@@ -22,7 +22,8 @@ export default function MemoryLabPage() {
             <p className="text-sm text-muted-foreground">
               Add memories on the left, ask about them on the right. Every
               vector_search call Gemma makes shows up as it happens; the Glasses
-              tab shows the same memory through the glasses.
+              tab shows the same memory through the glasses, and the map below
+              shows every stored vector.
             </p>
           </div>
         </div>

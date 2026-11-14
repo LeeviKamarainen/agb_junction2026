@@ -45,6 +45,12 @@ The current time is {now} (UTC). Write times in tool calls as ISO 8601 in UTC.""
 
 class AskRequest(BaseModel):
     question: str = Field(min_length=1, max_length=2000)
+    # Search only these collections, whatever the model asks for. Empty: the model chooses.
+    collections: list[str] = Field(default_factory=list, max_length=10)
+
+
+def _pinned(args: VectorSearchArgs, collections: list[str] | None) -> VectorSearchArgs:
+    return args.model_copy(update={"collections": list(collections)}) if collections else args
 
 
 class Step(BaseModel):
@@ -87,9 +93,16 @@ def error_line(message: str) -> str:
 
 
 def run(
-    session: Session, question: str, chat: Chat, embed: Embedder, now: datetime | None = None
+    session: Session,
+    question: str,
+    chat: Chat,
+    embed: Embedder,
+    now: datetime | None = None,
+    collections: list[str] | None = None,
 ) -> Iterator[Step]:
     """Answer `question`, yielding each step; the last one is the answer.
+
+    With `collections`, every search is limited to them, whatever the model asks for.
 
     Raises UpstreamError when a model server fails.
     """
@@ -130,7 +143,7 @@ def run(
                 yield step("tool_error", round, call_id=call_id, content=error)
             else:
                 try:
-                    args = VectorSearchArgs.model_validate(arguments)
+                    args = _pinned(VectorSearchArgs.model_validate(arguments), collections)
                 except ValidationError as error:  # let the model see what to fix and retry
                     problems = error.errors(include_url=False, include_context=False)
                     content = json.dumps({"error": problems}, default=str)
@@ -163,9 +176,14 @@ def run(
 
 
 def answer(
-    session: Session, question: str, chat: Chat, embed: Embedder, now: datetime | None = None
+    session: Session,
+    question: str,
+    chat: Chat,
+    embed: Embedder,
+    now: datetime | None = None,
+    collections: list[str] | None = None,
 ) -> Answer:
-    steps = list(run(session, question, chat, embed, now))
+    steps = list(run(session, question, chat, embed, now, collections))
     searches: list[VectorSearchArgs] = []
     sources: dict[int, SearchResult] = {}
     for step in steps:

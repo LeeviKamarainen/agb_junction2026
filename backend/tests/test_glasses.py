@@ -138,8 +138,8 @@ def test_photo_is_described_and_becomes_a_memory(client):
     assert reply.json()["speech"] == "A desk with a laptop and keys."
     assert "Saved to memory" in texts(reply.json()["screen"])
     memories = client.get("/api/memories").json()
-    assert [(m["kind"], m["text"]) for m in memories] == [
-        ("image", "A desk with a laptop and keys.")
+    assert [(m["kind"], m["text"], m["collection"]) for m in memories] == [
+        ("image", "A desk with a laptop and keys.", "glasses")
     ]
 
 
