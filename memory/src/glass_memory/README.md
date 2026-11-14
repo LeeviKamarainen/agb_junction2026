@@ -13,8 +13,9 @@ the memory map and for Gemma. Contracts, rules and pointers only, no history.
   `python -m glass_memory.embed VIDEO`.
 - `embed.store(frames, out_dir)`: the same files for stills already in `out_dir/keyframes/`,
   given as `(t_s, file name)` pairs in time order. `build` is `keyframes` then `store`.
-- `embed.embed_text(question)`: one vector in the same space, so `embeddings @ vector` is the
-  cosine similarity.
+- `embed.embed_text(text, input_type="query")`: one vector in the same space, so
+  `embeddings @ vector` is the cosine similarity. A question takes the model's `SearchQuery`
+  prompt; `input_type="document"` gives a text to be found (a stored note) its `Document` prompt.
 - `ask` has two backends for Gemma (`GEMMA_MODEL`, by default `google/gemma-4-31B-it`), chosen
   by `GEMMA_URL`; `ask.served()` is that address or None. Unset: `ask.gemma()` loads the model
   and its processor into this process once (transformers) and keeps them on the GPU. Set: an
@@ -75,12 +76,14 @@ Gemma is loaded when the app starts, before it serves a request, unless `GEMMA_U
   question, Gemma answers from their stills, or with `vectors` from its stored image vectors of
   them, and `keyframes` holds their bare file names; they are given and named in time order.
   400 for `vectors` when `GEMMA_URL` is set.
-- `POST /v1/embeddings`, OpenAI-style JSON `{"model": "google/embeddinggemma-2", "input": str | [str]}`
-  (1 to 16 strings): `{"object": "list", "data": [{"object", "index", "embedding"}], "model"}`,
+- `POST /v1/embeddings`, OpenAI-style JSON `{"model": "google/embeddinggemma-2", "input": str | [str],
+  "input_type": "query" | "document" = "query"}` (1 to 16 strings):
+  `{"object": "list", "data": [{"object", "index", "embedding"}], "model"}`,
   one 768-wide vector per input, in order, for the app backend's search over the same stills.
   An input that starts with `data:image/` is a base64 data URL of an image and gets its
-  `embed.embed_images` vector; every other input gets its `embed.embed_text` vector. 400 for
-  another `model` or an image that cannot be read, 422 for no input.
+  `embed.embed_images` vector; every other input gets its `embed.embed_text` vector for
+  `input_type`: a search query, or a document to be found (the backend's stored notes). 400 for
+  another `model` or an image that cannot be read, 422 for no input or another `input_type`.
 - `POST /v1/chat/completions`, an OpenAI-style chat request, tools and all: passed as it is to
   vLLM at `GEMMA_URL` with `GEMMA_API_KEY` (`ask.forward_chat`), so services that cannot reach
   port 8000 use the shared Gemma with this API's token. vLLM's status and JSON come back

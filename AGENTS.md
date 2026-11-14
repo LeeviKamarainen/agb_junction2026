@@ -77,7 +77,7 @@ curl -H "$AUTH" -H "Content-Type: application/json" -d '{"model": "google/embedd
 
 `/v1/chat/completions` passes OpenAI-style chat, tool calls included, to vLLM on the same server (`GEMMA_URL`, `GEMMA_API_KEY`), so the backend reaches Gemma with this API's token: `LLM_URL` is the memory API's address and `LLM_API_KEY` its `GLASS_API_TOKEN`. It needs a `make memory-deploy` to go live.
 
-`/v1/embeddings` serves EmbeddingGemma 2 (`google/embeddinggemma-2`), 768 numbers per input, in the same space as the stored stills; an input that starts with `data:image/` (a base64 data URL) is embedded as an image, any other as text. It replaced CLIP (`ViT-B-32`, 512 numbers) on 2026-11-14: that name now gets a 400, and vectors made with it cannot be compared with new ones.
+`/v1/embeddings` serves EmbeddingGemma 2 (`google/embeddinggemma-2`), 768 numbers per input, in the same space as the stored stills; an input that starts with `data:image/` (a base64 data URL) is embedded as an image, any other as text: as a search query, or with `"input_type": "document"` as a text to be found (the backend embeds its notes that way). It replaced CLIP (`ViT-B-32`, 512 numbers) on 2026-11-14: that name now gets a 400, and vectors made with it cannot be compared with new ones.
 
 ## Glasses
 

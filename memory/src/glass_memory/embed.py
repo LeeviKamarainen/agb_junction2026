@@ -46,9 +46,17 @@ def embed_images(paths, batch=32):
     return _normalised(np.concatenate(rows))
 
 
-def embed_text(text):
-    """The L2-normalised float32 embedding of a question, in the same space as the images."""
-    return _normalised(encoder().encode(text, prompt_name="SearchQuery", convert_to_numpy=True))
+# EmbeddingGemma 2 is trained with a prompt on each side of a search: one for the query, another
+# for the text to be found (its model card's prompt names). Images take no prompt.
+PROMPTS = {"query": "SearchQuery", "document": "Document"}
+
+
+def embed_text(text, input_type="query"):
+    """The L2-normalised float32 embedding of a text, in the same space as the images: a search
+    query, or with input_type="document" a text to be found, such as a stored note."""
+    return _normalised(
+        encoder().encode(text, prompt_name=PROMPTS[input_type], convert_to_numpy=True)
+    )
 
 
 def keyframes(video, out_dir, every_s=1.0, max_side=768):

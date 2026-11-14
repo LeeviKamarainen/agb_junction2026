@@ -35,7 +35,7 @@ def fake_images(paths, batch=32):
     return np.eye(8, dtype=np.float32)[[int(path.stem) for path in paths]]
 
 
-def fake_text(text):
+def fake_text(text, input_type="query"):
     """Every question is closest to frame 3, then to frame 1, then to frame 2."""
     return np.array([0, 0.5, 0.2, 1, 0, 0, 0, 0], np.float32)
 
@@ -331,6 +331,21 @@ def test_text_embeddings_come_back_one_per_input_in_order(client):
         == 400
     )
     assert client.post("/v1/embeddings", json={"input": []}, headers=AUTH).status_code == 422
+
+
+def test_text_is_embedded_as_a_query_unless_it_is_a_document(client, monkeypatch):
+    types = []
+    monkeypatch.setattr(
+        embed, "embed_text", lambda text, input_type: types.append(input_type) or fake_text(text)
+    )
+
+    def embedded(**body):
+        return client.post("/v1/embeddings", json={"input": ["keys"], **body}, headers=AUTH)
+
+    assert embedded().status_code == 200
+    assert embedded(input_type="document").status_code == 200
+    assert embedded(input_type="passage").status_code == 422
+    assert types == ["query", "document"]
 
 
 def test_an_image_input_is_embedded_as_an_image(client, monkeypatch):

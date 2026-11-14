@@ -18,7 +18,7 @@ import secrets
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 import numpy as np
 import polars as pl
@@ -202,20 +202,26 @@ def answer(folder: Folder, body: Question):
 class Texts(BaseModel):
     model: str = embed.MODEL
     input: str | Annotated[list[str], Field(min_length=1, max_length=16)]
+    # What the text inputs are: questions to search with, or documents to be found (stored notes).
+    input_type: Literal["query", "document"] = "query"
 
 
 @app.post("/v1/embeddings")
 def embeddings(body: Texts):
     """OpenAI-style embeddings in the stills' embedding space, for another service's search. An
     input that starts with `data:image/` is a base64 image and is embedded as one; every other
-    input is embedded as a question."""
+    input is embedded as text, as a query or a document by `input_type`."""
     if body.model != embed.MODEL:
         raise HTTPException(400, f"only {embed.MODEL} is served")
     inputs = [body.input] if isinstance(body.input, str) else body.input
     return {
         "object": "list",
         "data": [
-            {"object": "embedding", "index": i, "embedding": _embedded(given).tolist()}
+            {
+                "object": "embedding",
+                "index": i,
+                "embedding": _embedded(given, body.input_type).tolist(),
+            }
             for i, given in enumerate(inputs)
         ],
         "model": embed.MODEL,
@@ -237,9 +243,9 @@ def chat_completions(body: dict[str, Any]):
     return JSONResponse(reply, status)
 
 
-def _embedded(given):
+def _embedded(given, input_type):
     if not given.startswith("data:image/"):
-        return embed.embed_text(given)
+        return embed.embed_text(given, input_type)
     try:
         still = io.BytesIO(base64.b64decode(given.partition(",")[2], validate=True))
         return embed.embed_images([still])[0]

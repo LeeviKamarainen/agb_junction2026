@@ -73,3 +73,20 @@ def test_load_round_trips_what_store_wrote(tmp_path):
     assert np.array_equal(embeddings, np.load(tmp_path / "embeddings.npy")) and len(
         embeddings
     ) == len(index)
+
+
+def test_text_gets_the_model_cards_prompt_for_its_side_of_a_search(monkeypatch):
+    prompts = []
+
+    class Encoder:
+        def encode(self, text, prompt_name, convert_to_numpy):
+            prompts.append(prompt_name)
+            return np.array([3.0, 4.0], np.float32)
+
+    monkeypatch.setattr(embed, "encoder", Encoder)
+
+    question = embed.embed_text("where are my keys?")
+    embed.embed_text("The keys are in the hall drawer.", "document")
+
+    assert prompts == ["SearchQuery", "Document"]
+    assert np.allclose(question, [0.6, 0.8])  # unit length
