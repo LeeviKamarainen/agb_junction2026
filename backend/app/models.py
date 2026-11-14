@@ -61,3 +61,33 @@ class TextMemoryCreate(SQLModel):
     text: str = Field(min_length=1, max_length=2000)
     created_at: datetime | None = None  # defaults to now; without an offset it is taken as UTC
     collection: str = Field(default="manual", max_length=40)
+
+
+# Triggers: things the glasses watch for in the frames they send (app/glasses/frames.py). Each has
+# one embedding of `watch_for` in the trigger_embedding vector table, same id, made on first use.
+
+
+class TriggerBase(SQLModel):
+    name: str = Field(min_length=1, max_length=60)  # shown as the title on the glasses
+    # What to look for, as a short description of the scene; compared with every frame.
+    watch_for: str = Field(min_length=1, max_length=300)
+    # What the AI model should tell the wearer when it fires, e.g. "Remind them to take the keys".
+    instruction: str = Field(min_length=1, max_length=1000)
+    # Fires when a frame is at most this cosine distance from watch_for (0 identical, 1 unrelated).
+    max_distance: float = Field(default=0.75, ge=0, le=2)
+    cooldown_s: int = Field(default=120, ge=0, le=86_400)  # at most once per this many seconds
+    enabled: bool = True
+
+
+class Trigger(TriggerBase, table=True):
+    id: int | None = Field(default=None, primary_key=True)
+    last_fired_at: datetime | None = None
+
+
+class TriggerCreate(TriggerBase):
+    pass
+
+
+class TriggerPublic(TriggerBase):
+    id: int
+    last_fired_at: datetime | None

@@ -7,17 +7,20 @@ back to the glass-memory API (MEMORY_API_URL, remote_memory.py), which runs Gemm
 neither, they still take and show photos and say memory search isn't set up.
 """
 
+from datetime import UTC, datetime
 from typing import Annotated, Self
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field, model_validator
+from sqlmodel import col, select
 
 from app.db import SessionDep
-from app.glasses import memory, photos, remote_memory, screens
+from app.glasses import frames, memory, photos, remote_memory, screens
 from app.glasses.intents import BUTTON_ACTIONS, interpret
 from app.glasses.layout import GlassesReply
 from app.llm import Chat, Embedder, UpstreamError, get_chat, get_embedder
+from app.models import Trigger, TriggerCreate, TriggerPublic
 
 router = APIRouter(prefix="/glasses", tags=["glasses"])
 
@@ -176,3 +179,76 @@ def get_memory_keyframe(batch: str, name: str):
     if data is None:
         raise HTTPException(404, "no such keyframe")
     return Response(data, media_type="image/jpeg")
+
+
+MAX_FRAME = 10 * 1024 * 1024  # bytes
+
+
+@router.post("/frames", response_model=frames.FrameReply)
+def upload_frame(
+    frame: Annotated[UploadFile, File(description="One image, usually a JPEG")],
+    session: SessionDep,
+    chat: ChatDep,
+    embed: EmbedderDep,
+    source: Annotated[frames.Source, Form()] = "single",
+    stream_id: Annotated[str, Form(max_length=100)] = "",
+    seen_at: Annotated[datetime | None, Form()] = None,
+):
+    """One frame from the glasses: embedded, stored as a memory in the glasses collection, and
+    checked against the triggers.
+
+    `source` is "stream" for frames of a running stream (twice a second; a frame much like the
+    last one stored from the same `stream_id` is not stored again) or "single" for a photo the
+    wearer took (always stored). Most answers carry no `message`; when a trigger fires,
+    `message` is what to show on the glasses.
+    """
+    if embed is None:
+        raise HTTPException(503, "No embedding model configured: set EMBED_URL")
+    data = frame.file.read(MAX_FRAME + 1)
+    if len(data) > MAX_FRAME:
+        raise HTTPException(413, "frame is larger than 10 MB")
+    when = seen_at if seen_at is None or seen_at.tzinfo else seen_at.replace(tzinfo=UTC)
+    try:
+        return frames.receive(session, data, embed, chat, source, stream_id, when)
+    except ValueError as error:
+        raise HTTPException(415, str(error)) from error
+    except UpstreamError as error:
+        raise HTTPException(502, str(error)) from error
+
+
+@router.get("/triggers", response_model=list[TriggerPublic])
+def list_triggers(session: SessionDep):
+    return session.exec(select(Trigger).order_by(col(Trigger.id))).all()
+
+
+@router.post("/triggers", response_model=TriggerPublic, status_code=201)
+def create_trigger(body: TriggerCreate, session: SessionDep):
+    trigger = Trigger.model_validate(body)
+    session.add(trigger)
+    session.commit()
+    session.refresh(trigger)
+    return trigger
+
+
+@router.put("/triggers/{id}", response_model=TriggerPublic)
+def update_trigger(id: int, body: TriggerCreate, session: SessionDep):
+    trigger = session.get(Trigger, id)
+    if trigger is None:
+        raise HTTPException(404, "No such trigger")
+    if body.watch_for != trigger.watch_for:
+        frames.forget_trigger_vector(session, id)
+    trigger.sqlmodel_update(body.model_dump())
+    session.add(trigger)
+    session.commit()
+    session.refresh(trigger)
+    return trigger
+
+
+@router.delete("/triggers/{id}", status_code=204)
+def delete_trigger(id: int, session: SessionDep):
+    trigger = session.get(Trigger, id)
+    if trigger is None:
+        raise HTTPException(404, "No such trigger")
+    frames.forget_trigger_vector(session, id)
+    session.delete(trigger)
+    session.commit()
