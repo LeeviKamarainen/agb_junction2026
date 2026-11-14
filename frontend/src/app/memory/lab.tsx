@@ -9,7 +9,7 @@ import { useCollections } from "./collections";
 import { GlassesStream } from "./glasses-stream";
 import { MemoryLibrary } from "./memory-library";
 import { MemoryMap } from "./memory-map";
-import { TriggerEditor } from "./trigger-editor";
+import { type Match, TriggerEditor } from "./trigger-editor";
 
 type Tab = "ask" | "glasses" | "stream";
 
@@ -35,7 +35,7 @@ export function MemoryLab() {
   const [found, setFound] = useState<number[]>([]);
   const collections = useCollections(version);
   const changed = useCallback(() => setVersion((n) => n + 1), []);
-  const [distances, setDistances] = useState<Map<number, number>>(new Map());
+  const [matches, setMatches] = useState<Map<number, Match>>(new Map());
   const lastRefresh = useRef(0);
   const [fired, setFired] = useState(0); // trigger messages received, to refresh "last fired"
 
@@ -89,9 +89,12 @@ export function MemoryLab() {
           >
             <GlassesStream
               onReply={(reply) => {
-                setDistances(
+                setMatches(
                   new Map(
-                    reply.matches?.map((m) => [m.trigger_id, m.distance]),
+                    reply.matches?.map((m) => [
+                      m.trigger_id,
+                      { score: m.score ?? null, level: m.level ?? null },
+                    ]),
                   ),
                 );
                 if (reply.message) setFired((n) => n + 1);
@@ -106,7 +109,7 @@ export function MemoryLab() {
                 }
               }}
             />
-            <TriggerEditor lastDistances={distances} firedCount={fired} />
+            <TriggerEditor lastMatches={matches} firedCount={fired} />
           </div>
           <div
             role="tabpanel"

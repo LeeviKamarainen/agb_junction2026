@@ -1,6 +1,6 @@
 "use client";
 
-import { Plus, Save, Trash2, Zap } from "lucide-react";
+import { LoaderCircle, Save, Sparkles, Trash2, Zap } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -11,35 +11,39 @@ import { errorText, formatTime } from "./types";
 
 export type Trigger = components["schemas"]["TriggerPublic"];
 type Draft = components["schemas"]["TriggerCreate"];
+/** A trigger's score on the latest stream frame, and the level it has to reach. */
+export type Match = { score: number | null; level: number | null };
 
 const field =
   "w-full rounded-md border border-border bg-background px-2 py-1.5 text-sm outline-none focus-visible:border-primary disabled:opacity-60";
 
-const EMPTY: Draft = {
-  name: "",
-  watch_for: "",
-  instruction: "",
-  max_distance: 0.75,
-  cooldown_s: 120,
-  enabled: true,
-};
+// The fields of a trigger that can be edited, to tell whether a row has unsaved changes.
+const EDITED: (keyof Draft)[] = [
+  "name",
+  "watch_for",
+  "instruction",
+  "sigmas",
+  "enabled",
+];
 
 /**
- * What the glasses watch for: each frame they send is compared with every enabled trigger's
- * "watch for" text, and the closest one within its distance fires a message on the glasses.
- * `lastDistances` (trigger id -> distance from the latest frame) helps pick a distance; a new
- * `firedCount` reloads the list, so "last fired" stays current.
+ * What the glasses watch for. The wearer says what they want watched and Gemma writes the
+ * triggers; each stream frame is then scored against every enabled trigger's "watch for" text,
+ * and one that reaches its level fires a message on the glasses. `lastMatches` (trigger id ->
+ * score and level on the latest frame) shows how close each is; a new `firedCount` reloads the
+ * list, so "last fired" and the measured levels stay current.
  */
 export function TriggerEditor({
-  lastDistances,
+  lastMatches,
   firedCount = 0,
 }: {
-  lastDistances: Map<number, number>;
+  lastMatches: Map<number, Match>;
   firedCount?: number;
 }) {
   const [triggers, setTriggers] = useState<Trigger[] | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [draft, setDraft] = useState<Draft>(EMPTY);
+  const [goal, setGoal] = useState("");
+  const [writing, setWriting] = useState(false);
 
   const load = useCallback(async () => {
     const { data, error: problem } = await api.GET("/api/glasses/triggers", {
@@ -56,18 +60,28 @@ export function TriggerEditor({
     void load();
   }, [load, firedCount]);
 
-  async function save(id: number | null, body: Draft) {
+  async function generate() {
     setError(null);
-    const { error: problem } =
-      id === null
-        ? await api.POST("/api/glasses/triggers", { body })
-        : await api.PUT("/api/glasses/triggers/{id}", {
-            params: { path: { id } },
-            body,
-          });
+    setWriting(true);
+    const { error: problem } = await api.POST(
+      "/api/glasses/triggers/generate",
+      { body: { goal: goal.trim() } },
+    );
+    setWriting(false);
+    if (problem)
+      return setError(errorText(problem, "Gemma could not write triggers"));
+    setGoal("");
+    await load();
+  }
+
+  async function save(id: number, body: Draft) {
+    setError(null);
+    const { error: problem } = await api.PUT("/api/glasses/triggers/{id}", {
+      params: { path: { id } },
+      body,
+    });
     if (problem)
       return setError(errorText(problem, "Could not save the trigger"));
-    if (id === null) setDraft(EMPTY);
     await load();
   }
 
@@ -93,13 +107,48 @@ export function TriggerEditor({
           <Zap size={16} aria-hidden="true" /> Triggers
         </h2>
         <p className="text-xs text-muted-foreground">
-          Every frame is compared with each trigger&rsquo;s &ldquo;watch
-          for&rdquo; text. The closest within its distance (0 identical, 1
-          unrelated) fires once per cooldown, and Gemma writes the message from
-          the frame and the instruction. The latest frame&rsquo;s distance shows
-          next to each, to help pick one.
+          Say what the glasses should watch out for and Gemma writes the
+          triggers. Each stream frame gets a score per trigger: how much more it
+          looks like the &ldquo;watch for&rdquo; text than the last 20 seconds
+          did. When the score reaches the trigger&rsquo;s level, Gemma looks at
+          the frame: it writes the message for the glasses, or finds a false
+          alarm, says nothing and raises the level. Then the stream is quiet for
+          2 seconds. A level is measured from the trigger&rsquo;s own noise
+          after about ten frames of streaming.
         </p>
       </div>
+      <form
+        className="flex flex-col gap-2 rounded-lg border border-dashed border-border p-3"
+        onSubmit={(event) => {
+          event.preventDefault();
+          void generate();
+        }}
+      >
+        <label
+          htmlFor="trigger-goal"
+          className="text-sm font-medium text-foreground"
+        >
+          What should the glasses watch out for?
+        </label>
+        <textarea
+          id="trigger-goal"
+          className={field}
+          rows={2}
+          value={goal}
+          maxLength={500}
+          disabled={writing}
+          placeholder="e.g. I'm allergic to nuts, warn me when I pick up food that might have them."
+          onChange={(e) => setGoal(e.target.value)}
+        />
+        <Button type="submit" disabled={writing || !goal.trim()}>
+          {writing ? (
+            <LoaderCircle className="animate-spin" aria-hidden="true" />
+          ) : (
+            <Sparkles aria-hidden="true" />
+          )}
+          {writing ? "Gemma is writing triggers…" : "Ask Gemma for triggers"}
+        </Button>
+      </form>
       {error && (
         <p className="text-sm text-destructive" role="alert">
           {error}
@@ -109,7 +158,7 @@ export function TriggerEditor({
         <TriggerRow
           key={trigger.id}
           trigger={trigger}
-          distance={lastDistances.get(trigger.id)}
+          match={lastMatches.get(trigger.id)}
           onSave={(body) => save(trigger.id, body)}
           onDelete={() => remove(trigger.id)}
         />
@@ -117,47 +166,27 @@ export function TriggerEditor({
       {triggers?.length === 0 && (
         <p className="text-sm text-muted-foreground">No triggers yet.</p>
       )}
-      <form
-        className="flex flex-col gap-2 rounded-lg border border-dashed border-border p-3"
-        onSubmit={(event) => {
-          event.preventDefault();
-          void save(null, draft);
-        }}
-      >
-        <p className="text-sm font-medium">New trigger</p>
-        <Fields draft={draft} onChange={setDraft} />
-        <Button
-          type="submit"
-          variant="secondary"
-          disabled={
-            !draft.name.trim() ||
-            !draft.watch_for.trim() ||
-            !draft.instruction.trim()
-          }
-        >
-          <Plus aria-hidden="true" /> Add trigger
-        </Button>
-      </form>
     </section>
   );
 }
 
 function TriggerRow({
   trigger,
-  distance,
+  match,
   onSave,
   onDelete,
 }: {
   trigger: Trigger;
-  distance: number | undefined;
+  match: Match | undefined;
   onSave: (body: Draft) => void;
   onDelete: () => void;
 }) {
   const [draft, setDraft] = useState<Draft>(trigger);
-  const changed = (Object.keys(EMPTY) as (keyof Draft)[]).some(
-    (key) => draft[key] !== trigger[key],
-  );
-  const within = distance !== undefined && distance <= trigger.max_distance;
+  const changed = EDITED.some((key) => draft[key] !== trigger[key]);
+  // The level on the latest frame when streaming, else the one last measured.
+  const level = match?.level ?? trigger.level;
+  const score = match?.score ?? null;
+  const reached = score !== null && level !== null && score >= level;
   return (
     <form
       className="flex flex-col gap-2 rounded-lg border border-border bg-background/60 p-3"
@@ -171,11 +200,12 @@ function TriggerRow({
           #{trigger.id} · last fired{" "}
           {trigger.last_fired_at ? formatTime(trigger.last_fired_at) : "never"}
         </span>
-        {distance !== undefined && (
-          <span className={within ? "font-medium text-primary" : ""}>
-            latest frame: {distance.toFixed(3)}
-          </span>
-        )}
+        <span className={reached ? "font-medium text-primary" : ""}>
+          {score !== null && `score ${score.toFixed(3)} · `}
+          {level === null
+            ? "level not measured yet"
+            : `level ${level.toFixed(3)}`}
+        </span>
       </div>
       <Fields draft={draft} onChange={setDraft} />
       <div className="flex gap-2">
@@ -231,26 +261,15 @@ function Fields({
         />
       </label>
       <label className="flex flex-col gap-1 text-xs text-muted-foreground">
-        Max distance
+        Level: spreads above its noise
         <input
           className={field}
           type="number"
-          step={0.01}
+          step={0.5}
           min={0}
-          max={2}
-          value={draft.max_distance ?? 0.75}
-          onChange={(e) => set({ max_distance: Number(e.target.value) })}
-        />
-      </label>
-      <label className="flex flex-col gap-1 text-xs text-muted-foreground">
-        Cooldown (s)
-        <input
-          className={field}
-          type="number"
-          min={0}
-          max={86400}
-          value={draft.cooldown_s ?? 120}
-          onChange={(e) => set({ cooldown_s: Number(e.target.value) })}
+          max={10}
+          value={draft.sigmas ?? 3}
+          onChange={(e) => set({ sigmas: Number(e.target.value) })}
         />
       </label>
       <label className="flex items-center gap-2 text-sm">
