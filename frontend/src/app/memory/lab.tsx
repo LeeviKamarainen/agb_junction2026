@@ -1,25 +1,31 @@
 "use client";
 
-import { Glasses, MessageSquareText } from "lucide-react";
-import { useCallback, useState } from "react";
+import { Glasses, MessageSquareText, Video } from "lucide-react";
+import { useCallback, useRef, useState } from "react";
 
 import { GlassesHarness } from "../glasses/harness";
 import { AskChat } from "./ask-chat";
 import { useCollections } from "./collections";
+import { GlassesStream } from "./glasses-stream";
 import { MemoryLibrary } from "./memory-library";
 import { MemoryMap } from "./memory-map";
+import { TriggerEditor } from "./trigger-editor";
 
-type Tab = "ask" | "glasses";
+type Tab = "ask" | "glasses" | "stream";
 
 const tabs: { id: Tab; label: string; Icon: typeof Glasses }[] = [
   { id: "ask", label: "Ask", Icon: MessageSquareText },
   { id: "glasses", label: "Glasses", Icon: Glasses },
+  { id: "stream", label: "Stream", Icon: Video },
 ];
+
+const REFRESH_EVERY_MS = 5_000; // while streaming, reload the library and map at most this often
 
 /**
  * The memories on the left; on the right, either the Ask chat (Gemma's searches step by step) or
  * the glasses harness (what the wearer sees and hears). Both stay mounted, so switching tabs
  * keeps the conversation and the display; photos the glasses store show up in the library.
+ * The Stream tab streams the webcam as the glasses would, with the triggers it is checked against.
  * Below, the map of every stored vector, ringing what the latest question found.
  */
 export function MemoryLab() {
@@ -29,6 +35,9 @@ export function MemoryLab() {
   const [found, setFound] = useState<number[]>([]);
   const collections = useCollections(version);
   const changed = useCallback(() => setVersion((n) => n + 1), []);
+  const [distances, setDistances] = useState<Map<number, number>>(new Map());
+  const lastRefresh = useRef(0);
+  const [fired, setFired] = useState(0); // trigger messages received, to refresh "last fired"
 
   return (
     <>
@@ -41,7 +50,7 @@ export function MemoryLab() {
         <div className="flex min-w-0 flex-col gap-3">
           <div
             role="tablist"
-            aria-label="Ask or glasses"
+            aria-label="Ask, glasses or stream"
             className="inline-flex w-fit gap-1 rounded-lg border border-border bg-card p-1"
           >
             {tabs.map(({ id, label, Icon }) => (
@@ -70,6 +79,34 @@ export function MemoryLab() {
             hidden={tab !== "ask"}
           >
             <AskChat collections={collections} onFound={setFound} />
+          </div>
+          <div
+            role="tabpanel"
+            id="lab-panel-stream"
+            aria-labelledby="lab-tab-stream"
+            hidden={tab !== "stream"}
+            className={tab === "stream" ? "flex flex-col gap-4" : "hidden"}
+          >
+            <GlassesStream
+              onReply={(reply) => {
+                setDistances(
+                  new Map(
+                    reply.matches?.map((m) => [m.trigger_id, m.distance]),
+                  ),
+                );
+                if (reply.message) setFired((n) => n + 1);
+                const now = Date.now();
+                if (
+                  reply.stored &&
+                  now - lastRefresh.current > REFRESH_EVERY_MS
+                ) {
+                  lastRefresh.current = now;
+                  setRefreshKey((key) => key + 1);
+                  changed();
+                }
+              }}
+            />
+            <TriggerEditor lastDistances={distances} firedCount={fired} />
           </div>
           <div
             role="tabpanel"
