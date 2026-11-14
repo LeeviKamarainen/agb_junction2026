@@ -23,9 +23,9 @@ import { Button } from "@/components/ui/button";
 import type { components } from "@/lib/api/schema";
 
 import type { LayoutNode } from "../glasses/types";
-import type { GlassesReply } from "./trigger-editor";
 import { errorText } from "./types";
 
+export type GlassesReply = components["schemas"]["GlassesReply"];
 type FrameReply = components["schemas"]["FrameReply"];
 type Message = components["schemas"]["GlassesMessage"];
 

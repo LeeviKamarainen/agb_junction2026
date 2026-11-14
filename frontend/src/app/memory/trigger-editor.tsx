@@ -1,13 +1,6 @@
 "use client";
 
-import {
-  History,
-  LoaderCircle,
-  Save,
-  Sparkles,
-  Trash2,
-  Zap,
-} from "lucide-react";
+import { Save, Trash2, Zap } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -22,14 +15,6 @@ type Draft = components["schemas"]["TriggerDraft"];
 /** A trigger's score on the latest stream frame, and the level it has to reach. */
 export type Match = { score: number | null; level: number | null };
 
-export type GlassesReply = components["schemas"]["GlassesReply"];
-
-const RECALL_PROMPT = "Where have I seen this one?";
-// The same questions the backend takes for déjà vu: a copy of _ASKS in
-// backend/app/glasses/dejavu.py, so change the two together.
-const RECALL =
-  /deja vu|déjà vu|\b(know|remember|recogni[sz]e|seen|see) (this|that)( one| thing| place)?( before| already| from( somewhere| before)?)?\W*$/i;
-
 const field =
   "w-full rounded-md border border-border bg-background px-2 py-1.5 text-sm outline-none focus-visible:border-primary disabled:opacity-60";
 
@@ -37,31 +22,25 @@ const field =
 const EDITED: (keyof Draft)[] = ["name", "watch_for", "sigmas"];
 
 /**
- * What your glasses watch out for. You say what you want watched, that is a goal, and Gemma
- * writes its triggers; each stream frame is then scored against the triggers of your enabled
+ * What your glasses watch out for. You ask Gemma in the chat to watch for something, that is a
+ * goal, and it writes its triggers; each stream frame is then scored against the triggers of your enabled
  * goals, and one that reaches its level asks Gemma about the goal. A goal's triggers are switched
  * on and off and removed together. `lastMatches` (trigger id -> score and level on the latest
  * frame) shows how close each is. The list reloads on a new `firedCount`, so "last fired" and
  * the measured levels stay current, and each time it becomes `visible`, since Gemma may have
- * removed a goal in the chat meanwhile. A déjà vu question ("where have I seen this one?") asked
- * here goes to the glasses instead, and their reply to `onRecall`.
+ * added or removed a goal in the chat meanwhile.
  */
 export function TriggerEditor({
   lastMatches,
   firedCount = 0,
   visible = true,
-  onRecall,
 }: {
   lastMatches: Map<number, Match>;
   firedCount?: number;
   visible?: boolean;
-  /** The glasses' reply to a déjà vu question, for the glasses view to show. */
-  onRecall: (reply: GlassesReply) => void;
 }) {
   const [goals, setGoals] = useState<Goal[] | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [text, setText] = useState("");
-  const [writing, setWriting] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -81,44 +60,6 @@ export function TriggerEditor({
     // eslint-disable-next-line react-hooks/set-state-in-effect
     if (visible) void load();
   }, [load, firedCount, visible]);
-
-  /** Déjà vu: asks, as the glasses would, where the newest stream frame was seen before. */
-  async function recall(question: string) {
-    setError(null);
-    setWriting(true);
-    try {
-      const { data, error: problem } = await api.POST("/api/glasses/command", {
-        body: { question },
-      });
-      if (problem || !data)
-        return setError(errorText(problem, "Could not ask the glasses"));
-      onRecall(data);
-      setText("");
-    } catch {
-      setError("Could not reach the backend");
-    } finally {
-      setWriting(false);
-    }
-  }
-
-  async function generate() {
-    if (RECALL.test(text)) return recall(text.trim());
-    setError(null);
-    setWriting(true);
-    try {
-      const { error: problem } = await api.POST("/api/glasses/goals", {
-        body: { text: text.trim() },
-      });
-      if (problem)
-        return setError(errorText(problem, "Gemma could not write triggers"));
-      setText("");
-      await load();
-    } catch {
-      setError("Could not reach the backend");
-    } finally {
-      setWriting(false);
-    }
-  }
 
   /** Runs one change, shows what went wrong, and reloads the goals. */
   async function change(
@@ -148,63 +89,17 @@ export function TriggerEditor({
           <Zap size={16} aria-hidden="true" /> What the glasses watch out for
         </h2>
         <p className="text-xs text-muted-foreground">
-          Say what the glasses should watch out for and Gemma writes the
-          triggers for that goal. They are yours alone. Each stream frame gets a
-          score per trigger: how much more it looks like the &ldquo;watch
+          Ask Gemma in the chat above to watch out for something and it writes
+          the triggers for that goal. They are yours alone. Each stream frame
+          gets a score per trigger: how much more it looks like the &ldquo;watch
           for&rdquo; text than the last 20 seconds did. When a score reaches its
           level, Gemma looks at the frame with your goal in mind: it writes the
           message for the glasses, or finds a false alarm, says nothing and
           raises the level. After a message the stream is quiet for 5 seconds,
           so it can be read; after a false alarm for 2. To drop a goal, remove
-          it here or ask Gemma to stop watching for it. Asking where you have
-          seen this one instead looks up the newest stream frame among your
-          earlier stills, and Gemma says whether any shows the same thing; the
-          answer appears in the glasses view above.
+          it here or ask Gemma to stop watching for it.
         </p>
       </div>
-      <form
-        className="flex flex-col gap-2 rounded-lg border border-dashed border-border p-3"
-        onSubmit={(event) => {
-          event.preventDefault();
-          void generate();
-        }}
-      >
-        <label
-          htmlFor="trigger-goal"
-          className="text-sm font-medium text-foreground"
-        >
-          What should the glasses watch out for?
-        </label>
-        <textarea
-          id="trigger-goal"
-          className={field}
-          rows={2}
-          value={text}
-          maxLength={500}
-          disabled={writing}
-          placeholder="e.g. I'm allergic to nuts, warn me when I pick up food that might have them."
-          onChange={(e) => setText(e.target.value)}
-        />
-        <Button type="submit" disabled={writing || !text.trim()}>
-          {writing ? (
-            <LoaderCircle className="animate-spin" aria-hidden="true" />
-          ) : (
-            <Sparkles aria-hidden="true" />
-          )}
-          {writing ? "Gemma is working…" : "Ask Gemma for triggers"}
-        </Button>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          className="w-fit"
-          disabled={writing}
-          title="Looks up the newest stream frame among your earlier stills"
-          onClick={() => void recall(RECALL_PROMPT)}
-        >
-          <History aria-hidden="true" /> {RECALL_PROMPT}
-        </Button>
-      </form>
       {error && (
         <p className="text-sm text-destructive" role="alert">
           {error}

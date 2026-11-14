@@ -3,13 +3,16 @@
 import { Glasses, MessageSquareText, Video } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { api } from "@/lib/api/browser";
+
 import { GlassesHarness } from "../glasses/harness";
 import { AskChat } from "./ask-chat";
 import { useCollections } from "./collections";
-import { GlassesStream } from "./glasses-stream";
+import { type GlassesReply, GlassesStream } from "./glasses-stream";
 import { MemoryLibrary } from "./memory-library";
 import { MemoryMap } from "./memory-map";
-import { type GlassesReply, type Match, TriggerEditor } from "./trigger-editor";
+import { type Match, TriggerEditor } from "./trigger-editor";
+import { errorText } from "./types";
 
 type Tab = "ask" | "glasses" | "stream";
 
@@ -18,6 +21,17 @@ const tabs: { id: Tab; label: string; Icon: typeof Glasses }[] = [
   { id: "glasses", label: "Glasses", Icon: Glasses },
   { id: "stream", label: "Stream", Icon: Video },
 ];
+
+// What the chat under the stream suggests: déjà vu, a goal for the triggers, a memory question.
+const STREAM_EXAMPLES = [
+  "Where have I seen this one?",
+  "Warn me when I pick up food that might have nuts",
+  "Where did I leave my keys?",
+];
+// The same questions the backend takes for déjà vu: a copy of _ASKS in
+// backend/app/glasses/dejavu.py, so change the two together.
+const RECALL =
+  /deja vu|déjà vu|\b(know|remember|recogni[sz]e|seen|see) (this|that)( one| thing| place)?( before| already| from( somewhere| before)?)?\W*$/i;
 
 const REFRESH_EVERY_MS = 5_000; // while streaming, reload the library and map at most this often
 
@@ -42,6 +56,26 @@ export function MemoryLab() {
   const [recalled, setRecalled] = useState<GlassesReply | null>(null);
   const recallTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   useEffect(() => () => clearTimeout(recallTimer.current), []);
+
+  /** Déjà vu: asks, as the glasses would, where the newest stream frame was seen before, shows
+   * their reply on the glasses view, and gives what they say for the chat. */
+  async function recall(question: string): Promise<string> {
+    const { data, error } = await api.POST("/api/glasses/command", {
+      body: { question },
+    });
+    if (error || !data)
+      throw new Error(errorText(error, "Could not ask the glasses"));
+    setRecalled(data);
+    clearTimeout(recallTimer.current);
+    recallTimer.current = setTimeout(
+      () => setRecalled(null),
+      (data.dismiss_after_s ?? 10) * 1000,
+    );
+    document
+      .getElementById("stream-title")
+      ?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    return data.speech ?? "";
+  }
 
   return (
     <>
@@ -115,21 +149,22 @@ export function MemoryLab() {
                 }
               }}
             />
+            <AskChat
+              collections={collections}
+              onFound={setFound}
+              examples={STREAM_EXAMPLES}
+              intro="Ask Gemma anything the Ask tab takes, about your memories or to start and stop watching for something. Asking where you have seen this one looks up what the stream shows now."
+              className="min-h-[22rem]"
+              special={(question) =>
+                RECALL.test(question) ? recall(question) : null
+              }
+              // Gemma may have added or removed a goal: reload the list below.
+              onDone={() => setFired((n) => n + 1)}
+            />
             <TriggerEditor
               lastMatches={matches}
               firedCount={fired}
               visible={tab === "stream"}
-              onRecall={(reply) => {
-                setRecalled(reply);
-                clearTimeout(recallTimer.current);
-                recallTimer.current = setTimeout(
-                  () => setRecalled(null),
-                  (reply.dismiss_after_s ?? 10) * 1000,
-                );
-                document
-                  .getElementById("stream-title")
-                  ?.scrollIntoView({ behavior: "smooth", block: "nearest" });
-              }}
             />
           </div>
           <div
