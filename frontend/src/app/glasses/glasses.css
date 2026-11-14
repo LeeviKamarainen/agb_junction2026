@@ -106,9 +106,12 @@
 
 @media (max-width: 1000px) {
   .gh-main {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 }
+
+/* Prevent the logical 600px display from setting the phone grid's minimum width. */
+.gh-stage, .gh-controls { min-width: 0; }
 
 /* --- The display ------------------------------------------------------------------------- */
 
@@ -574,4 +577,108 @@
 
 .gh-icon[aria-label="warning"] {
   color: #ffc94d;
+}
+
+.gh-phone-hint {
+  display: none;
+}
+.gh-nav {
+  flex-wrap: wrap;
+}
+
+@media (max-width: 700px) and (orientation: portrait) {
+  .gh-page {
+    padding: 16px;
+  }
+  .gh-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .gh-header-side {
+    align-items: flex-start;
+  }
+  .gh-keyboard-hint {
+    display: none;
+  }
+  .gh-phone-hint {
+    display: inline;
+  }
+}
+
+/* Keep the display in view while the thumb scrolls controls on a landscape phone. */
+@media (orientation: landscape) and (max-height: 600px) {
+  .gh-page {
+    height: 100dvh;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    padding: max(8px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) max(8px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
+    overflow: hidden;
+  }
+  .gh-page .gh-header {
+    margin-bottom: 8px;
+    gap: 8px;
+    align-items: center;
+  }
+  .gh-page .gh-header h1 {
+    font-size: 18px;
+  }
+  .gh-page .gh-eyebrow {
+    display: none;
+  }
+  .gh-page .gh-header-side {
+    gap: 4px;
+  }
+  .gh-page .gh-nav {
+    font-size: 12px;
+    gap: 10px;
+    justify-content: flex-end;
+  }
+  .gh-page .gh-status {
+    font-size: 11px;
+  }
+  .gh-page .gh-main {
+    flex: 1;
+    min-height: 0;
+    grid-template-columns: minmax(0, 1fr) minmax(260px, 40%);
+    gap: 16px;
+  }
+  .gh-page .gh-stage {
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+  .gh-page .gh-display-frame {
+    width: min(100%, calc(100dvh - 140px));
+  }
+  .gh-page .gh-stage-bar {
+    width: 100%;
+    justify-content: center;
+    margin-top: 8px;
+  }
+  .gh-page .gh-stage-bar > span:first-child {
+    display: none;
+  }
+  .gh-page .gh-controls {
+    height: 100%;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 0 4px 12px 0;
+  }
+  .gh-page .gh-card {
+    padding: 12px;
+  }
+  .gh-page button {
+    min-height: 44px;
+    touch-action: manipulation;
+  }
+}
+
+@media (orientation: landscape) and (max-height: 600px) {
+  .gh-page .gh-preview {
+    max-height: 110px;
+    overflow: hidden;
+  }
 }
