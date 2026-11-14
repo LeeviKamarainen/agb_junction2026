@@ -266,7 +266,13 @@ async def ask(
     answers."""
     try:
         return await agent.answer(
-            session, body.question, chat, embed, viewer.owners, collections=body.collections
+            session,
+            body.question,
+            chat,
+            embed,
+            viewer.owners,
+            collections=body.collections,
+            owner_id=viewer.id,
         )
     except UpstreamError as error:
         raise HTTPException(502, str(error)) from error
@@ -283,7 +289,8 @@ async def ask_stream(body: agent.AskRequest, viewer: ViewerDep, chat: ChatDep, e
     A failure after the first line arrives as {"type": "error", "content": "..."}.
     """
 
-    owners = viewer.owners  # read now: the request's session closes before the stream ends
+    # Read now: the request's session closes before the stream ends.
+    owners, owner_id = viewer.owners, viewer.id
 
     async def lines() -> AsyncIterator[str]:
         # Its own session: the request's would close before the stream ends.
@@ -296,6 +303,7 @@ async def ask_stream(body: agent.AskRequest, viewer: ViewerDep, chat: ChatDep, e
                     embed,
                     owners,
                     collections=body.collections,
+                    owner_id=owner_id,
                 ):
                     yield step.model_dump_json() + "\n"
             except UpstreamError as error:

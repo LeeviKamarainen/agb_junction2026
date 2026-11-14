@@ -46,9 +46,7 @@ async def memory_frame(
     when = seen_at if seen_at is None or seen_at.tzinfo else seen_at.replace(tzinfo=UTC)
     try:
         data = await anyio.to_thread.run_sync(faces.anonymise, data)
-        return await frames.receive(
-            session, data, embed, chat, source, stream_id, when, viewer.id, viewer.owners
-        )
+        return await frames.receive(session, data, embed, chat, source, stream_id, when, viewer.id)
     except ValueError as error:
         raise HTTPException(415, str(error)) from error
     except UpstreamError as error:
@@ -116,7 +114,9 @@ async def _ask(
     if chat is None or embed is None:
         return screens.memory_problem(question, "Memory search isn’t set up yet.")
     try:
-        answer = await agent.answer(session, question, chat, embed, viewer.owners)
+        answer = await agent.answer(
+            session, question, chat, embed, viewer.owners, owner_id=viewer.id
+        )
     except UpstreamError as error:
         log.warning("Memory question failed: %s", error)
         return screens.memory_problem(question, "I can’t reach the memory right now.")

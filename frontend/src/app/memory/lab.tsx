@@ -110,7 +110,11 @@ export function MemoryLab() {
                 }
               }}
             />
-            <TriggerEditor lastMatches={matches} firedCount={fired} />
+            <TriggerEditor
+              lastMatches={matches}
+              firedCount={fired}
+              visible={tab === "stream"}
+            />
           </div>
           <div
             role="tabpanel"

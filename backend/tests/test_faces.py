@@ -180,9 +180,6 @@ def models(client):
     app.dependency_overrides[optional_embedder] = lambda: fake.embed
     app.dependency_overrides[get_embedder] = lambda: fake.embed
     app.dependency_overrides[optional_chat] = lambda: fake.chat
-    # The seeded example trigger is in every fresh database; only the tests' own may fire.
-    for trigger in client.get("/api/glasses/triggers").json():
-        client.delete(f"/api/glasses/triggers/{trigger['id']}")
     yield fake
     for dependency in (optional_embedder, get_embedder, optional_chat):
         app.dependency_overrides.pop(dependency, None)
@@ -203,9 +200,9 @@ def stored_image(client, memory_id: int) -> Image.Image:
 def test_a_frame_is_stored_embedded_and_shown_with_its_face_filled(client, models):
     """The chat model sees a frame when a trigger fires on it, so the portrait is streamed until
     the trigger's level is measured (as in test_frames.py), then brought into view."""
-    instruction = "Say who is there."
-    trigger = {"name": "Anyone", "watch_for": WATCHED, "instruction": instruction}
-    assert client.post("/api/glasses/triggers", json=trigger).status_code == 201
+    instruction = "Say who is there."  # the goal: what the wearer asked for
+    goal = {"text": instruction, "triggers": [{"name": "Anyone", "watch_for": WATCHED}]}
+    assert client.post("/api/glasses/goals", json=goal).status_code == 201
     for i in range(scores.MIN_FRAMES):
         models.image = toward_watched(0.60 + 0.01 * (i % 3))
         send_frame(client, "stream")

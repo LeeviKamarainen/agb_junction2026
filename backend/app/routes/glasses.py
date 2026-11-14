@@ -11,19 +11,22 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, WebSocket
 from sqlmodel import col, select
 
-from app.auth import ViewerDep
+from app.auth import Viewer, ViewerDep
 from app.db import SessionDep
 from app.glasses import actions, channel, frames, reminders, screens, triggers
 from app.glasses.actions import Command, WatchResult
 from app.glasses.layout import GlassesReply
 from app.llm import Chat, Embedder, UpstreamError, get_chat, get_embedder
 from app.models import (
+    Goal,
+    GoalCreate,
+    GoalPublic,
+    GoalUpdate,
     Reminder,
     ReminderCreate,
     ReminderPublic,
     Trigger,
-    TriggerCreate,
-    TriggerGoal,
+    TriggerDraft,
     TriggerPublic,
 )
 
@@ -154,48 +157,64 @@ async def upload_frame(
     )
 
 
+async def _own_goal(session: SessionDep, viewer: Viewer, id: int) -> Goal:
+    goal = await session.get(Goal, id)
+    if goal is None or goal.owner_id != viewer.id:  # the admin's own only, too
+        raise HTTPException(404, "No such goal")
+    return goal
+
+
+@router.get("/goals", response_model=list[GoalPublic])
+async def list_goals(session: SessionDep, viewer: ViewerDep):
+    """What you asked the glasses to watch out for, each with its triggers. Yours only."""
+    return await triggers.of(session, viewer.id)
+
+
+@router.post("/goals", response_model=GoalPublic, status_code=201)
+async def create_goal(body: GoalCreate, session: SessionDep, viewer: ViewerDep, chat: ChatDep):
+    """Say what the glasses should watch out for ("tell me when my bus comes"): Gemma writes the
+    triggers, and the goal is saved with them, enabled. With `triggers` they are used as given.
+    503 without a chat model; 502 when it fails or its answer holds no trigger."""
+    drafts = body.triggers
+    if drafts is None:
+        if chat is None:
+            raise HTTPException(503, "No chat model configured: set LLM_URL (and LLM_API_KEY)")
+        try:
+            drafts = await triggers.write(chat, body.text)
+        except (UpstreamError, ValueError) as error:
+            raise HTTPException(502, str(error)) from error
+    goal = await triggers.add(session, viewer.id, body.text, drafts)
+    return next(g for g in await triggers.of(session, viewer.id) if g.id == goal.id)
+
+
+@router.put("/goals/{id}", response_model=GoalPublic)
+async def update_goal(id: int, body: GoalUpdate, session: SessionDep, viewer: ViewerDep):
+    """Switch a goal, and so all its triggers, on or off."""
+    goal = await _own_goal(session, viewer, id)
+    goal.enabled = body.enabled
+    session.add(goal)
+    await session.commit()
+    return next(g for g in await triggers.of(session, viewer.id) if g.id == id)
+
+
+@router.delete("/goals/{id}", status_code=204)
+async def delete_goal(id: int, session: SessionDep, viewer: ViewerDep):
+    """Remove a goal with all its triggers."""
+    await triggers.remove(session, await _own_goal(session, viewer, id))
+
+
 @router.get("/triggers", response_model=list[TriggerPublic])
 async def list_triggers(session: SessionDep, viewer: ViewerDep):
-    query = select(Trigger).order_by(col(Trigger.id))
-    if viewer.owners is not None:
-        query = query.where(col(Trigger.owner_id).in_(viewer.owners))
+    """Every trigger of your goals, with the level measured for it."""
+    query = select(Trigger).where(Trigger.owner_id == viewer.id).order_by(col(Trigger.id))
     return (await session.exec(query)).all()
 
 
-@router.post("/triggers", response_model=TriggerPublic, status_code=201)
-async def create_trigger(body: TriggerCreate, session: SessionDep, viewer: ViewerDep):
-    trigger = Trigger.model_validate(body, update={"owner_id": viewer.id})
-    session.add(trigger)
-    await session.commit()
-    await session.refresh(trigger)
-    return trigger
-
-
-@router.post("/triggers/generate", response_model=list[TriggerPublic], status_code=201)
-async def generate_triggers(
-    body: TriggerGoal, session: SessionDep, viewer: ViewerDep, chat: ChatDep
-):
-    """Gemma writes the triggers for what the wearer wants watched ("tell me when my bus comes")
-    and they are saved, enabled. 503 without a chat model; 502 when it fails or its answer holds
-    no trigger."""
-    if chat is None:
-        raise HTTPException(503, "No chat model configured: set LLM_URL (and LLM_API_KEY)")
-    try:
-        written = await triggers.write(chat, body.goal)
-    except (UpstreamError, ValueError) as error:
-        raise HTTPException(502, str(error)) from error
-    made = [Trigger.model_validate(trigger, update={"owner_id": viewer.id}) for trigger in written]
-    session.add_all(made)
-    await session.commit()
-    for trigger in made:
-        await session.refresh(trigger)
-    return made
-
-
 @router.put("/triggers/{id}", response_model=TriggerPublic)
-async def update_trigger(id: int, body: TriggerCreate, session: SessionDep, viewer: ViewerDep):
+async def update_trigger(id: int, body: TriggerDraft, session: SessionDep, viewer: ViewerDep):
+    """Reword or retune one trigger of a goal."""
     trigger = await session.get(Trigger, id)
-    if trigger is None or not viewer.can_change(trigger.owner_id):
+    if trigger is None or trigger.owner_id != viewer.id:
         raise HTTPException(404, "No such trigger")
     if body.watch_for != trigger.watch_for:
         await frames.forget_trigger_vector(session, id)
@@ -210,9 +229,16 @@ async def update_trigger(id: int, body: TriggerCreate, session: SessionDep, view
 
 @router.delete("/triggers/{id}", status_code=204)
 async def delete_trigger(id: int, session: SessionDep, viewer: ViewerDep):
+    """Drop one trigger from its goal; a goal left with none goes with it."""
     trigger = await session.get(Trigger, id)
-    if trigger is None or not viewer.can_change(trigger.owner_id):
+    if trigger is None or trigger.owner_id != viewer.id:
         raise HTTPException(404, "No such trigger")
+    goal = await session.get(Goal, trigger.goal_id)
+    others = await session.exec(
+        select(Trigger).where(Trigger.goal_id == trigger.goal_id, Trigger.id != id)
+    )
     await frames.forget_trigger_vector(session, id)
     await session.delete(trigger)
+    if goal is not None and others.first() is None:
+        await session.delete(goal)
     await session.commit()
