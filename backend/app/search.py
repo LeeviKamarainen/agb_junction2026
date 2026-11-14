@@ -26,7 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 from sqlmodel import col, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from app import vectors
+from app import media, vectors
 from app.llm import Embedder, UpstreamError
 from app.models import Memory, MemoryPublic
 
@@ -176,7 +176,11 @@ def clean_collection(name: str | None) -> str:
 
 
 def image_url(memory: Memory) -> str | None:
-    return f"/api/memories/{memory.id}/image" if memory.image_file else None
+    """Versioned by the image's file name: the disposable database reuses ids after a wipe, and a
+    bare /api/memories/{id}/image would let a browser show the old memory's cached picture."""
+    if not memory.image_file:
+        return None
+    return f"/api/memories/{memory.id}/image?v={media.version(memory.image_file)}"
 
 
 def public(memory: Memory, usernames: dict[int, str] | None = None) -> MemoryPublic:

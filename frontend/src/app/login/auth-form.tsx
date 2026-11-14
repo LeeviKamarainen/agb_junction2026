@@ -1,6 +1,8 @@
 "use client";
 
-import { LoaderCircle } from "lucide-react";
+import Link from "next/link";
+
+import { LoaderCircle, Settings2 } from "lucide-react";
 import { type FormEvent, useId, useState } from "react";
 
 import { GuestButton } from "@/components/guest-button";
@@ -10,7 +12,7 @@ import { api } from "@/lib/api/browser";
 import { nextPath } from "@/lib/session";
 
 /** Guests can start fresh or return by username on /login; with `admin`, the password form /admin shows. */
-export function AuthForm({ admin = false }: { admin?: boolean }) {
+export function AuthForm({ admin = false, redirectTo }: { admin?: boolean; redirectTo?: string }) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
@@ -32,7 +34,7 @@ export function AuthForm({ admin = false }: { admin?: boolean }) {
           });
       if (data) {
         // A full load, so every page and the proxy see the new session cookie.
-        window.location.assign(nextPath());
+        window.location.assign(redirectTo ?? nextPath());
         return;
       }
       setError(
@@ -139,6 +141,15 @@ export function AuthForm({ admin = false }: { admin?: boolean }) {
               password.
             </p>
           </section>
+          <Link
+            href="/admin"
+            aria-label="Admin login"
+            title="Admin login"
+            className="inline-flex min-h-11 items-center gap-2 self-end rounded-md px-3 py-2 text-sm text-muted-foreground/70 transition-colors hover:text-muted-foreground focus-visible:text-foreground focus-visible:outline-2 focus-visible:outline-ring"
+          >
+            <Settings2 size={18} aria-hidden="true" />
+            Admin
+          </Link>
         </>
       ) : null}
     </div>
