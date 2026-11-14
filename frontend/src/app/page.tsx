@@ -19,7 +19,7 @@ export default function Home() {
               className="brand-symbol"
               strokeWidth={2.5}
             />
-            GLASS<span className="wordmark-year">/MEMORY</span>
+            GLASS<span className="wordmark-accent">/MEMORY</span>
           </a>
           <SiteNav />
         </header>

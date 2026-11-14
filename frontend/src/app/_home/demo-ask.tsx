@@ -1,9 +1,16 @@
 "use client";
 
-import { LogIn, LoaderCircle, MessageSquareText } from "lucide-react";
+import {
+  Hourglass,
+  LogIn,
+  LoaderCircle,
+  MessageSquareText,
+} from "lucide-react";
 import Link from "next/link";
+import { useEffect, useState } from "react";
 
 import { GuestButton } from "@/components/guest-button";
+import { api } from "@/lib/api/browser";
 import { useSession } from "@/lib/session";
 
 import { AskChat } from "../memory/ask-chat";
@@ -19,8 +26,24 @@ const EXAMPLES = [
  * Ask Gemma about the demo day. Asking needs a login (a one-click guest is enough), so the
  * backend can keep each user's own memories apart; the search is pinned to the demo collection.
  */
-export function DemoAsk({ collection = "demo" }: { collection?: string }) {
+export function DemoAsk() {
   const { user } = useSession();
+  // Which collection the demo memories are in, and whether they are stored and searchable yet.
+  const [demo, setDemo] = useState({ collection: "demo", searchable: true });
+
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .GET("/api/demo/timeline")
+      .then(({ data }) => {
+        if (data && !cancelled)
+          setDemo({ collection: data.collection, searchable: data.searchable });
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   if (user === undefined)
     return (
@@ -61,11 +84,23 @@ export function DemoAsk({ collection = "demo" }: { collection?: string }) {
     );
 
   return (
-    <AskChat
-      pinned={[collection]}
-      examples={EXAMPLES}
-      intro="Ask about the demo day. Gemma decides what to search for; every search it runs, and what it found, shows up here as it happens."
-      className="h-[36rem]"
-    />
+    <div className="flex flex-col gap-3">
+      {!demo.searchable && (
+        <p
+          className="flex items-center gap-2 rounded-lg border border-border bg-secondary px-3 py-2 text-sm text-muted-foreground"
+          role="status"
+        >
+          <Hourglass size={15} className="text-primary" aria-hidden="true" />
+          The demo memories are still being prepared, so questions may find
+          nothing yet. Try again in a minute.
+        </p>
+      )}
+      <AskChat
+        pinned={[demo.collection]}
+        examples={EXAMPLES}
+        intro="Ask about the demo day. Gemma decides what to search for; every search it runs, and what it found, shows up here as it happens."
+        className="h-[36rem]"
+      />
+    </div>
   );
 }

@@ -14,6 +14,7 @@ from app.settings import get_settings
 
 log = logging.getLogger(__name__)
 SWEEP_EVERY_S = 300
+DEMO_RETRY_S = 60
 
 
 @asynccontextmanager
@@ -27,21 +28,27 @@ async def lifespan(_app: FastAPI):
     yield
     sweeper.cancel()
     loader.cancel()
+    # Let both stop before the engine goes, so neither is mid-write when it closes.
+    await asyncio.gather(sweeper, loader, return_exceptions=True)
     await get_engine().dispose()
 
 
 async def _load_demo() -> None:
     """Embed and store the demo dataset (app/demo.py) when it is not stored yet. In the
     background, so a slow or missing embedding model never holds up the start; the timeline works
-    without it, only asking about the demo waits for it."""
+    without it, only asking about the demo waits for it. Retries every DEMO_RETRY_S until it
+    succeeds, so an embedding server that is down during a deploy only delays it."""
     if not get_settings().embed_url:
         log.warning("No EMBED_URL: the demo dataset is not stored, so asking finds nothing")
         return
-    try:
-        async with new_session() as session:
-            await demo.load_demo_memories(session, get_embedder())
-    except Exception:
-        log.exception("Storing the demo dataset failed; it is tried again on the next start")
+    while True:
+        try:
+            async with new_session() as session:
+                await demo.load_demo_memories(session, get_embedder())
+            return
+        except Exception:
+            log.exception("Storing the demo dataset failed; trying again in %d s", DEMO_RETRY_S)
+        await asyncio.sleep(DEMO_RETRY_S)
 
 
 async def _sweep_guests() -> None:

@@ -4,7 +4,7 @@ from sqlmodel import select
 from app import demo
 from app.llm import UpstreamError
 from app.models import Memory
-from app.search import DEMO_OWNER
+from app.search import DEMO_OWNER, add_memory
 
 WIDTH = 768
 
@@ -85,3 +85,24 @@ def test_a_failing_embedder_keeps_what_was_stored(anonymous, db, monkeypatch):
     with pytest.raises(UpstreamError):
         load(db, broken)
     assert db(stored_texts) == before
+
+
+def test_loading_leaves_the_admins_demo_uploads_alone(anonymous, db):
+    async def upload(session):
+        await add_memory(
+            session,
+            "image",
+            [0.0, 1.0] + [0.0] * (WIDTH - 2),
+            text="A photo",
+            image_file="photo.jpg",
+            collection=demo.COLLECTION,
+            owner_id=DEMO_OWNER,
+        )
+        await session.commit()
+
+    db(upload)
+    assert load(db) is True
+    assert load(db) is False  # the upload does not make the dataset look stale
+    texts = db(stored_texts)
+    assert "A photo" in texts
+    assert len(texts) == len(demo.MOMENTS) + 1

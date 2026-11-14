@@ -144,7 +144,13 @@ def timeline() -> list[Moment]:
 
 
 async def _stored(session: AsyncSession) -> list[Memory]:
-    query = select(Memory).where(Memory.owner_id == DEMO_OWNER, Memory.collection == COLLECTION)
+    # Only the dataset's own rows: the admin may also upload demo pictures into this collection.
+    query = select(Memory).where(
+        Memory.owner_id == DEMO_OWNER,
+        Memory.collection == COLLECTION,
+        Memory.kind == "text",
+        col(Memory.image_file).is_(None),
+    )
     return list(await session.exec(query.order_by(col(Memory.created_at), col(Memory.id))))
 
 

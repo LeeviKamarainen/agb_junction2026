@@ -8,7 +8,7 @@ import "../glasses/glasses.css";
 import { MemoryLab } from "./lab";
 
 export const metadata: Metadata = {
-  title: "Memory lab — Junction / 26",
+  title: "Memory lab — Glass memory",
   description:
     "Add images and notes to the memory database, ask Gemma about them and watch it search, or try it all through the glasses.",
 };
