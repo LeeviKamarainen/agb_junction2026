@@ -61,7 +61,7 @@ Open http://localhost:3000 and start a **guest**: a generated name, no password,
 
 ### Memory lab (`/memory`)
 
-- **Library:** add memories by uploading images, taking a webcam picture, or writing a note; group them into collections.
+- **Library:** add memories by uploading images, taking a webcam picture, or writing a note; group them into collections. Browse stable thumbnails in pages of 24, search captions/collections, and tap a memory to inspect the full image.
 - **Ask tab:** ask Gemma a question and watch it search the memories step by step.
 - **Map:** every stored vector projected to 2D and 3D; the memories found by the last question are ringed.
 - **Glasses tab:** the glasses harness inside the lab, so photos it takes appear in the library.
@@ -76,8 +76,8 @@ It calls the same `/api/glasses/*` endpoints and WebSocket the Android app uses.
 On a phone, open the HTTPS site at `/glasses`, rotate to landscape, and tap **Start camera**. The
 feed comes from that phone, preferring the rear camera; **Switch camera** requests the other lens.
 If the device has only one camera, the browser uses it. The feed appears behind the display by
-default, and captures and reminder frames use the same stream. The display stays in view while the
-controls scroll beside it. Portrait and desktop layouts are supported too. Use **Turn off** to
+default, and captures and reminder frames use the same stream. In landscape the POV fills the first viewport; scroll down for controls and account navigation.
+Tap **Fullscreen** to hide browser chrome where supported, and **Controls** to jump below the POV. Portrait and desktop layouts are supported too. Use **Turn off** to
 release the camera, or **Cancel camera** if the permission request is still waiting. Camera access
 on a real phone requires HTTPS; an ordinary HTTP LAN address will not work.
 
