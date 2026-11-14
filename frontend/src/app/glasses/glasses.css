@@ -486,3 +486,92 @@
 .gh-embedded .gh-log-card {
   grid-column: 1 / -1;
 }
+
+/* The recording light in the display's top-right corner: the only thing drawn while the
+   microphone listens. */
+.gh-recording {
+  position: absolute;
+  top: 22px;
+  right: 22px;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 999px;
+  background: #ff2d2d;
+  color: #fff;
+  box-shadow: 0 0 14px rgb(255 45 45 / 70%);
+  pointer-events: none;
+  animation: gh-blink 1s steps(2, jump-none) infinite;
+}
+
+.gh-recording svg {
+  width: 18px;
+  height: 18px;
+}
+
+@keyframes gh-blink {
+  50% {
+    opacity: 0.25;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gh-recording {
+    animation: none;
+  }
+}
+
+.gh-controls-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.gh-reminders {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.gh-reminders li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--gh-line);
+  border-radius: 8px;
+}
+
+.gh-reminders li > div {
+  flex: 1;
+  min-width: 0;
+}
+
+.gh-reminders strong {
+  display: block;
+  font-size: 14px;
+}
+
+.gh-reminders small {
+  display: block;
+  overflow: hidden;
+  color: var(--gh-muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A long reminder is cut with an ellipsis instead of widening the column. */
+.gh-controls > .gh-card {
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
+}
+
+.gh-icon[aria-label="warning"] {
+  color: #ffc94d;
+}

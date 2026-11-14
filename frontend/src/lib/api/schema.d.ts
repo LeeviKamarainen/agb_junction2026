@@ -331,6 +331,85 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/glasses/reminders": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Reminders */
+        get: operations["list_reminders_api_glasses_reminders_get"];
+        put?: never;
+        /**
+         * Add Reminder
+         * @description What the wearer would say, e.g. "remind me not to trip over the stool"; 422 when no
+         *     object can be found in it.
+         */
+        post: operations["add_reminder_api_glasses_reminders_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/glasses/reminders/{reminder_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete Reminder */
+        delete: operations["delete_reminder_api_glasses_reminders__reminder_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/glasses/reminders/{reminder_id}/trigger": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Trigger Reminder
+         * @description The warning as if the object were in view, for testing without a vision model.
+         */
+        post: operations["trigger_reminder_api_glasses_reminders__reminder_id__trigger_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/glasses/watch": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Watch
+         * @description One frame from the camera while the glasses watch for reminders. Not stored. A target in view gives a warning, at most once a minute per reminder.
+         */
+        post: operations["watch_api_glasses_watch_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -378,6 +457,14 @@ export interface components {
              */
             photo: string;
         };
+        /** Body_watch_api_glasses_watch_post */
+        Body_watch_api_glasses_watch_post: {
+            /**
+             * Photo
+             * @description One JPEG frame
+             */
+            photo: string;
+        };
         /** Button */
         Button: {
             /**
@@ -399,13 +486,16 @@ export interface components {
         };
         /**
          * Command
-         * @description Exactly one of: what the wearer said (`text`), or the action of the button they pressed.
+         * @description Exactly one of: what the wearer said (`text`), the action of the button they pressed, or
+         *     the question they asked after pressing Ask (`question`, always a question about the photos).
          */
         Command: {
             /** Text */
             text?: string | null;
             /** Action */
             action?: string | null;
+            /** Question */
+            question?: string | null;
         };
         /** FlexBox */
         FlexBox: {
@@ -459,7 +549,9 @@ export interface components {
             /** Speech */
             speech?: string | null;
             /** Client Action */
-            client_action?: "capture_photo" | null;
+            client_action?: ("capture_photo" | "listen_question") | null;
+            /** Dismiss After S */
+            dismiss_after_s?: number | null;
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -544,6 +636,27 @@ export interface components {
             text: string;
             /** Id */
             id: number;
+        };
+        /** ReminderCreate */
+        ReminderCreate: {
+            /** Text */
+            text: string;
+        };
+        /** ReminderPublic */
+        ReminderPublic: {
+            /** Id */
+            id: number;
+            /** Text */
+            text: string;
+            /** Target */
+            target: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Last Warned At */
+            last_warned_at: string | null;
         };
         /** SearchResult */
         SearchResult: {
@@ -670,6 +783,17 @@ export interface components {
              * @default 8
              */
             limit: number;
+        };
+        /**
+         * WatchResult
+         * @description What one watched frame showed. `warning` is the screen to draw, when there is one.
+         */
+        WatchResult: {
+            /** Seen */
+            seen: string[];
+            warning?: components["schemas"]["GlassesReply"] | null;
+            /** Note */
+            note: string;
         };
     };
     responses: never;
@@ -1229,6 +1353,152 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    list_reminders_api_glasses_reminders_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReminderPublic"][];
+                };
+            };
+        };
+    };
+    add_reminder_api_glasses_reminders_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReminderCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReminderPublic"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_reminder_api_glasses_reminders__reminder_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                reminder_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    trigger_reminder_api_glasses_reminders__reminder_id__trigger_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                reminder_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GlassesReply"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    watch_api_glasses_watch_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_watch_api_glasses_watch_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WatchResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
             };
         };
     };

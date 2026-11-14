@@ -4,7 +4,7 @@ import pytest
 from PIL import Image
 
 from app import vectors
-from app.glasses import remote_memory
+from app.glasses import reminders, remote_memory
 from app.glasses.intents import interpret
 from app.llm import UpstreamError
 from app.main import app
@@ -80,6 +80,8 @@ def texts(node: dict) -> str:
         ("what was on the table", "ask_memory"),
         ("go back", "home"),
         ("help", "help"),
+        ("Remind me not to trip over the stool", "remind"),
+        ("remind me to take a photo of the bill", "remind"),
         ("banana", "unknown"),
         ("   ", "unknown"),
     ],
@@ -88,11 +90,51 @@ def test_interpret(said, intent):
     assert interpret(said).name == intent
 
 
-def test_home_offers_the_main_actions(client):
+def test_home_is_an_empty_display(client):
     reply = client.get("/api/glasses/home").json()
 
-    assert reply["screen"]["type"] == "flexbox"
-    assert buttons(reply["screen"]) == ["take_photo", "gallery", "help"]
+    assert reply["screen"] == {**reply["screen"], "type": "flexbox", "children": []}
+
+
+def test_no_screen_has_buttons(client):
+    """The wearer acts through the glasses and the Neural Band, never on the display."""
+    client.post("/api/glasses/photos", files={"photo": ("a.jpg", JPEG, "image/jpeg")})
+    for body in [
+        {"action": "help"},
+        {"action": "gallery"},
+        {"action": "ask"},
+        {"question": "where are my keys?"},
+        {"question": "remind me about the stool"},
+        {"text": "banana"},
+    ]:
+        reply = client.post("/api/glasses/command", json=body).json()
+        assert buttons(reply["screen"]) == [], body
+
+
+def test_shown_screens_clear_themselves(client):
+    reply = client.post("/api/glasses/command", json={"question": "where are my keys?"}).json()
+
+    assert reply["dismiss_after_s"] >= 4
+
+
+def test_ask_opens_the_microphone(client):
+    reply = client.post("/api/glasses/command", json={"action": "ask"}).json()
+
+    assert reply["intent"] == "ask"
+    assert reply["client_action"] == "listen_question"
+
+
+@pytest.mark.parametrize("asked", ["what's this", "take a photo of my keys", "keys"])
+def test_a_question_always_asks_the_memory(client, asked):
+    reply = client.post("/api/glasses/command", json={"question": asked}).json()
+
+    assert reply["intent"] == "ask_memory"
+
+
+def test_an_empty_question_goes_home(client):
+    reply = client.post("/api/glasses/command", json={"question": "  "}).json()
+
+    assert reply["intent"] == "home"
 
 
 def test_saying_take_a_photo_asks_the_client_to_capture(client):
@@ -109,7 +151,10 @@ def test_a_button_does_what_its_words_do(client):
     assert by_button == by_voice
 
 
-@pytest.mark.parametrize("body", [{}, {"text": "help", "action": "help"}, {"action": "explode"}])
+@pytest.mark.parametrize(
+    "body",
+    [{}, {"text": "help", "action": "help"}, {"text": "a", "question": "b"}, {"action": "explode"}],
+)
 def test_bad_commands_are_rejected(client, body):
     assert client.post("/api/glasses/command", json=body).status_code == 422
 
@@ -118,14 +163,14 @@ def test_uploaded_photo_is_shown_and_listed(client):
     upload = client.post("/api/glasses/photos", files={"photo": ("a.jpg", JPEG, "image/jpeg")})
 
     assert upload.status_code == 201
-    image = upload.json()["screen"]["children"][1]
-    assert image["type"] == "image"
-    fetched = client.get(image["src"])
-    assert fetched.status_code == 200
-    assert fetched.content == JPEG
+    assert "Photo saved" in texts(upload.json()["screen"])
 
     gallery = client.post("/api/glasses/command", json={"text": "show my photos"}).json()
     assert "Latest 1 photos" in texts(gallery["screen"])
+    image = gallery["screen"]["children"][1]["children"][0]
+    fetched = client.get(image["src"])
+    assert fetched.status_code == 200
+    assert fetched.content == JPEG
 
 
 def test_photo_is_described_and_becomes_a_memory(client):
@@ -150,7 +195,7 @@ def test_photo_is_kept_when_the_models_are_down(client):
 
     assert reply.status_code == 201
     assert reply.json()["intent"] == "photo_saved"
-    assert "couldn’t describe it; couldn’t save it to memory" in texts(reply.json()["screen"])
+    assert "Couldn’t describe it; couldn’t save it to memory" in texts(reply.json()["screen"])
     assert client.get("/api/memories").json() == []
 
 
@@ -212,7 +257,17 @@ def test_question_falls_back_to_the_memory_api(client, monkeypatch):
     reply = client.post("/api/glasses/command", json={"text": "where is the can?"}).json()
 
     assert reply["speech"] == "By the door."
-    assert url in str(reply["screen"])
+    assert url not in str(reply["screen"])  # answers are text only
+
+
+def test_answers_are_plain_text_without_images(client):
+    use_models(chat=says("On the desk: * a **blue** mug * your keys"), embed=fake_embed)
+    client.post("/api/glasses/photos", files={"photo": ("a.jpg", JPEG, "image/jpeg")})
+
+    reply = client.post("/api/glasses/command", json={"question": "what's on the desk"}).json()
+
+    assert reply["speech"] == "On the desk: a blue mug, your keys"
+    assert "image" not in str(reply["screen"])
 
 
 def test_memory_api_batch_holds_every_photo(client, monkeypatch):
@@ -252,3 +307,109 @@ def test_memory_api_batch_holds_every_photo(client, monkeypatch):
 @pytest.mark.parametrize("path", ["../x/keyframes/a.jpg", "20261114T120000000000/keyframes/a.png"])
 def test_bad_keyframe_paths_are_404(client, path):
     assert client.get(f"/api/glasses/memory/{path}").status_code == 404
+
+
+def test_double_tap_opens_the_microphone(client):
+    reply = client.post("/api/glasses/command", json={"action": "double_tap"}).json()
+
+    assert reply["client_action"] == "listen_question"
+
+
+@pytest.mark.parametrize(
+    ("said", "target"),
+    [
+        ("Remind me to not trip over a stool in the kitchen", "stool"),
+        ("warn me about the stairs", "stairs"),
+        ("remind me when you see my keys", "keys"),
+        ("remind me to watch out for wet floor signs", "wet floor"),
+    ],
+)
+def test_reminder_target_by_rule(said, target):
+    assert reminders.target_from(said) == target
+
+
+def test_saying_remind_me_adds_a_reminder(client):
+    said = "Remind me to not trip over a stool in the kitchen"
+    reply = client.post("/api/glasses/command", json={"question": said}).json()
+
+    assert reply["intent"] == "remind"
+    assert "stool" in reply["speech"]
+    listed = client.get("/api/glasses/reminders").json()
+    assert [(r["target"], r["text"]) for r in listed] == [("stool", said)]
+
+
+def test_reminder_without_an_object_asks_again(client):
+    reply = client.post("/api/glasses/command", json={"text": "remind me"}).json()
+
+    assert reply["intent"] == "remind"
+    assert client.get("/api/glasses/reminders").json() == []
+    assert client.post("/api/glasses/reminders", json={"text": "remind me"}).status_code == 422
+
+
+def test_reminder_can_be_triggered_and_deleted(client):
+    made = client.post("/api/glasses/reminders", json={"text": "warn me about the stool"}).json()
+
+    warning = client.post(f"/api/glasses/reminders/{made['id']}/trigger").json()
+    assert warning["intent"] == "warning"
+    assert "Stool ahead" in texts(warning["screen"])
+
+    assert client.delete(f"/api/glasses/reminders/{made['id']}").status_code == 204
+    assert client.get("/api/glasses/reminders").json() == []
+
+
+def watch(client):
+    return client.post("/api/glasses/watch", files={"photo": ("w.jpg", JPEG, "image/jpeg")}).json()
+
+
+def test_watch_warns_once_a_minute_when_the_object_is_in_view(client):
+    client.post("/api/glasses/reminders", json={"text": "warn me about the stool"})
+    client.post("/api/glasses/reminders", json={"text": "warn me about the dog"})
+    use_models(chat=says("1"))  # the vision model sees item 1, the stool
+
+    first, second = watch(client), watch(client)
+
+    assert first["seen"] == ["stool"]
+    assert first["warning"]["speech"] == "Careful: stool ahead."
+    assert second["seen"] == ["stool"]
+    assert second["warning"] is None  # warned less than a minute ago
+
+
+def test_watch_sees_nothing_when_the_object_is_absent(client):
+    client.post("/api/glasses/reminders", json={"text": "warn me about the stool"})
+    use_models(chat=says("none"))
+
+    assert watch(client)["seen"] == []
+
+
+def test_watch_falls_back_to_the_memory_apis_description(client, monkeypatch):
+    client.post("/api/glasses/reminders", json={"text": "warn me about the stool"})
+    monkeypatch.setattr(remote_memory, "configured", lambda: True)
+    monkeypatch.setattr(remote_memory, "describe", lambda jpeg, name: "Two stools by a counter.")
+
+    result = watch(client)
+
+    assert result["seen"] == ["stool"]
+    assert result["warning"] is not None
+
+
+def test_watch_without_a_vision_model_says_so(client):
+    client.post("/api/glasses/reminders", json={"text": "warn me about the stool"})
+
+    result = watch(client)
+
+    assert result["seen"] == [] and result["warning"] is None
+    assert "no vision model" in result["note"]
+
+
+def test_watch_reports_an_unexpected_failure_instead_of_500(client, monkeypatch):
+    client.post("/api/glasses/reminders", json={"text": "warn me about the stool"})
+
+    def odd_model(_messages, _tools):
+        raise KeyError("choices")
+
+    use_models(chat=odd_model)
+
+    result = client.post("/api/glasses/watch", files={"photo": ("w.jpg", JPEG, "image/jpeg")})
+
+    assert result.status_code == 200
+    assert "check failed: KeyError" in result.json()["note"]

@@ -61,3 +61,27 @@ class TextMemoryCreate(SQLModel):
     text: str = Field(min_length=1, max_length=2000)
     created_at: datetime | None = None  # defaults to now; without an offset it is taken as UTC
     collection: str = Field(default="manual", max_length=40)
+
+
+# Things the wearer asked to be warned about ("remind me not to trip over the stool"). While the
+# glasses watch, each frame is checked for every reminder's `target`; app/glasses/reminders.py.
+
+
+class Reminder(SQLModel, table=True):
+    id: int | None = Field(default=None, primary_key=True)
+    text: str  # what the wearer said
+    target: str  # the object to look for, e.g. "stool"
+    created_at: datetime
+    last_warned_at: datetime | None = None  # warnings repeat at most once a minute
+
+
+class ReminderPublic(SQLModel):
+    id: int
+    text: str
+    target: str
+    created_at: datetime
+    last_warned_at: datetime | None
+
+
+class ReminderCreate(SQLModel):
+    text: str = Field(min_length=1, max_length=500)
