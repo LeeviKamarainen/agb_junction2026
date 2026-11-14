@@ -10,10 +10,10 @@ trigger's text is above what the stream has just been showing. The closest trigg
 reaches its level fires: the chat model looks at the frame and writes the message the glasses
 show, or finds it a false alarm. Then nothing reaches the wearer, and the trigger's level is
 raised above that score (up to scores.MAX_LEVEL). Without a chat model, or when its answer cannot
-be read, no trigger says anything. After a firing the
-stream is quiet for scores.SKIP_S. The level is measured from the trigger's own noise in the
-stream (app/glasses/scores.py), so a trigger waits for a few seconds of frames before it can
-fire, and a single photo fires nothing. Most frames get an empty answer.
+be read, no trigger says anything. After a firing the stream is quiet for scores.SKIP_S, or for
+scores.READ_S once a message was shown, so the wearer can read it. The level is measured from the
+trigger's own noise in the stream (app/glasses/scores.py), so a trigger waits for a few seconds
+of frames before it can fire, and a single photo fires nothing. Most frames get an empty answer.
 """
 
 import json
@@ -294,6 +294,8 @@ async def receive(
                 reply.message = GlassesMessage(
                     type="trigger", title=fired.name, text=text, trigger_id=fired.id
                 )
+                if stream is not None:
+                    stream.quiet_until = time.monotonic() + scores.READ_S
         return reply
     finally:
         if not keep:
