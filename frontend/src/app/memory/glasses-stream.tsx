@@ -29,12 +29,23 @@ export type GlassesReply = components["schemas"]["GlassesReply"];
 type FrameReply = components["schemas"]["FrameReply"];
 type Message = components["schemas"]["GlassesMessage"];
 
-const FPS = 2;
+export const FPS = 2;
+// The questions the backend takes for déjà vu: a copy of _ASKS in backend/app/glasses/dejavu.py,
+// so change the two together.
+export const RECALL =
+  /deja vu|déjà vu|\b(know|remember|recogni[sz]e|seen|see) (this|that)( one| thing| place)?( before| already| from( somewhere| before)?)?\W*$/i;
 const MESSAGE_MS = 8_000; // how long a trigger's message stays on the glasses
 const DOUBLE_TAP_MS = 450; // two taps closer than this are a double tap
 
 /** The glasses' déjà vu screen in the glasses view: its stills with their captions, and its text. */
-function Recalled({ screen }: { screen: LayoutNode }) {
+export function Recalled({
+  screen,
+  inline = false,
+}: {
+  screen: LayoutNode;
+  /** In the flow of its container, not laid over the bottom of the view. */
+  inline?: boolean;
+}) {
   const stills: { src: string; alt: string; caption: string }[] = [];
   const lines: { value: string; heading: boolean }[] = [];
   (function walk(node: LayoutNode) {
@@ -50,7 +61,7 @@ function Recalled({ screen }: { screen: LayoutNode }) {
   return (
     <span
       role="status"
-      className="absolute inset-x-4 bottom-4 flex flex-col gap-2 rounded-lg bg-black/75 p-3 text-sm text-white"
+      className={`${inline ? "" : "absolute inset-x-4 bottom-4 "}flex flex-col gap-2 rounded-lg bg-black/75 p-3 text-sm text-white`}
     >
       {lines
         .filter((line) => line.heading)

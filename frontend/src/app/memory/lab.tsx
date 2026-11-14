@@ -8,7 +8,7 @@ import { api } from "@/lib/api/browser";
 import { GlassesHarness } from "../glasses/harness";
 import { AskChat } from "./ask-chat";
 import { useCollections } from "./collections";
-import { type GlassesReply, GlassesStream } from "./glasses-stream";
+import { type GlassesReply, GlassesStream, RECALL } from "./glasses-stream";
 import { MemoryLibrary } from "./memory-library";
 import { MemoryMap } from "./memory-map";
 import { type Match, TriggerEditor } from "./trigger-editor";
@@ -28,10 +28,6 @@ const STREAM_EXAMPLES = [
   "Warn me when I pick up food that might have nuts",
   "Where did I leave my keys?",
 ];
-// The same questions the backend takes for déjà vu: a copy of _ASKS in
-// backend/app/glasses/dejavu.py, so change the two together.
-const RECALL =
-  /deja vu|déjà vu|\b(know|remember|recogni[sz]e|seen|see) (this|that)( one| thing| place)?( before| already| from( somewhere| before)?)?\W*$/i;
 
 const REFRESH_EVERY_MS = 5_000; // while streaming, reload the library and map at most this often
 

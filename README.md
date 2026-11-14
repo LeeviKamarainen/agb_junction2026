@@ -14,7 +14,7 @@ Meta glasses ──► Android app ──WebSocket──► backend (FastAPI + S
  camera, mic,     (glasses-android)           memories, triggers, reminders, accounts     EmbeddingGemma 2 + Gemma (vLLM)
  Neural Band,                                           ▲
  display  ◄───────── messages and warnings ─────────────┤
-                                        Next.js web app: Memory lab, glasses harness
+                                        Next.js web app: live view, demos, Memory lab
 ```
 
 ## What's in this repo
@@ -22,7 +22,7 @@ Meta glasses ──► Android app ──WebSocket──► backend (FastAPI + S
 | Folder | What it is |
 |---|---|
 | `backend/` | FastAPI backend (SQLModel on SQLite, vector search with sqlite-vec). Stores memories, runs the ask loop, checks frames against triggers and reminders, decides what the glasses display. All routes are under `/api`. |
-| `frontend/` | Next.js web app: **Ask your day** (`/`), **Demos** (`/demos`), the **Memory lab** (`/memory`), the **glasses harness** (`/glasses`) and the login pages. |
+| `frontend/` | Next.js web app: the **live view** (`/`), **Demos** (`/demos`), and for the admin the **Memory lab** (`/memory`) and the **glasses harness** (`/glasses`), plus the login pages. |
 | `glasses-android/` | The real glasses client: an Android app that streams the Meta glasses' camera and sends frames, photos and voice to the backend; see [its README](glasses-android/README.md). |
 | `memory/` | The visual memory service that runs on the Gemma server: embeds frames, serves the embeddings and chat, and draws the memory map; see [its README](memory/README.md). Its own uv project (about 6 GB with torch). |
 | `my-glasses-app/` | A small web app for the glasses' display (React, Meta's UI toolkit), see below. |
@@ -57,13 +57,15 @@ ADMIN_PASSWORD=...   # optional: otherwise a random admin password is printed in
 
 Open http://localhost:3000 and start a **guest**: a generated name, no password, valid for 60 minutes, which sees the demo memories and the ones it adds. The admin sees every memory and logs in at `/admin` with `ADMIN_PASSWORD`, reached through the small settings icon on the login form. See [AGENTS.md](AGENTS.md) for how accounts and scoping work.
 
-### Ask your day and curated demos
+### The live view and curated demos
 
-The homepage keeps the question box in focus. A visitor's first question starts a 60-minute guest session; answers search the demo memories and that guest's own memories. Logged-in guests and the admin can open the phone camera from the navigation.
+The home page is what the glasses see: it plays the published demo clips, or your own camera (on a phone, front or back). **Stream** sends 2 frames a second, as the glasses do, and each is checked against your triggers; a trigger's message appears on the view. Beside it, ask about the day by typing or holding **Talk**: answers are spoken and shown on the view too. Ask Gemma to warn you about something ("warn me when I see a bicycle") and the triggers for it appear below. **Fullscreen** fills the screen with the view and its controls (on an iPhone, the window). Double-tap the view to start or stop the stream.
+
+Nobody needs an account: the first question or stream starts a 60-minute guest, which sees the demo memories and its own. Demo clips are only checked against the triggers; camera frames are also stored as the guest's memories.
 
 Watch `/demos` without logging in. Published videos and ordered image sequences share one timeline, with chapter navigation, seeking, pause and mute controls.
 
-At `/admin`, add a draft, upload one MP4/WebM video (up to 200 MB) or a batch of images (up to 100, 15 MB each, 200 MB per upload), then publish. Adjust image dwell time, reorder images and move demos earlier or later. Video length is detected in the browser and can be adjusted. Published media is public; drafts are visible only to the admin. Playback uploads are separate from searchable memories: add those in the Memory lab when a demo should also answer questions.
+At `/admin`, add a draft, upload one MP4/WebM video (up to 200 MB) or a batch of images (up to 100, 15 MB each, 200 MB per upload), then publish. Adjust image dwell time, reorder images and move demos earlier or later. Video length is detected in the browser and can be adjusted. Published media is public; drafts are visible only to the admin. Publishing a demo also makes it searchable: the backend stores a video's frames at 2 fps (skipping near-duplicates) and each image of a sequence as demo memories that everyone can ask about, faces blurred, and replaces or removes them when the demo changes or is unpublished. That needs the embedding model (`EMBED_URL`) and takes a while for a long video.
 
 Media files live in `showcase-media/` beside the database. Schema or seed changes rebuild the disposable database and remove demo configurations; old files are not reassigned to new demos. The seed contains an unpublished starter draft, so upload and publish your media after a rebuild.
 
