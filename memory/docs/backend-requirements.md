@@ -163,9 +163,8 @@ need its base URL, API key and model name.
 - Under about 1 s for 6 texts or one image. Request bodies with an image are up to about 1 MB.
 
 The memory API, which already loads the model, serves this as `POST /v1/embeddings` behind its
-Caddy and bearer token (`memory/src/glass_memory/README.md`). It embeds every input as text so
-far: the `data:image/` convention above is still to be built there. The backend appends
-`/v1/embeddings` to the base URL it is given.
+Caddy and bearer token (`memory/src/glass_memory/README.md`), with the `data:image/` convention
+above. The backend appends `/v1/embeddings` to the base URL it is given.
 
 ## Access and our settings
 
