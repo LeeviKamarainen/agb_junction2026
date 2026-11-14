@@ -141,26 +141,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/demo/timeline": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Timeline
-         * @description The demo dataset's moments, earliest first. No login needed.
-         */
-        get: operations["timeline_api_demo_timeline_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/demo/clips": {
         parameters: {
             query?: never;
@@ -403,6 +383,9 @@ export interface paths {
         /**
          * Memory Image
          * @description 404, not 403, for someone else's image: nobody learns which ids exist.
+         *
+         *     With `v` (as `image_url` gives it) matching the image, the browser may keep it for good, since
+         *     a different image gets a different `v`; without it, it has to ask again every time.
          */
         get: operations["memory_image_api_memories__id__image_get"];
         put?: never;
@@ -631,6 +614,9 @@ export interface paths {
          *     last one stored from the same `stream_id` is not stored again) or "single" for a photo the
          *     wearer took (always stored). Most answers carry no `message`; when a trigger fires,
          *     `message` is what to show on the glasses.
+         *
+         *     `store=false` only checks the frame against the triggers: the home page sends the demo clips
+         *     this way, since they are stored as demo memories already.
          */
         post: operations["upload_frame_api_glasses_frames_post"];
         delete?: never;
@@ -804,6 +790,11 @@ export interface components {
             stream_id: string;
             /** Seen At */
             seen_at?: string | null;
+            /**
+             * Store
+             * @default true
+             */
+            store: boolean;
         };
         /** Body_watch_api_glasses_watch_post */
         Body_watch_api_glasses_watch_post: {
@@ -853,29 +844,6 @@ export interface components {
             username: string;
             /** Password */
             password: string;
-        };
-        /** DemoMoment */
-        DemoMoment: {
-            /** Index */
-            index: number;
-            /**
-             * Time
-             * Format: date-time
-             */
-            time: string;
-            /** Place */
-            place: string;
-            /** Text */
-            text: string;
-        };
-        /** DemoTimeline */
-        DemoTimeline: {
-            /** Collection */
-            collection: string;
-            /** Searchable */
-            searchable: boolean;
-            /** Moments */
-            moments: components["schemas"]["DemoMoment"][];
         };
         /** FlexBox */
         FlexBox: {
@@ -1603,26 +1571,6 @@ export interface operations {
             };
         };
     };
-    timeline_api_demo_timeline_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["DemoTimeline"];
-                };
-            };
-        };
-    };
     list_public_api_demo_clips_get: {
         parameters: {
             query?: never;
@@ -2097,7 +2045,9 @@ export interface operations {
     };
     memory_image_api_memories__id__image_get: {
         parameters: {
-            query?: never;
+            query?: {
+                v?: string | null;
+            };
             header?: never;
             path: {
                 id: number;

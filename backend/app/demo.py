@@ -1,192 +1,211 @@
-"""The demo dataset: one day seen through the glasses, as the home page plays it back.
+"""The demo dataset: the admin's published demo clips (app/showcase.py), as demo memories.
 
-The moments below are the whole dataset. GET /api/demo/timeline serves them in order to anyone,
-and load_demo_memories stores each one as a demo memory (owner DEMO_OWNER, collection "demo"),
-embedded with the embedding model, so every logged-in user can ask Gemma about them. Edit the
-list to change the demo; the next start replaces the stored copies. The demo memories are text
-only: their captions are what the embedding model and Gemma see.
+Every published clip is stored as demo memories (owner DEMO_OWNER, collection "demo") that every
+user can ask about: a video as its frames at FPS, the way the glasses stream (a frame much like
+the last one kept, and less than frames.STORE_EVERY_S later, is skipped), an image sequence as
+one memory per image. Every face is blurred first, as for any image the backend receives. Each
+memory's `source` names its clip and the clip's media, so a clip whose media changed, or that was
+unpublished or deleted, has its old memories replaced or removed.
+
+`sync` does that for all clips. The backend runs it in the background after each start and
+whenever the admin changes a clip (`request_sync`), since embedding a video takes a while.
 """
 
+import asyncio
+import hashlib
 import logging
-from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
+import anyio
+import cv2
 from sqlmodel import col, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from app import vectors
-from app.llm import Embedder
-from app.models import Memory
-from app.search import DEMO_OWNER, LOCAL_TIMEZONE, TABLE, add_memory
+from app import faces, media, showcase, vectors
+from app.glasses.frames import SCENE_CHANGE, STORE_EVERY_S, cosine_distance
+from app.llm import Embedder, UpstreamError
+from app.models import Memory, Showcase
+from app.search import DEMO_OWNER, TABLE, add_memory, width_error
 
 log = logging.getLogger(__name__)
 
 COLLECTION = "demo"
-DAY = "2026-11-14"
+FPS = 2  # as the glasses stream
+MAX_FRAMES = 1200  # ten minutes of video at FPS; the rest of a longer video is left out
+BATCH = 8  # images per call to the embedding model
+_PREFIX = "clip:"
+
+# Made by the running worker (`worker`), so it belongs to the app's event loop.
+_wanted: asyncio.Event | None = None
 
 
-@dataclass(frozen=True)
-class Moment:
-    time: str  # HH:MM on DAY, the wearer's local time, as the chat model reads and writes times
-    place: str  # a short label for the timeline
-    text: str  # what the glasses saw: the memory's caption, which is embedded and searched
-
-    @property
-    def at(self) -> datetime:
-        return datetime.fromisoformat(f"{DAY}T{self.time}:00").replace(tzinfo=LOCAL_TIMEZONE)
+def request_sync() -> None:
+    """Ask the background worker to run `sync` soon: a clip changed."""
+    if _wanted is not None:
+        _wanted.set()
 
 
-# Keep these in time order; the timeline and the tests rely on it.
-MOMENTS: list[Moment] = [
-    Moment(
-        "07:42",
-        "Kitchen",
-        "Kettle on the kitchen counter, two mugs, a half-eaten rye toast "
-        "with cheese and cucumber on a blue plate.",
-    ),
-    Moment(
-        "07:58",
-        "Hallway",
-        "Put the house keys with the red bottle-opener keyring into the "
-        "left pocket of the grey winter coat hanging by the front door.",
-    ),
-    Moment(
-        "08:15",
-        "Bus stop",
-        "Waiting at the bus stop on Otaniementie in light snow; the "
-        "display says bus 102 arrives in 4 minutes.",
-    ),
-    Moment(
-        "08:41",
-        "Aalto campus",
-        "Walking past the red-brick main building of Aalto "
-        "University towards Dipoli, where the Junction banners hang over the entrance.",
-    ),
-    Moment(
-        "09:05",
-        "Registration",
-        "Registration desk at Junction: picked up a name badge, a "
-        "black hoodie and a sticker sheet from a volunteer in a yellow vest.",
-    ),
-    Moment(
-        "09:30",
-        "Team table",
-        "Our team table in the main hall: four laptops, a pair of "
-        "smart glasses in a black case and a whiteboard with 'visual memory' written on it.",
-    ),
-    Moment(
-        "10:12",
-        "Coffee",
-        "Coffee break with Ilmari at the Paulig stand; he ordered an oat "
-        "latte, I had a filter coffee and a cinnamon bun.",
-    ),
-    Moment(
-        "11:20",
-        "Workshop",
-        "Workshop on on-device models: the slide shows EmbeddingGemma "
-        "and a chart comparing image and text embeddings in one vector space.",
-    ),
-    Moment(
-        "12:35",
-        "Lunch",
-        "Lunch queue: salmon soup with dark bread; sat next to Arno and "
-        "Pauli by the window looking at the snowy courtyard.",
-    ),
-    Moment(
-        "13:50",
-        "Hacking",
-        "Laptop screen with a FastAPI route and a sqlite-vec query; a "
-        "sticky note on the bezel says 'timestamps are timezone-aware!'.",
-    ),
-    Moment(
-        "14:40",
-        "Charger",
-        "Left the white USB-C laptop charger plugged in under the "
-        "beanbags in the chill-out corner on the second floor.",
-    ),
-    Moment(
-        "15:25",
-        "Mentor",
-        "Talked with a mentor wearing a green Junction lanyard about "
-        "privacy: memories stay per user and guests expire after an hour.",
-    ),
-    Moment(
-        "16:10",
-        "Snack",
-        "Took a banana and a bottle of sparkling water from the snack "
-        "table; the fridge next to it is out of energy drinks.",
-    ),
-    Moment(
-        "17:30",
-        "Demo test",
-        "Testing the glasses: the display shows a reminder 'watch out "
-        "for the stool' as a wooden bar stool comes into view.",
-    ),
-    Moment(
-        "18:45",
-        "Dinner",
-        "Pizza dinner in the main hall: pepperoni and a vegan slice on a "
-        "paper plate, the Junction stage lit in orange behind the tables.",
-    ),
-    Moment(
-        "20:15",
-        "Wrap-up",
-        "Back at the team table: packed the smart glasses into their "
-        "black case and put the case in the front pocket of my backpack.",
-    ),
-]
+async def worker(session_factory, embed: Embedder, retry_s: float) -> None:
+    """Runs `sync` once now and again whenever `request_sync` is called; after a failure (the
+    embedding model is down during a deploy, say) again in `retry_s` seconds."""
+    global _wanted
+    _wanted = asyncio.Event()
+    _wanted.set()
+    try:
+        while True:
+            await _wanted.wait()
+            _wanted.clear()
+            try:
+                async with session_factory() as session:
+                    await sync(session, embed)
+            except Exception:
+                log.exception("Storing the demo clips failed; trying again in %d s", retry_s)
+                await asyncio.sleep(retry_s)
+                _wanted.set()
+    finally:
+        _wanted = None
 
 
-def timeline() -> list[Moment]:
-    """The moments, earliest first."""
-    return sorted(MOMENTS, key=lambda moment: moment.at)
+def source(clip: Showcase) -> str:
+    """What a clip's memories carry: its id and a digest of its media, so new media is noticed."""
+    digest = hashlib.sha1(clip.assets_json.encode()).hexdigest()[:12]
+    return f"{_PREFIX}{clip.id}:{digest}"
 
 
-async def _stored(session: AsyncSession) -> list[Memory]:
-    # Only the dataset's own rows: the admin may also upload demo pictures into this collection.
-    query = select(Memory).where(
-        Memory.owner_id == DEMO_OWNER,
-        Memory.collection == COLLECTION,
-        Memory.kind == "text",
-        col(Memory.image_file).is_(None),
-    )
-    return list(await session.exec(query.order_by(col(Memory.created_at), col(Memory.id))))
+def video_frames(path: str, every_s: float = 1 / FPS, limit: int = MAX_FRAMES):
+    """(seconds into the video, JPEG bytes) every `every_s` seconds. Raises ValueError for a
+    file OpenCV cannot read."""
+    video = cv2.VideoCapture(path)
+    if not video.isOpened():
+        raise ValueError(f"Cannot read the video {path}")
+    try:
+        rate = video.get(cv2.CAP_PROP_FPS) or 30.0
+        index, taken, next_at = 0, 0, 0.0
+        while taken < limit:
+            ok, frame = video.read()
+            if not ok:
+                break
+            at = index / rate
+            index += 1
+            if at + 1e-6 < next_at:
+                continue
+            next_at += every_s
+            # As small as it will be stored (media.save_image): every frame is held until stored.
+            height, width = frame.shape[:2]
+            if (scale := media.MAX_SIDE / max(height, width)) < 1:
+                frame = cv2.resize(frame, (round(width * scale), round(height * scale)))
+            ok, jpeg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 90])
+            if ok:
+                taken += 1
+                yield at, jpeg.tobytes()
+    finally:
+        video.release()
 
 
-def _aware(moment: datetime) -> datetime:
-    return moment if moment.tzinfo else moment.replace(tzinfo=UTC)
+def _stills(clip: Showcase) -> list[tuple[float, bytes]]:
+    """(seconds into the clip, image bytes) of a clip's media, in order."""
+    files = [showcase.folder() / a["name"] for a in showcase.assets(clip)]
+    files = [file for file in files if file.is_file()]
+    if clip.kind == "video":
+        return [still for file in files[:1] for still in video_frames(str(file))]
+    return [(i * clip.image_seconds, file.read_bytes()) for i, file in enumerate(files)]
 
 
-async def is_loaded(session: AsyncSession) -> bool:
-    """Whether the stored demo memories match the dataset, so asking about them works."""
-    stored = [(_aware(memory.created_at), memory.text) for memory in await _stored(session)]
-    return stored == [(moment.at, moment.text) for moment in timeline()]
+async def _store_clip(session: AsyncSession, clip: Showcase, embed: Embedder) -> int:
+    """Store a clip as demo memories and commit; the number stored. On any failure nothing of
+    the clip is kept, its image files included."""
+    stills = await anyio.to_thread.run_sync(_stills, clip)
+    # The clip "happened" just now: its last frame is the latest moment.
+    end = datetime.now(UTC)
+    length = stills[-1][0] if stills else 0.0
+    caption = clip.title if not clip.description else f"{clip.title}: {clip.description}"
+    tag = source(clip)
+    stored = 0
+    last: tuple[list[float], float] | None = None  # the vector and time of the last one kept
+    saved: list[str] = []  # every image file written, to delete if the clip is not stored
+    try:
+        for start in range(0, len(stills), BATCH):
+            batch = stills[start : start + BATCH]
+            names = []
+            for _at, data in batch:
+                blurred = await anyio.to_thread.run_sync(faces.anonymise, data)
+                names.append(await anyio.to_thread.run_sync(media.save_image, blurred))
+                saved.append(names[-1])
+            urls = [await anyio.to_thread.run_sync(media.data_url, name) for name in names]
+            embeddings = await embed(urls)
+            for (at, _data), name, vector in zip(batch, names, embeddings, strict=True):
+                if problem := width_error(len(vector)):
+                    raise UpstreamError(problem)
+                # As a stream is stored: skip a frame much like the last one kept, unless the
+                # last one is old.
+                if (
+                    clip.kind == "video"
+                    and last is not None
+                    and at - last[1] < STORE_EVERY_S
+                    and cosine_distance(vector, last[0]) < SCENE_CHANGE
+                ):
+                    media.delete(name)
+                    continue
+                memory = await add_memory(
+                    session,
+                    "image",
+                    vector,
+                    created_at=end - timedelta(seconds=length - at),
+                    text=caption,
+                    image_file=name,
+                    collection=COLLECTION,
+                    owner_id=DEMO_OWNER,
+                )
+                memory.source = tag
+                session.add(memory)
+                last = (vector, at)
+                stored += 1
+        await session.commit()
+    except BaseException:
+        with anyio.CancelScope(shield=True):
+            await session.rollback()
+        for name in saved:
+            media.delete(name)
+        raise
+    return stored
 
 
-async def load_demo_memories(session: AsyncSession, embed: Embedder) -> bool:
-    """Store the dataset as demo memories unless they are already there; True when it stored
-    them. Replaces stale copies. Raises app.llm.UpstreamError when the embedding model fails, and
-    then leaves the stored memories as they were."""
-    if await is_loaded(session):
-        return False
-    moments = timeline()
-    # Before deleting anything. As documents: captions are what searches find, like notes.
-    embeddings = await embed([moment.text for moment in moments], input_type="document")
-    for memory in await _stored(session):
+async def _remove(session: AsyncSession, memories: list[Memory]) -> None:
+    for memory in memories:
         assert memory.id is not None
         await vectors.delete(await session.connection(), TABLE, memory.id)
         await session.delete(memory)
-    await session.flush()
-    for moment, embedding in zip(moments, embeddings, strict=True):
-        await add_memory(
-            session,
-            "text",
-            embedding,
-            created_at=moment.at,
-            text=moment.text,
-            collection=COLLECTION,
-            owner_id=DEMO_OWNER,
+        if memory.image_file:
+            media.delete(memory.image_file)
+
+
+async def sync(session: AsyncSession, embed: Embedder) -> int:
+    """Make the demo memories match the published clips; the number of clips stored anew.
+
+    Raises app.llm.UpstreamError when the embedding model fails; a clip stored before that stays.
+    """
+    clips = list(
+        await session.exec(
+            select(Showcase).where(col(Showcase.published)).order_by(col(Showcase.position))
         )
-    await session.commit()
-    log.info("Stored %d demo memories", len(moments))
-    return True
+    )
+    wanted = {source(clip): clip for clip in clips if showcase.assets(clip)}
+    rows = await session.exec(
+        select(Memory).where(Memory.owner_id == DEMO_OWNER, col(Memory.source).startswith(_PREFIX))
+    )
+    have: dict[str, list[Memory]] = {}
+    for memory in rows:
+        have.setdefault(memory.source, []).append(memory)
+    stale = [memory for tag, rows in have.items() if tag not in wanted for memory in rows]
+    if stale:
+        await _remove(session, stale)
+        await session.commit()
+        log.info("Removed %d demo memories of changed or unpublished clips", len(stale))
+    added = 0
+    for tag, clip in wanted.items():
+        if tag in have:
+            continue
+        count = await _store_clip(session, clip, embed)
+        log.info("Stored demo clip %s (%r) as %d memories", clip.id, clip.title, count)
+        added += 1
+    return added

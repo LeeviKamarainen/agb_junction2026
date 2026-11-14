@@ -8,7 +8,6 @@ from app import auth, demo, faces
 from app.db import get_engine, init_db, new_session
 from app.llm import get_embedder
 from app.routes import auth as auth_routes
-from app.routes import demo as demo_routes
 from app.routes import glasses, memories, notes, showcases
 from app.settings import get_settings
 
@@ -35,21 +34,13 @@ async def lifespan(_app: FastAPI):
 
 
 async def _load_demo() -> None:
-    """Embed and store the demo dataset (app/demo.py) when it is not stored yet. In the
-    background, so a slow or missing embedding model never holds up the start; the timeline works
-    without it, only asking about the demo waits for it. Retries every DEMO_RETRY_S until it
-    succeeds, so an embedding server that is down during a deploy only delays it."""
+    """Store the published demo clips as demo memories (app/demo.py), now and whenever the admin
+    changes one. In the background, so a slow or missing embedding model never holds up the
+    start; only asking about the demo waits for it."""
     if not get_settings().embed_url:
-        log.warning("No EMBED_URL: the demo dataset is not stored, so asking finds nothing")
+        log.warning("No EMBED_URL: the demo clips are not stored, so asking finds nothing")
         return
-    while True:
-        try:
-            async with new_session() as session:
-                await demo.load_demo_memories(session, get_embedder())
-            return
-        except Exception:
-            log.exception("Storing the demo dataset failed; trying again in %d s", DEMO_RETRY_S)
-        await asyncio.sleep(DEMO_RETRY_S)
+    await demo.worker(new_session, get_embedder(), DEMO_RETRY_S)
 
 
 async def _sweep_guests() -> None:
@@ -81,7 +72,6 @@ def health() -> dict[str, str]:
 
 
 api.include_router(auth_routes.router)
-api.include_router(demo_routes.router)
 api.include_router(showcases.router)
 api.include_router(notes.router)
 api.include_router(memories.router)

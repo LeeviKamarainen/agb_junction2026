@@ -296,6 +296,33 @@ def test_uploaded_demo_images_have_their_faces_blurred(client):
     assert face_blurred(picture(client.get(uploaded.json()["assets"][0]["url"]).content))
 
 
+def test_demo_video_frames_are_stored_with_their_faces_blurred(client, models, db, tmp_path):
+    """Demo videos are kept as uploaded, so their frames are blurred when stored as memories."""
+    import cv2
+
+    from app import demo
+
+    still = cv2.imdecode(np.frombuffer(PORTRAIT, np.uint8), cv2.IMREAD_COLOR)
+    path = tmp_path / "portrait.mp4"
+    height, width = still.shape[:2]
+    writer = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"mp4v"), 2, (width, height))
+    for _ in range(2):
+        writer.write(still)
+    writer.release()
+    clip = client.post("/api/demo/clips", json={"title": "Portrait", "kind": "video"}).json()
+    files = {"files": ("portrait.mp4", path.read_bytes(), "video/mp4")}
+    assert client.post(f"/api/demo/clips/{clip['id']}/media", files=files).status_code == 200
+    client.put(f"/api/demo/clips/{clip['id']}", json={**clip, "published": True})
+
+    async def work(session):
+        return await demo.sync(session, models.embed)
+
+    assert db(work) == 1
+    stored = [m for m in client.get("/api/memories").json() if m["collection"] == "demo"]
+    assert stored and all(face_blurred(stored_image(client, m["id"])) for m in stored)
+    assert models.all_filled()
+
+
 def test_every_upload_route_is_one_of_those_tested_here():
     """A new multipart upload route fails this until it fills faces first and has its test here.
     It cannot see an image sent another way: the WebSocket's frames are tested above by hand, and

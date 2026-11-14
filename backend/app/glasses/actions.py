@@ -36,6 +36,7 @@ async def memory_frame(
     source: frames.Source = "single",
     stream_id: str = "",
     seen_at: datetime | None = None,
+    store: bool = True,
 ) -> frames.FrameReply:
     """The memory-mode upload, shared by HTTP and the Android socket. Every face in the frame is
     blurred first, so nothing stores, embeds or shows one."""
@@ -46,7 +47,9 @@ async def memory_frame(
     when = seen_at if seen_at is None or seen_at.tzinfo else seen_at.replace(tzinfo=UTC)
     try:
         data = await anyio.to_thread.run_sync(faces.anonymise, data)
-        return await frames.receive(session, data, embed, chat, source, stream_id, when, viewer.id)
+        return await frames.receive(
+            session, data, embed, chat, source, stream_id, when, viewer.id, store
+        )
     except ValueError as error:
         raise HTTPException(415, str(error)) from error
     except UpstreamError as error:

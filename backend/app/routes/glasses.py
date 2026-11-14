@@ -136,6 +136,7 @@ async def upload_frame(
     source: Annotated[frames.Source, Form()] = "single",
     stream_id: Annotated[str, Form(max_length=100)] = "",
     seen_at: Annotated[datetime | None, Form()] = None,
+    store: Annotated[bool, Form()] = True,
 ):
     """One frame from the glasses, with every face in it blurred first: embedded, stored as a
     memory in the glasses collection, and checked against the triggers.
@@ -144,6 +145,9 @@ async def upload_frame(
     last one stored from the same `stream_id` is not stored again) or "single" for a photo the
     wearer took (always stored). Most answers carry no `message`; when a trigger fires,
     `message` is what to show on the glasses.
+
+    `store=false` only checks the frame against the triggers: the home page sends the demo clips
+    this way, since they are stored as demo memories already.
     """
     return await actions.memory_frame(
         session,
@@ -154,6 +158,7 @@ async def upload_frame(
         source,
         stream_id,
         seen_at,
+        store,
     )
 
 

@@ -9,7 +9,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlmodel import select
 
-from app import showcase
+from app import demo, showcase
 from app.auth import OptionalViewerDep, ViewerDep
 from app.db import SessionDep
 from app.models import Showcase, ShowcaseFields
@@ -34,16 +34,12 @@ class ShowcasePublic(ShowcaseFields):
     assets: list[ShowcaseAsset]
 
 
-def assets(item: Showcase) -> list[dict]:
-    return json.loads(item.assets_json)
-
-
 def public(item: Showcase) -> ShowcasePublic:
     return ShowcasePublic(
         **item.model_dump(exclude={"assets_json"}),
         assets=[
             ShowcaseAsset(**a, url=f"/api/demo/clips/{item.id}/media/{a['name']}")
-            for a in assets(item)
+            for a in showcase.assets(item)
         ],
     )
 
@@ -90,7 +86,7 @@ async def create(body: ShowcaseWrite, session: SessionDep, viewer: ViewerDep):
 async def update(id: int, body: ShowcaseWrite, session: SessionDep, viewer: ViewerDep):
     admin(viewer)
     item = await find(session, id)
-    current = assets(item)
+    current = showcase.assets(item)
     if current and body.kind != item.kind:
         raise HTTPException(422, "Create a new demo to change media type")
     if body.published and not current:
@@ -104,6 +100,7 @@ async def update(id: int, body: ShowcaseWrite, session: SessionDep, viewer: View
     item.sqlmodel_update(body.model_dump(exclude={"asset_order"}))
     session.add(item)
     await session.commit()
+    demo.request_sync()  # the demo memories follow the published clips
     return public(item)
 
 
@@ -117,7 +114,7 @@ async def upload(
 ):
     admin(viewer)
     item = await find(session, id)
-    current = assets(item)
+    current = showcase.assets(item)
     if not files or (item.kind == "video" and len(files) != 1):
         raise HTTPException(422, "Upload one video or an ordered batch of images")
     if item.kind == "images" and len(current) + len(files) > showcase.MAX_ASSETS:
@@ -150,6 +147,7 @@ async def upload(
         raise
     if item.kind == "video":
         await anyio.to_thread.run_sync(showcase.delete, [a["name"] for a in current])
+    demo.request_sync()
     return public(item)
 
 
@@ -158,7 +156,7 @@ async def get_media(id: int, name: str, session: SessionDep, viewer: OptionalVie
     item = await find(session, id)
     if not item.published and (viewer is None or not viewer.is_admin):
         raise HTTPException(404, "No such media")
-    asset = next((a for a in assets(item) if a["name"] == name), None)
+    asset = next((a for a in showcase.assets(item) if a["name"] == name), None)
     if asset is None:
         raise HTTPException(404, "No such media")
     path = showcase.folder() / asset["name"]
@@ -173,9 +171,10 @@ async def get_media(id: int, name: str, session: SessionDep, viewer: OptionalVie
 async def remove(id: int, session: SessionDep, viewer: ViewerDep):
     admin(viewer)
     item = await find(session, id)
-    names = [a["name"] for a in assets(item)]
+    names = [a["name"] for a in showcase.assets(item)]
     await session.delete(item)
     await session.commit()
+    demo.request_sync()  # the demo memories follow the published clips
     await anyio.to_thread.run_sync(showcase.delete, names)
 
 
@@ -201,7 +200,7 @@ async def reorder(body: ShowcaseOrder, session: SessionDep, viewer: ViewerDep):
 async def remove_asset(id: int, name: str, session: SessionDep, viewer: ViewerDep):
     admin(viewer)
     item = await find(session, id)
-    current = assets(item)
+    current = showcase.assets(item)
     remaining = [a for a in current if a["name"] != name]
     if len(remaining) == len(current):
         raise HTTPException(404, "No such media")
@@ -210,5 +209,6 @@ async def remove_asset(id: int, name: str, session: SessionDep, viewer: ViewerDe
         item.published = False
     session.add(item)
     await session.commit()
+    demo.request_sync()  # the demo memories follow the published clips
     await anyio.to_thread.run_sync(showcase.delete, [name])
     return public(item)
