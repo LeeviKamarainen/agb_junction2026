@@ -87,12 +87,13 @@ data class UiState(
     val liveStatus: String = "",
     val liveImage: Bitmap? = null,  // what was last drawn on the glasses (shown on the phone too)
     val quickArmed: Boolean = false, // quick-shot mode: no stream, glasses button/gesture takes a photo
-    // Memory mode: frames go to the backend's vector database (FrameApi). Armed = session, inputs and
+    // Memory mode: frames go to the backend's vector database (GlassesChannel). Armed = session, inputs and
     // display attached; streaming = 2 fps frames going up; sending = a single photo on its way.
     val memoryArmed: Boolean = false,
     val memoryStreaming: Boolean = false,
     val memorySending: Boolean = false,
     val memoryStatus: String = "",
+    val memoryConnection: String = "Disconnected",
     val glassesMessage: GlassesMessage? = null, // the trigger message on the glasses right now
     val photos: List<java.io.File> = emptyList(), // gallery, newest first
     val message: String = "",
@@ -1063,7 +1064,7 @@ class GlassesViewModel : ViewModel() {
     // ------------------------------------------------------------ memory mode
 
     /*
-     * Memory mode sends what the glasses see to the backend's vector database (FrameApi), and shows the
+     * Memory mode sends what the glasses see to the backend's vector database (GlassesChannel), and shows the
      * messages its triggers send back. Arming opens the session with the glasses' inputs and display but
      * no camera. Then:
      *  - stream: the phone button, a Neural Band (or touchpad) double tap, or a double press of the
@@ -1072,6 +1073,19 @@ class GlassesViewModel : ViewModel() {
      *    photo (also saved to the gallery). Without a running stream the camera opens just for it.
      * The glasses show a camera icon top right while streaming and a paper plane while a photo is sent.
      */
+    private val memoryChannel by lazy {
+        GlassesChannel(
+            scope = viewModelScope,
+            onStatus = { status ->
+                _ui.update { if (it.memoryArmed) it.copy(memoryConnection = status) else it }
+            },
+            onMessage = { message ->
+                viewModelScope.launch {
+                    if (_ui.value.memoryArmed) showGlassesMessage(message)
+                }
+            },
+        )
+    }
     private var memoryLoop: Job? = null
     private val memoryCameraJobs = mutableListOf<Job>()
     private var memoryStreamId = ""
@@ -1100,9 +1114,10 @@ class GlassesViewModel : ViewModel() {
         _ui.update {
             it.copy(
                 memoryArmed = true,
-                memoryStatus = if (FrameApi.configured) "Ready" else "Set glasses.api in local.properties to send frames",
+                memoryStatus = "Ready",
             )
         }
+        memoryChannel.start()
         say("Memory mode armed. Double tap or double press to stream, tap or press once for one photo.")
     }
 
@@ -1310,7 +1325,7 @@ class GlassesViewModel : ViewModel() {
                 _ui.update { it.copy(photos = PhotoStore.list(ctx)) }
             }
         }
-        when (val out = FrameApi.send(jpeg, source, if (source == "stream") memoryStreamId else "")) {
+        when (val out = memoryChannel.send(jpeg, source, if (source == "stream") memoryStreamId else "")) {
             is FrameOutcome.Ok -> {
                 if (source == "stream") {
                     memorySent++
@@ -1426,6 +1441,7 @@ class GlassesViewModel : ViewModel() {
         liveFlash = null
         memoryLoop?.cancel()
         memoryLoop = null
+        memoryChannel.close()
         memoryCameraJobs.forEach { it.cancel() }
         memoryCameraJobs.clear()
         messageClearJob?.cancel()

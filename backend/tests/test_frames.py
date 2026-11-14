@@ -225,3 +225,122 @@ def test_the_trigger_is_committed_as_fired_before_the_message_is_written(client,
 
     assert send(client).json()["message"]["text"] == "Keys!"
     assert fired_during_chat[0] is not None
+
+
+def send_socket(ws, id=1, source="single", stream_id="", data=None, **extra):
+    ws.send_json(
+        {"type": "memory_frame", "id": id, "source": source, "stream_id": stream_id, **extra}
+    )
+    ws.send_bytes(jpeg() if data is None else data)
+    return ws.receive_json()
+
+
+def test_socket_memory_frames_store_and_fire_triggers(client, scene):
+    trigger = add_trigger(client)
+    with client.websocket_connect("/api/glasses/ws") as ws:
+        first = send_socket(ws, source="stream", stream_id="phone")
+        assert first["type"] == "memory_result" and first["id"] == 1
+        assert first["result"]["stored"]
+        assert first["result"]["message"]["trigger_id"] == trigger["id"]
+        second = send_socket(ws, id=2, source="stream", stream_id="phone")
+        assert not second["result"]["stored"]
+        assert second["result"]["message"] is None
+        single = send_socket(ws, id=3, seen_at="2026-11-14T12:00:00")
+        assert single["result"]["stored"]
+    assert len(client.get("/api/memories").json()) == 2
+
+
+@pytest.mark.parametrize(
+    "data,status", [(b"not an image", 415), (b"x" * (10 * 1024 * 1024 + 1), 413)]
+)
+def test_socket_memory_frame_errors_do_not_close_the_connection(client, scene, data, status):
+    with client.websocket_connect("/api/glasses/ws") as ws:
+        error = send_socket(ws, data=data)
+        assert error["type"] == "error" and error["status"] == status and error["id"] == 1
+        assert send_socket(ws, id=2)["result"]["stored"]
+
+
+def test_socket_memory_frame_needs_an_embedder(client, scene):
+    app.dependency_overrides[optional_embedder] = lambda: None
+    with client.websocket_connect("/api/glasses/ws") as ws:
+        assert send_socket(ws)["status"] == 503
+
+
+def test_socket_memory_frames_do_not_queue_and_ping_stays_responsive(client, scene):
+    import threading
+
+    checking, release = threading.Event(), threading.Event()
+
+    def slow(inputs):
+        checking.set()
+        assert release.wait(5)
+        return scene(inputs)
+
+    app.dependency_overrides[optional_embedder] = lambda: slow
+    with client.websocket_connect("/api/glasses/ws") as ws:
+        ws.send_json({"type": "memory_frame", "id": 1})
+        ws.send_bytes(jpeg())
+        assert checking.wait(5)
+        try:
+            assert send_socket(ws, id=2)["status"] == 429
+            ws.send_json({"type": "ping", "id": 3})
+            assert ws.receive_json() == {"type": "pong", "id": 3}
+        finally:
+            release.set()
+        assert ws.receive_json()["result"]["stored"]
+
+
+def test_frames_and_triggers_belong_to_the_login_over_http_and_socket(client, guest, scene):
+    aino, ville = guest("aino"), guest("ville")
+    trigger = client.post(
+        "/api/glasses/triggers",
+        headers=aino,
+        json={"name": "Private", "watch_for": "a set of keys", "instruction": "Private message"},
+    ).json()
+    assert client.get("/api/glasses/triggers", headers=ville).json() == []
+    assert client.delete(f"/api/glasses/triggers/{trigger['id']}", headers=ville).status_code == 404
+    assert (
+        client.put(
+            f"/api/glasses/triggers/{trigger['id']}",
+            headers=ville,
+            json={"name": "Stolen", "watch_for": "a dog", "instruction": "changed"},
+        ).status_code
+        == 404
+    )
+
+    with client.websocket_connect("/api/glasses/ws", headers=aino) as ws:
+        result = send_socket(ws, source="stream", stream_id="same")["result"]
+        assert result["message"]["title"] == "Private"
+    assert client.get("/api/memories", headers=ville).json() == []
+    assert len(client.get("/api/memories", headers=aino).json()) == 1
+    # Deduplication is per owner even when two clients choose the same stream id.
+    other = client.post(
+        "/api/glasses/frames",
+        headers=ville,
+        files={"frame": ("f.jpg", jpeg(), "image/jpeg")},
+        data={"source": "stream", "stream_id": "same"},
+    ).json()
+    assert other["stored"] and other["message"] is None
+    assert other["matches"] == []
+
+
+def test_an_open_socket_refuses_work_after_its_guest_expires(client, guest, scene, monkeypatch):
+    from datetime import UTC, datetime, timedelta
+
+    from fastapi import WebSocketDisconnect
+
+    from app.glasses import channel
+
+    class Later:
+        @staticmethod
+        def now(tz):
+            return datetime.now(UTC) + timedelta(minutes=31)
+
+    with client.websocket_connect("/api/glasses/ws", headers=guest()) as ws:
+        ws.send_json({"type": "ping"})
+        assert ws.receive_json()["type"] == "pong"
+        monkeypatch.setattr(channel, "datetime", Later)
+        ws.send_json({"type": "ping"})
+        with pytest.raises(WebSocketDisconnect) as expired:
+            ws.receive_json()
+        assert expired.value.code == 1008

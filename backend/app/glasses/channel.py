@@ -8,6 +8,9 @@ the JPEG as the next, binary, frame. Client to server:
 - `command`: `text`, `action` or `question`, exactly as POST /api/glasses/command; answered with a
   `reply` carrying the same `id`.
 - `photo` + JPEG: as POST /api/glasses/photos; answered with a `reply`.
+- `memory_frame` + JPEG: as POST /api/glasses/frames, with `source` (stream/single),
+  `stream_id` and optional `seen_at`; answered with `memory_result` containing a FrameReply.
+  One may be in flight per connection; another gets 429, keeping camera uploads bounded.
 - `watch` with `on`: start or stop watching for reminders.
 - `frame` + JPEG, while watching: as POST /api/glasses/watch; answered with a `watch_result`.
   The latest frame wins: while one is being checked only the newest arrival waits, and the ones
@@ -34,6 +37,7 @@ Everything the socket does then is scoped to that user, like the HTTP routes.
 import logging
 import time
 from collections.abc import Callable
+from datetime import UTC, datetime
 from typing import Annotated, Literal
 
 import anyio
@@ -45,7 +49,7 @@ from sqlmodel import Session
 from app import auth
 from app.auth import Viewer
 from app.db import get_engine
-from app.glasses import actions
+from app.glasses import actions, frames
 from app.glasses.actions import Command, WatchResult
 from app.glasses.layout import GlassesReply
 from app.llm import Chat, Embedder
@@ -82,6 +86,14 @@ class FrameMessage(BaseModel):
     id: int | None = None
 
 
+class MemoryFrameMessage(BaseModel):
+    type: Literal["memory_frame"]
+    id: int | None = None
+    source: frames.Source = "single"
+    stream_id: str = Field(default="", max_length=100)
+    seen_at: datetime | None = None
+
+
 class WatchMessage(BaseModel):
     type: Literal["watch"]
     on: bool
@@ -101,7 +113,13 @@ class AuthMessage(BaseModel):
 
 
 ClientMessage = Annotated[
-    CommandMessage | PhotoMessage | FrameMessage | WatchMessage | PingMessage | AuthMessage,
+    CommandMessage
+    | PhotoMessage
+    | FrameMessage
+    | MemoryFrameMessage
+    | WatchMessage
+    | PingMessage
+    | AuthMessage,
     Field(discriminator="type"),
 ]
 client_message: TypeAdapter[ClientMessage] = TypeAdapter(ClientMessage)
@@ -136,7 +154,13 @@ class PongMessage(BaseModel):
     id: int | None = None
 
 
-ServerMessage = ReplyMessage | WatchResultMessage | ErrorMessage | PongMessage
+class MemoryResultMessage(BaseModel):
+    type: Literal["memory_result"] = "memory_result"
+    id: int | None
+    result: frames.FrameReply
+
+
+ServerMessage = ReplyMessage | WatchResultMessage | MemoryResultMessage | ErrorMessage | PongMessage
 
 
 def _viewer_for(token: str | None) -> Viewer | None:
@@ -186,6 +210,7 @@ class Channel:
         self.send_lock = anyio.Lock()
         self.limiter = anyio.CapacityLimiter(WORKERS)
         self.watching = False
+        self.memory_busy = False
         # The newest frame not yet checked, and how many it and its predecessors replaced.
         self.frame: tuple[int | None, bytes] | None = None
         self.dropped = 0
@@ -204,6 +229,14 @@ class Channel:
             event = await self.websocket.receive()
             if event["type"] == "websocket.disconnect":
                 return
+            # A phone can keep this socket open longer than a temporary guest exists. Refuse
+            # further work after expiry so it cannot recreate memories after the account sweep.
+            expires = self.viewer.user.expires_at
+            if expires is not None:
+                expires = expires if expires.tzinfo else expires.replace(tzinfo=UTC)
+                if datetime.now(UTC) >= expires:
+                    await self.websocket.close(code=REFUSED, reason="login expired")
+                    return
             text = event.get("text")
             if text is None:
                 await self.send(
@@ -231,6 +264,19 @@ class Channel:
                     data = await self.receive_jpeg(message.id)
                     if data is not None:
                         tasks.start_soon(self.run_photo, message.id, data)
+                case MemoryFrameMessage():
+                    data = await self.receive_jpeg(message.id)
+                    if data is None:
+                        continue
+                    if self.memory_busy:
+                        await self.send(
+                            ErrorMessage(
+                                id=message.id, status=429, detail="a memory frame is in flight"
+                            )
+                        )
+                    else:
+                        self.memory_busy = True
+                        tasks.start_soon(self.run_memory_frame, message, data)
                 case FrameMessage():
                     data = await self.receive_jpeg(message.id)
                     if data is None:
@@ -288,6 +334,24 @@ class Channel:
         reply = await self.work(id, actions.photo, self.viewer, data, self.chat, self.embed)
         if reply is not None:
             await self.send(ReplyMessage(id=id, reply=reply))
+
+    async def run_memory_frame(self, message: MemoryFrameMessage, data: bytes) -> None:
+        try:
+            result = await self.work(
+                message.id,
+                actions.memory_frame,
+                self.viewer,
+                data,
+                self.chat,
+                self.embed,
+                message.source,
+                message.stream_id,
+                message.seen_at,
+            )
+            if result is not None:
+                await self.send(MemoryResultMessage(id=message.id, result=result))
+        finally:
+            self.memory_busy = False
 
     async def work[T](self, id: int | None, work: Callable[..., T], *args) -> T | None:
         """Runs `work(session, *args)` in a worker thread with its own session; a failure becomes

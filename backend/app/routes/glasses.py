@@ -5,7 +5,7 @@ Clients: the browser harness (frontend /glasses) and, later, glasses-android. Th
 /ws (app/glasses/channel.py); both call the same code in app/glasses/actions.py.
 """
 
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, WebSocket
@@ -17,7 +17,7 @@ from app.db import SessionDep
 from app.glasses import actions, channel, frames, photos, reminders, remote_memory, screens
 from app.glasses.actions import Command, WatchResult
 from app.glasses.layout import GlassesReply
-from app.llm import Chat, Embedder, UpstreamError, get_chat, get_embedder
+from app.llm import Chat, Embedder, get_chat, get_embedder
 from app.models import (
     Reminder,
     ReminderCreate,
@@ -173,9 +173,6 @@ def watch(
     return actions.watch(session, viewer, photo.file.read(photos.MAX_BYTES + 1), chat)
 
 
-MAX_FRAME = 10 * 1024 * 1024  # bytes
-
-
 @router.post("/frames", response_model=frames.FrameReply)
 def upload_frame(
     frame: Annotated[UploadFile, File(description="One image, usually a JPEG")],
@@ -195,20 +192,16 @@ def upload_frame(
     wearer took (always stored). Most answers carry no `message`; when a trigger fires,
     `message` is what to show on the glasses.
     """
-    if embed is None:
-        raise HTTPException(503, "No embedding model configured: set EMBED_URL")
-    data = frame.file.read(MAX_FRAME + 1)
-    if len(data) > MAX_FRAME:
-        raise HTTPException(413, "frame is larger than 10 MB")
-    when = seen_at if seen_at is None or seen_at.tzinfo else seen_at.replace(tzinfo=UTC)
-    try:
-        return frames.receive(
-            session, data, embed, chat, source, stream_id, when, viewer.id, viewer.owners
-        )
-    except ValueError as error:
-        raise HTTPException(415, str(error)) from error
-    except UpstreamError as error:
-        raise HTTPException(502, str(error)) from error
+    return actions.memory_frame(
+        session,
+        viewer,
+        frame.file.read(actions.MAX_FRAME + 1),
+        chat,
+        embed,
+        source,
+        stream_id,
+        seen_at,
+    )
 
 
 @router.get("/triggers", response_model=list[TriggerPublic])
