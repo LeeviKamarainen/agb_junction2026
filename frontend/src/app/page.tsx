@@ -1,5 +1,6 @@
 import { ArrowDown, ArrowUpRight, Asterisk, Code2, MapPin } from "lucide-react";
 import Image from "next/image";
+import Link from "next/link";
 import { io } from "next/cache";
 import { Suspense } from "react";
 
@@ -33,6 +34,7 @@ export default function Home() {
             JUNCTION<span className="wordmark-year">/26</span>
           </a>
           <nav aria-label="Main navigation">
+            <Link href="/memory">Memory lab</Link>
             <a href="#workspace">Workspace</a>
             <a href="#crew">The crew</a>
             <a
