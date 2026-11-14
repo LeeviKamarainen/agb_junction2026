@@ -47,6 +47,14 @@ this project's API. **VM1** is the GPU server that runs the segmenter (SAM 3).
   as `x` and `y` in the index), so every viewer draws the same map. Fewer than five memories get
   a straight line.
 
+## Faces
+
+- **Faces are filled as frames arrive** (`faces.anonymise`, the same file as the backend's), in
+  `/batches`, in `embed.keyframes` and in the images `/v1/embeddings` embeds, before anything
+  stores, embeds or summarises them. `/v1/chat/completions` passes images to Gemma as they came.
+  Batches stored before that are kept as they were. Why, and the measurements:
+  `docs/adr/0002-anonymise-faces.md` at the repo root.
+
 ## Gemma requests
 
 - **The Gemma 4 31B already on VM2 is used as it is**, through vLLM's OpenAI-style chat API.

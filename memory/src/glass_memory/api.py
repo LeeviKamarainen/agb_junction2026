@@ -26,7 +26,7 @@ from fastapi import APIRouter, Depends, FastAPI, File, Form, HTTPException, Uplo
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
-from glass_memory import ask, embed
+from glass_memory import ask, embed, faces
 
 log = logging.getLogger(__name__)
 ROOT = Path("res/items/API-1")
@@ -45,6 +45,7 @@ def _token():
 @asynccontextmanager
 async def _lifespan(app):
     _token()  # no token, no start
+    faces.load()  # no face detector, no start: no frame may be kept with its faces
     if not ask.served():
         ask.gemma()  # loaded once and kept on the GPU, so no request waits for it
     yield
@@ -113,11 +114,15 @@ def store_batch(
     every_s: Annotated[float, Form(gt=0, allow_inf_nan=False)] = 1.0,
 ):
     """Store the frames (JPEGs in time order, `every_s` seconds apart, 1000 at most: the form
-    parser's limit) as one batch of memories, with Gemma's image vectors of each. If Gemma fails
-    the batch is still stored, with an empty summary."""
+    parser's limit), every face in them filled first, as one batch of memories, with Gemma's
+    image vectors of each. If Gemma fails the batch is still stored, with an empty summary."""
     stills = [frame.file.read() for frame in frames]
     if not all(still.startswith(b"\xff\xd8") for still in stills):
         raise HTTPException(415, "every frame must be a JPEG")
+    try:
+        stills = [faces.anonymise(still) for still in stills]  # before anything keeps them
+    except ValueError:
+        raise HTTPException(415, "every frame must be a JPEG") from None
     folder = ROOT / datetime.now(UTC).strftime(ID)
     (folder / "keyframes").mkdir(parents=True)
     paths = [folder / "keyframes" / f"{i:05d}.jpg" for i in range(len(stills))]
@@ -209,8 +214,9 @@ class Texts(BaseModel):
 @app.post("/v1/embeddings")
 def embeddings(body: Texts):
     """OpenAI-style embeddings in the stills' embedding space, for another service's search. An
-    input that starts with `data:image/` is a base64 image and is embedded as one; every other
-    input is embedded as text, as a query or a document by `input_type`."""
+    input that starts with `data:image/` is a base64 image and is embedded as one, its faces
+    filled first; every other input is embedded as text, as a query or a document by
+    `input_type`."""
     if body.model != embed.MODEL:
         raise HTTPException(400, f"only {embed.MODEL} is served")
     inputs = [body.input] if isinstance(body.input, str) else body.input
@@ -247,9 +253,9 @@ def _embedded(given, input_type):
     if not given.startswith("data:image/"):
         return embed.embed_text(given, input_type)
     try:
-        still = io.BytesIO(base64.b64decode(given.partition(",")[2], validate=True))
-        return embed.embed_images([still])[0]
-    except ValueError, OSError:  # not base64, or PIL could not read it
+        still = faces.anonymise(base64.b64decode(given.partition(",")[2], validate=True))
+        return embed.embed_images([io.BytesIO(still)])[0]
+    except ValueError, OSError:  # not base64, or not an image
         raise HTTPException(400, "an image input must be a base64 data URL of an image") from None
 
 

@@ -10,7 +10,7 @@ import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
-from glass_memory import api, ask, embed
+from glass_memory import api, ask, embed, faces
 
 TOKEN = "t" * 32
 AUTH = {"Authorization": f"Bearer {TOKEN}"}
@@ -27,6 +27,7 @@ PROTECTED = [
 ]
 
 EMBED_IMAGES = embed.embed_images
+ANONYMISE = faces.anonymise
 
 
 def fake_images(paths, batch=32):
@@ -75,6 +76,9 @@ def client(monkeypatch, tmp_path, gemma):
     monkeypatch.setattr(
         embed, "encoder", lambda: pytest.fail("the test loaded the embedding model")
     )
+    # The frames here are not pictures (see jpeg), so filling their faces is faked too;
+    # test_faces_are_filled_before_a_frame_is_kept checks that the real one is used.
+    monkeypatch.setattr(faces, "anonymise", lambda still: still)
     with TestClient(api.app) as client:
         yield client
 
@@ -87,6 +91,22 @@ def jpeg(i):
 def post(client, n=4, **form):
     files = [("frames", (f"anything-{i}.jpg", jpeg(i), "image/jpeg")) for i in range(n)]
     return client.post("/batches", files=files, data=form, headers=AUTH)
+
+
+def test_faces_are_filled_before_a_frame_is_kept(client, monkeypatch):
+    monkeypatch.setattr(faces, "anonymise", lambda still: still + b" filled")
+    batch = post(client, n=2).json()["batch"]
+
+    for i in range(2):
+        kept = client.get(f"/batches/{batch}/keyframes/{i:05d}.jpg", headers=AUTH).content
+        assert kept == jpeg(i) + b" filled"  # and the embedder and Gemma read these files
+
+
+def test_a_frame_that_cannot_be_read_stores_nothing(client, monkeypatch):
+    monkeypatch.setattr(faces, "anonymise", ANONYMISE)  # the real one: jpeg() is no picture
+
+    assert post(client, n=1).status_code == 415
+    assert client.get("/batches", headers=AUTH).json() == []
 
 
 def test_health_and_the_page_are_open(client):
@@ -354,6 +374,7 @@ def test_an_image_input_is_embedded_as_an_image(client, monkeypatch):
         return np.array([list(still.read()) for still in stills], np.float32)
 
     monkeypatch.setattr(embed, "embed_images", image_vector)
+    monkeypatch.setattr(faces, "anonymise", lambda still: still + bytes([10]))  # marks it
 
     def embedded(*inputs):
         return client.post("/v1/embeddings", json={"input": list(inputs)}, headers=AUTH)
@@ -361,7 +382,7 @@ def test_an_image_input_is_embedded_as_an_image(client, monkeypatch):
     still = "data:image/jpeg;base64," + base64.b64encode(bytes([7, 8, 9])).decode()
     data = embedded("keys", still).json()["data"]
     assert data[0]["embedding"] == fake_text("keys").tolist()
-    assert data[1]["embedding"] == [7.0, 8.0, 9.0]
+    assert data[1]["embedding"] == [7.0, 8.0, 9.0, 10.0]  # its faces filled before it is embedded
     assert embedded("data:image/jpeg;base64,not base64!").status_code == 400
 
 

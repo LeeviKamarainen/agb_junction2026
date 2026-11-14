@@ -1,10 +1,13 @@
-"""embed.store and embed.load with a fake embedder: the embedding model is never loaded here."""
+"""embed.keyframes, embed.store and embed.load with a fake embedder: the embedding model is never
+loaded here."""
 
+import av
 import numpy as np
 import polars as pl
 import pytest
+from PIL import Image
 
-from glass_memory import embed
+from glass_memory import embed, faces
 
 
 def fake_vectors(paths, batch=32):
@@ -90,3 +93,25 @@ def test_text_gets_the_model_cards_prompt_for_its_side_of_a_search(monkeypatch):
 
     assert prompts == ["SearchQuery", "Document"]
     assert np.allclose(question, [0.6, 0.8])  # unit length
+
+
+def test_keyframes_are_kept_with_their_faces_filled(tmp_path, monkeypatch):
+    """A fake detector finds one face in the middle of every frame of a small checkerboard clip."""
+    rows, columns = np.indices((64, 64))
+    board = np.stack([((rows // 4 + columns // 4) % 2 * 255).astype(np.uint8)] * 3, axis=-1)
+    video = tmp_path / "clip.mp4"
+    with av.open(str(video), "w") as container:
+        stream = container.add_stream("mpeg4", rate=2)
+        stream.width, stream.height, stream.pix_fmt = 64, 64, "yuv420p"
+        for _ in range(4):
+            container.mux(stream.encode(av.VideoFrame.from_ndarray(board, format="rgb24")))
+        container.mux(stream.encode())
+    monkeypatch.setattr(faces, "detect", lambda image: [faces.Face(16, 16, 32, 32, 0.9)])
+
+    saved = embed.keyframes(video, tmp_path / "keyframes", every_s=0.5)
+
+    assert len(saved) >= 2
+    for _, name in saved:
+        still = np.asarray(Image.open(tmp_path / "keyframes" / name).convert("L"), float)
+        assert still[24:40, 24:40].std() < 3  # the face, filled
+        assert still[:8, :8].std() > 50  # a corner, still squares

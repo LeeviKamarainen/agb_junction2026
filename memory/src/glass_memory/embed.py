@@ -15,6 +15,8 @@ import umap
 from PIL import Image
 from sentence_transformers import SentenceTransformer
 
+from glass_memory import faces
+
 MODEL = "google/embeddinggemma-2"
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -60,7 +62,8 @@ def embed_text(text, input_type="query"):
 
 
 def keyframes(video, out_dir, every_s=1.0, max_side=768):
-    """Save one upright still every `every_s` seconds; return (seconds, file name) pairs."""
+    """Save one upright still every `every_s` seconds, every face in it filled; return (seconds,
+    file name) pairs."""
     out_dir.mkdir(parents=True, exist_ok=True)
     saved, next_t = [], 0.0
     with av.open(str(video)) as container:
@@ -71,6 +74,7 @@ def keyframes(video, out_dir, every_s=1.0, max_side=768):
             image = frame.to_image()
             if rotation := getattr(frame, "rotation", 0):
                 image = image.rotate(rotation, expand=True)
+            image = faces.cover(image, faces.detect(image))  # at full size, so small faces count
             image.thumbnail((max_side, max_side))
             name = f"{len(saved):05d}.jpg"
             image.save(out_dir / name, quality=85)

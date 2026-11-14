@@ -53,7 +53,7 @@ Each change that lands on `main` runs the checks, then deploys: the code is copi
 
 ## Memory API
 
-`memory/` is the visual memory for the glasses: frames are posted to its API, embedded with EmbeddingGemma 2 and stored as memories, shown as a 2D map, and Gemma answers questions from the stills a question retrieves. Read `memory/README.md` before working there; what is left is in `memory/docs/todo.md` and the choices already made in `memory/docs/decisions.md`. It is its own uv project (Python 3.14 with torch, about 6 GB), so `make check` and CI leave it out: run `make check-memory`.
+`memory/` is the visual memory for the glasses: frames are posted to its API, have their faces filled (`memory/src/glass_memory/faces.py`, the same file as the backend's), are embedded with EmbeddingGemma 2 and stored as memories, shown as a 2D map, and Gemma answers questions from the stills a question retrieves. Read `memory/README.md` before working there; what is left is in `memory/docs/todo.md` and the choices already made in `memory/docs/decisions.md`. It is its own uv project (Python 3.14 with torch, about 6 GB), so `make check` and CI leave it out: run `make check-memory`.
 
 The API runs on the Gemma server (called VM2 in `memory/`), beside vLLM, behind Caddy at `https://<vm2-ip-with-dashes>.sslip.io`. Nothing deploys there automatically, so `make memory-deploy` and `make memory-setup` need the same approval as other production changes. Leave the `gemma` container and port 8000 alone.
 
@@ -77,7 +77,7 @@ curl -H "$AUTH" -H "Content-Type: application/json" -d '{"model": "google/embedd
 
 `/v1/chat/completions` passes OpenAI-style chat, tool calls included, to vLLM on the same server (`GEMMA_URL`, `GEMMA_API_KEY`), so the backend reaches Gemma with this API's token: `LLM_URL` is the memory API's address and `LLM_API_KEY` its `GLASS_API_TOKEN`. It needs a `make memory-deploy` to go live.
 
-`/v1/embeddings` serves EmbeddingGemma 2 (`google/embeddinggemma-2`), 768 numbers per input, in the same space as the stored stills; an input that starts with `data:image/` (a base64 data URL) is embedded as an image, any other as text: as a search query, or with `"input_type": "document"` as a text to be found (the backend embeds its notes that way). It replaced CLIP (`ViT-B-32`, 512 numbers) on 2026-11-14: that name now gets a 400, and vectors made with it cannot be compared with new ones.
+`/v1/embeddings` serves EmbeddingGemma 2 (`google/embeddinggemma-2`), 768 numbers per input, in the same space as the stored stills; an input that starts with `data:image/` (a base64 data URL) is embedded as an image, its faces filled first, any other as text: as a search query, or with `"input_type": "document"` as a text to be found (the backend embeds its notes that way). It replaced CLIP (`ViT-B-32`, 512 numbers) on 2026-11-14: that name now gets a 400, and vectors made with it cannot be compared with new ones.
 
 ## Glasses
 
