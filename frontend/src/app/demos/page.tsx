@@ -3,7 +3,6 @@ import type { Metadata } from "next";
 import { io } from "next/cache";
 import { api } from "@/lib/api/server";
 import { SiteShell } from "../_home/site-shell";
-import { DemoTimeline } from "../_home/demo-timeline";
 import { ShowcasePlayer } from "./showcase-player";
 
 export const metadata: Metadata = { title: "Demos — Glass memory" };
@@ -42,14 +41,6 @@ export default function DemoPage() {
       >
         <Demos />
       </Suspense>
-      <details className="mt-6 border-t border-border py-4">
-        <summary className="text-sm text-muted-foreground">
-          Explore the sample Junction day
-        </summary>
-        <div className="mt-4">
-          <DemoTimeline />
-        </div>
-      </details>
     </SiteShell>
   );
 }

@@ -61,7 +61,7 @@ Open http://localhost:3000 and start a **guest**: a generated name, no password,
 
 The homepage keeps the question box in focus. A visitor's first question starts a 60-minute guest session; answers search the demo memories and that guest's own memories. Logged-in guests and the admin can open the phone camera from the navigation.
 
-Watch `/demos` without logging in. Published videos and ordered image sequences share one timeline, with chapter navigation, seeking, pause and mute controls. The sample Junction day remains available below it.
+Watch `/demos` without logging in. Published videos and ordered image sequences share one timeline, with chapter navigation, seeking, pause and mute controls.
 
 At `/admin`, add a draft, upload one MP4/WebM video (up to 200 MB) or a batch of images (up to 100, 15 MB each, 200 MB per upload), then publish. Adjust image dwell time, reorder images and move demos earlier or later. Video length is detected in the browser and can be adjusted. Published media is public; drafts are visible only to the admin. Playback uploads are separate from searchable memories: add those in the Memory lab when a demo should also answer questions.
 

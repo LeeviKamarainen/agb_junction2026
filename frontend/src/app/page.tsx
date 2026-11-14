@@ -8,7 +8,7 @@ export default function Home() {
         <p className="eyebrow">YOUR DAY, REMEMBERED</p>
         <h1 id="ask-day-title">What would you like to remember?</h1>
         <p className="text-sm text-muted-foreground">
-          Ask about your day, or try a question from the Junction demo day.
+          Ask about what you saw, where you went, and what you want to remember.
         </p>
         <DemoAsk />
       </section>
