@@ -53,6 +53,20 @@ full-resolution photo (`camera.photo.capturePhoto(FULL, HIGH)`), saves it to the
 
 - Needs the experimental `mwdat-inputs` module and standalone photo capture: dev/beta channels only,
   not publishable yet. Inputs may need capability approval in the Wearables Developer Center.
+- **Feedback:** the phone shows a colour-coded status card (capturing -> receiving with a % bar -> saving ->
+  sending -> done) and buzzes/beeps when a capture starts, finishes or fails. Display glasses show
+  "Capturing..." before the shot and "Photo saved" afterwards; there is nothing in between because
+  display updates are held back during the transfer. Other glasses have no screen, so the buzz/beep is the cue.
+- **"Glasses screen messages" switch (off by default).** Meta lists "do not combine capture with display" as a known
+  issue on Ray-Ban Display, so quick shot only attaches the display when you turn this on (before arming).
+- **"The glasses took the photo but never sent it" (CAPTURE_FAILURE).** The SDK gives up after 30 s with no transfer.
+  Restart the glasses (Meta also says capture can break after a firmware update until you reboot them), and don't
+  disarm mid-transfer.
+- **One photo at a time.** Pressing again while a photo is still being received shows "Busy" instead of queueing.
+- **Older photos.** The glasses keep any photo whose transfer was cut short (e.g. you disarmed mid-transfer) and
+  re-send it every time you arm. They go first, over a slow link, so a new photo waits behind them. The app shows
+  "Catching up on an older photo", saves those to the gallery without sending them to the backend, and
+  blocks capture until they finish. Don't disarm while a photo is in flight, or you create a new backlog.
 - Double press of the capture button is ignored (the SDK sends a short press first, so there's a 400 ms delay).
 - Unknown until tested on hardware: whether the glasses also take their own native photo on a button press.
 - Known issue: after a firmware update to v128, reboot the glasses or camera capture can fail.
