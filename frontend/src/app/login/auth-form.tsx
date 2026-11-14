@@ -145,9 +145,10 @@ export function AuthForm({ admin = false }: { admin?: boolean }) {
             href="/admin"
             aria-label="Admin login"
             title="Admin login"
-            className="self-end rounded-md p-2 text-muted-foreground/40 transition-colors hover:text-muted-foreground focus-visible:text-foreground focus-visible:outline-2 focus-visible:outline-ring"
+            className="inline-flex min-h-11 items-center gap-2 self-end rounded-md px-3 py-2 text-sm text-muted-foreground/70 transition-colors hover:text-muted-foreground focus-visible:text-foreground focus-visible:outline-2 focus-visible:outline-ring"
           >
-            <Settings2 size={14} aria-hidden="true" />
+            <Settings2 size={18} aria-hidden="true" />
+            Admin
           </Link>
         </>
       ) : null}
