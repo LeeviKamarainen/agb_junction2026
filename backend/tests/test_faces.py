@@ -276,6 +276,16 @@ def test_a_watched_frame_that_is_not_an_image_is_refused(client, models, how):
     assert not models.shown
 
 
+def test_uploaded_demo_images_have_their_faces_filled(client):
+    clip = client.post("/api/demo/clips", json={"title": "Portrait"}).json()
+    uploaded = client.post(
+        f"/api/demo/clips/{clip['id']}/media",
+        files={"files": ("portrait.jpg", PORTRAIT, "image/jpeg")},
+    )
+    assert uploaded.status_code == 200, uploaded.text
+    assert face_filled(picture(client.get(uploaded.json()["assets"][0]["url"]).content))
+
+
 def test_every_upload_route_is_one_of_those_tested_here():
     """A new multipart upload route fails this until it fills faces first and has its test here.
     It cannot see an image sent another way: the WebSocket's frames are tested above by hand, and
@@ -287,7 +297,12 @@ def test_every_upload_route_is_one_of_those_tested_here():
         if "multipart/form-data" in operation.get("requestBody", {}).get("content", {})
     }
 
-    assert uploads == {"/api/glasses/frames", "/api/glasses/watch", "/api/memories/image"}
+    assert uploads == {
+        "/api/glasses/frames",
+        "/api/glasses/watch",
+        "/api/memories/image",
+        "/api/demo/clips/{id}/media",
+    }
 
 
 @pytest.mark.parametrize(

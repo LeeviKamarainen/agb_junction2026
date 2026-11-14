@@ -12,7 +12,7 @@ import { api } from "@/lib/api/browser";
 import { nextPath } from "@/lib/session";
 
 /** Guests can start fresh or return by username on /login; with `admin`, the password form /admin shows. */
-export function AuthForm({ admin = false }: { admin?: boolean }) {
+export function AuthForm({ admin = false, redirectTo }: { admin?: boolean; redirectTo?: string }) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
@@ -34,7 +34,7 @@ export function AuthForm({ admin = false }: { admin?: boolean }) {
           });
       if (data) {
         // A full load, so every page and the proxy see the new session cookie.
-        window.location.assign(nextPath());
+        window.location.assign(redirectTo ?? nextPath());
         return;
       }
       setError(

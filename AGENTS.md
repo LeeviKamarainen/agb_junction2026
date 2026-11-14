@@ -38,7 +38,7 @@ Every memory has an `owner_id` (0 = demo, which only the admin adds, with `demo=
 
 ## Frontend
 
-Read `frontend/AGENTS.md` before writing frontend code. The home page (`frontend/src/app/page.tsx`, its parts in `frontend/src/app/_home/`) is the demo: a timeline of the demo dataset, asking about it, and placeholders for the trigger demo and the logged-in user's own space. Its navigation shows only the login menu, plus the Memory lab for the admin; link other pages from the Memory lab or related pages.
+Read `frontend/AGENTS.md` before writing frontend code. The home page (`frontend/src/app/page.tsx`, its parts in `frontend/src/app/_home/`) centers on asking about the day. `/demos` plays admin-curated videos and ordered image sequences on one timeline. `/admin` manages drafts, uploads, ordering and publication; published media is public, drafts require the admin. Playback uploads are separate from searchable memories. Navigation offers the camera and Memory lab to every logged-in user, and demo management only to the admin.
 
 ## Deploying
 
