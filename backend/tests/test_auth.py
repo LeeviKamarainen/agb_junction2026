@@ -7,7 +7,6 @@ from PIL import Image
 from sqlmodel import select
 
 from app import media, vectors
-from app.glasses import photos
 from app.llm import get_chat, get_embedder
 from app.main import app
 from app.models import Memory, Reminder, User
@@ -17,7 +16,7 @@ from app.search import TABLE
 WIDTH = vectors.VECTOR_TABLES[TABLE].dimensions
 
 
-async def fake_embed(texts):
+async def fake_embed(texts, input_type="query"):
     return [[1.0] + [0.0] * (WIDTH - 1) for _ in texts]
 
 
@@ -74,30 +73,6 @@ def test_every_guest_is_a_new_account(anonymous):
     second = anonymous.post("/api/auth/guest").json()
 
     assert first["username"] != second["username"]
-
-
-def test_a_new_guest_cannot_inherit_files_from_a_recycled_user_id(anonymous, db):
-    async def work(session):
-        next_id = max(user.id for user in await session.exec(select(User))) + 1
-        return next_id
-
-    next_id = db(work)
-
-    name = photos.save(jpeg(), next_id)
-    old_photo = photos.photos_dir() / str(next_id) / name
-    old_batch = photos.photos_dir() / f"memory-batch-{next_id}.json"
-    old_batch.write_text(json.dumps({"batch": "a" * 32, "photos": [name]}))
-    legacy_photo = photos.photos_dir() / name
-    legacy_photo.write_bytes(jpeg())
-
-    created = anonymous.post("/api/auth/guest").json()
-
-    assert created["id"] == next_id
-    assert not old_photo.exists() and not old_batch.exists()
-    assert legacy_photo.exists()  # legacy photos remain available to the admin
-    assert anonymous.get(photos.url(name)).status_code == 404
-    gallery = anonymous.post("/api/glasses/command", json={"action": "gallery"}).json()
-    assert name not in json.dumps(gallery)
 
 
 def test_there_is_no_register_and_guests_cannot_use_the_admin_login(anonymous):
@@ -191,19 +166,16 @@ def test_an_expired_guest_is_logged_out_and_deleted_with_its_memories(client, gu
     aino = guest("aino")
     image = add_image(client, "aino's photo", aino).json()
     add_text(client, "aino: keys under the mat", aino)
-    files = {"photo": ("a.jpg", jpeg(), "image/jpeg")}
-    assert client.post("/api/glasses/photos", files=files, headers=aino).status_code == 201
     client.post("/api/glasses/reminders", json={"text": "warn me about the stool"}, headers=aino)
     stored = db(lambda session: session.get(Memory, image["id"]))
     assert stored is not None and stored.image_file
-    image_file, owner = media.path(stored.image_file), stored.owner_id
+    image_file = media.path(stored.image_file)
 
     expire_guests(db)
 
     assert client.get("/api/auth/me", headers=aino).status_code == 401
     assert texts(client) == set()  # the admin sees nothing left
     assert not image_file.exists()
-    assert not (photos.photos_dir() / str(owner)).exists()
 
     async def left(session):
         guests = (await session.exec(select(User).where(User.role == "guest"))).first()
@@ -378,18 +350,8 @@ def test_the_streamed_answer_is_scoped_too(client, two_guests):
 # --- The glasses ----------------------------------------------------------------------------
 
 
-def test_glasses_photos_and_reminders_are_per_user(client, guest):
+def test_glasses_reminders_are_per_user(client, guest):
     aino, ville = guest("aino"), guest("ville")
-    files = {"photo": ("a.jpg", jpeg(), "image/jpeg")}
-    assert client.post("/api/glasses/photos", files=files, headers=aino).status_code == 201
-
-    aino_gallery = client.post("/api/glasses/command", json={"action": "gallery"}, headers=aino)
-    ville_gallery = client.post("/api/glasses/command", json={"action": "gallery"}, headers=ville)
-    assert "Latest 1 photos" in json.dumps(aino_gallery.json())
-    assert "No photos yet" in json.dumps(ville_gallery.json())
-    src = aino_gallery.json()["screen"]["children"][1]["children"][0]["src"]
-    assert client.get(src, headers=aino).status_code == 200
-    assert client.get(src, headers=ville).status_code == 404
 
     client.post("/api/glasses/reminders", json={"text": "warn me about the stool"}, headers=aino)
     assert client.get("/api/glasses/reminders", headers=ville).json() == []

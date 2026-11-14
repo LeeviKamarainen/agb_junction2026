@@ -1,29 +1,19 @@
 """The glasses' API: every response is a `GlassesReply` the client draws and speaks.
 
 Clients: the browser harness (frontend /glasses) and, later, glasses-android. The live traffic
-(commands, photos, watched frames, pushed warnings) also runs over one WebSocket per client at
-/ws (app/glasses/channel.py); both call the same code in app/glasses/actions.py.
+(commands, frames, pushed warnings) also runs over one WebSocket per client at /ws
+(app/glasses/channel.py); both call the same code in app/glasses/actions.py.
 """
 
 from datetime import datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, WebSocket
-from fastapi.responses import FileResponse, Response
 from sqlmodel import col, select
 
 from app.auth import ViewerDep
 from app.db import SessionDep
-from app.glasses import (
-    actions,
-    channel,
-    frames,
-    photos,
-    reminders,
-    remote_memory,
-    screens,
-    triggers,
-)
+from app.glasses import actions, channel, frames, reminders, screens, triggers
 from app.glasses.actions import Command, WatchResult
 from app.glasses.layout import GlassesReply
 from app.llm import Chat, Embedder, UpstreamError, get_chat, get_embedder
@@ -78,58 +68,6 @@ async def command(
     return await actions.command(session, viewer, body, chat, embed)
 
 
-@router.post(
-    "/photos",
-    response_model=GlassesReply,
-    status_code=201,
-    description=(
-        "Saves the still. With a chat model the glasses describe it; with an embedding model it "
-        "also becomes an image memory, captioned with that description."
-    ),
-)
-async def upload_photo(
-    photo: Annotated[UploadFile, File(description="One JPEG still")],
-    session: SessionDep,
-    viewer: ViewerDep,
-    chat: ChatDep,
-    embed: EmbedderDep,
-):
-    data = await photo.read(photos.MAX_BYTES + 1)
-    return await actions.photo(session, viewer, data, chat, embed)
-
-
-@router.get(
-    "/photos/{name}",
-    response_class=FileResponse,
-    responses={200: {"content": {"image/jpeg": {}}}, 404: {}},
-)
-async def get_photo(name: str, viewer: ViewerDep):
-    """Your own photos only (the admin's: everyone's); 404 for anyone else's."""
-    file = photos.path(name, viewer.owners)
-    if file is None:
-        raise HTTPException(404, "no such photo")
-    return FileResponse(file, media_type="image/jpeg")
-
-
-@router.get(
-    "/memory/{batch}/keyframes/{name}",
-    response_class=Response,
-    responses={200: {"content": {"image/jpeg": {}}}, 404: {}, 502: {}},
-)
-async def get_memory_keyframe(batch: str, name: str, viewer: ViewerDep):
-    """A still from the glass-memory API, fetched with the backend's token: only from your own
-    batch (the admin: any)."""
-    if not viewer.is_admin and batch != remote_memory.current_batch(viewer.id):
-        raise HTTPException(404, "no such keyframe")
-    try:
-        data = await remote_memory.keyframe(batch, name)
-    except remote_memory.Unavailable:
-        raise HTTPException(502, "the memory API is unreachable") from None
-    if data is None:
-        raise HTTPException(404, "no such keyframe")
-    return Response(data, media_type="image/jpeg")
-
-
 @router.get("/reminders", response_model=list[ReminderPublic])
 async def list_reminders(session: SessionDep, viewer: ViewerDep):
     """Your reminders; the admin's list holds everyone's."""
@@ -171,8 +109,9 @@ async def trigger_reminder(reminder_id: int, session: SessionDep, viewer: Viewer
     "/watch",
     response_model=WatchResult,
     description=(
-        "One frame from the camera while the glasses watch for reminders. Not stored. A target in "
-        "view gives a warning, at most once a minute per reminder."
+        "One frame from the camera while the glasses watch for reminders, with every face in it "
+        "filled before the chat model sees it. Not stored. A target in view gives a warning, at "
+        "most once a minute per reminder."
     ),
 )
 async def watch(
@@ -181,7 +120,7 @@ async def watch(
     viewer: ViewerDep,
     chat: ChatDep,
 ):
-    return await actions.watch(session, viewer, await photo.read(photos.MAX_BYTES + 1), chat)
+    return await actions.watch(session, viewer, await photo.read(actions.MAX_FRAME + 1), chat)
 
 
 @router.post("/frames", response_model=frames.FrameReply)
@@ -195,8 +134,8 @@ async def upload_frame(
     stream_id: Annotated[str, Form(max_length=100)] = "",
     seen_at: Annotated[datetime | None, Form()] = None,
 ):
-    """One frame from the glasses: embedded, stored as a memory in the glasses collection, and
-    checked against the triggers.
+    """One frame from the glasses, with every face in it filled first: embedded, stored as a
+    memory in the glasses collection, and checked against the triggers.
 
     `source` is "stream" for frames of a running stream (twice a second; a frame much like the
     last one stored from the same `stream_id` is not stored again) or "single" for a photo the

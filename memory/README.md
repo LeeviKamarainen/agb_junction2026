@@ -6,8 +6,9 @@ object" lookup, whose aiming never felt good; a memory of the whole scene needs 
 
 ## Idea
 
-1. **Embed.** Frames from the glasses go to VM2 (the Gemma server). One keyframe per second is
-   saved as a still and embedded with EmbeddingGemma 2, with its timestamp. Later there is one memory per
+1. **Embed.** Frames from the glasses go to VM2 (the Gemma server). One keyframe per second has
+   every face in it filled, then is saved as a still and embedded with EmbeddingGemma 2, with its
+   timestamp. Later there is one memory per
    tracked object instead of per frame.
 2. **Memory map.** UMAP projects the embeddings to 2D. Each point is a memory, clusters form by
    place and kind of thing, colour is time. New points appear live, and a question lights up the

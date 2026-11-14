@@ -6,7 +6,7 @@ import pytest
 from PIL import Image
 
 from app import media, vectors
-from app.glasses import frames, remote_memory, scores
+from app.glasses import frames, scores
 from app.llm import UpstreamError
 from app.main import app
 from app.routes.glasses import optional_chat, optional_embedder
@@ -39,7 +39,7 @@ class Scene:
         self.asked += 1
         return {"role": "assistant", "content": json.dumps({"say": self.say})}
 
-    async def __call__(self, inputs):
+    async def __call__(self, inputs, input_type="query"):
         self.calls += 1
         return [
             self.image if i.startswith("data:image/") else self.texts.get(i, unit(WIDTH - 1))
@@ -48,8 +48,7 @@ class Scene:
 
 
 @pytest.fixture
-def scene(client, monkeypatch):
-    monkeypatch.setattr(remote_memory, "configured", lambda: False)
+def scene(client):
     frames.reset_streams()
     fake = Scene()
     app.dependency_overrides[optional_embedder] = lambda: fake
@@ -524,7 +523,7 @@ def test_socket_memory_frames_do_not_queue_and_ping_stays_responsive(client, sce
 
     checking, release = threading.Event(), threading.Event()
 
-    async def slow(inputs):
+    async def slow(inputs, input_type="query"):
         checking.set()
         assert await anyio.to_thread.run_sync(release.wait, 5)
         return await scene(inputs)

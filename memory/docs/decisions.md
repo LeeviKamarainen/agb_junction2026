@@ -35,6 +35,10 @@ this project's API. **VM1** is the GPU server that runs the segmenter (SAM 3).
   image encoders, 768-wide; it replaced CLIP ViT-B/32 on 2026-11-14) for keyframes, object crops
   and questions, stored L2-normalised as float32, so cosine similarity is a dot
   product. Changing the model invalidates every stored embedding.
+- **Text takes the model card's prompt for its side of a search:** `SearchQuery` for questions,
+  `Document` for text to be found (the backend's notes, through `input_type` on
+  `/v1/embeddings`); images take none. A note embedded with the query prompt is compared
+  query-to-query, which is not what the model was trained for.
 - **No vector database.** Search is a brute-force dot product. A vector is about 2 KB and a
   still about 100 KB, so an hour at one keyframe a second is roughly 7 MB of vectors and 360 MB
   of stills.
@@ -42,6 +46,14 @@ this project's API. **VM1** is the GPU server that runs the segmenter (SAM 3).
 - **Map coordinates are computed once, when a batch is stored** (UMAP on cosine distance, saved
   as `x` and `y` in the index), so every viewer draws the same map. Fewer than five memories get
   a straight line.
+
+## Faces
+
+- **Faces are filled as frames arrive** (`faces.anonymise`, the same file as the backend's), in
+  `/batches`, in `embed.keyframes` and in the images `/v1/embeddings` embeds, before anything
+  stores, embeds or summarises them. `/v1/chat/completions` passes images to Gemma as they came.
+  Batches stored before that are kept as they were. Why, and the measurements:
+  `docs/adr/0002-anonymise-faces.md` at the repo root.
 
 ## Gemma requests
 

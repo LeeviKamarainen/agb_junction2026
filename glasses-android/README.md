@@ -61,12 +61,13 @@ vector database (the `glasses` collection) and checks the frames of a stream aga
 - **Voice messages:** **hold** the capture button (or the phone's **Talk** button) to start talking; any press or
   tap (or **Stop and send**) ends the message. Android's own speech recognizer turns it into text on the phone
   (`VoiceInput.kt`), and only the text goes to the backend, as a `command` over the same WebSocket (the same as
-  `POST /api/glasses/command` with `{"text": ...}`); its reply shows like any other message. The microphone is the
+  `POST /api/glasses/command` with `{"question": ...}`), which gives the words to Gemma as they are; its reply
+  shows like any other message. The microphone is the
   glasses': they are a Bluetooth headset to the phone, so while listening the phone's communication device is set
   to their hands-free (SCO) input, and the status line says which mic is used (the phone's if no headset is
   connected). Pauses do not end the message, the button does; it ends by itself after 60 s. On the glasses: a
-  speech bubble and the words heard so far. When a reply asks for a question about the photos
-  (`client_action: "listen_question"`), listening starts again and that answer is sent as `{"question": ...}`.
+  speech bubble and the words heard so far. When a reply asks for a question
+  (`client_action: "listen_question"`), listening starts again.
   Arming memory mode asks for the microphone permission first. Google's recognizer needs a network. Unverified on
   hardware: whether **hold** is reported when the press starts or when it ends (if a short press is reported first,
   more than 400 ms earlier, a photo is also taken), and whether the recognizer follows the Bluetooth route on
@@ -95,7 +96,7 @@ since the backend may already have stored it; streaming resumes with a fresh fra
 `memory_frame` JSON header (`id`, `source`, `stream_id`, `seen_at`) immediately followed by the JPEG binary
 message. A `memory_result` with the same `id` carries the same result as the HTTP `/api/glasses/frames` endpoint.
 Only one memory upload runs per connection; `error` replies surface on the phone without closing the socket.
-The existing command/photo/watch WebSocket messages remain available to other clients.
+The existing command and watch WebSocket messages remain available to other clients.
 
 Run Android checks with JDK 17 or 21 and an installed Android SDK:
 `gradle :app:compileDebugKotlin :app:testDebugUnitTest`. Socket tests use a local MockWebServer and cover login,

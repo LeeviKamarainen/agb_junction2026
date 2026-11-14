@@ -24,7 +24,7 @@ question loop all run on the backend (VM1); the server only answers these two ki
 {
   "model": "google/gemma-4-31B-it",
   "messages": [
-    {"role": "system", "content": "You answer questions about what the user has seen ... The current time is 2026-11-14T12:00:00+00:00 (UTC)."},
+    {"role": "system", "content": "You answer questions about what the user has seen ... The current time is 2026-11-14T14:00:00+02:00, the user's local time (Europe/Helsinki). ..."},
     {"role": "user", "content": "Where did I leave my keys?"}
   ],
   "tools": [
@@ -73,7 +73,7 @@ The tool call must arrive **parsed into `tool_calls`**, not as text inside `cont
         "type": "function",
         "function": {
           "name": "vector_search",
-          "arguments": "{\"user_query\": \"car keys on a table\", \"alternative_queries\": [\"keys in a hand\"], \"keywords\": [\"keys\"], \"timespan\": {\"start\": \"2026-11-14T06:00:00Z\"}}"
+          "arguments": "{\"user_query\": \"car keys on a table\", \"alternative_queries\": [\"keys in a hand\"], \"keywords\": [\"keys\"], \"timespan\": {\"start\": \"2026-11-14T06:00:00+02:00\"}}"
         }
       }]
     }
@@ -93,10 +93,10 @@ The next request repeats the messages and adds three kinds the chat template has
 [
   {"role": "assistant", "content": "", "tool_calls": [ ...exactly as returned... ]},
   {"role": "tool", "tool_call_id": "chatcmpl-tool-1a2b",
-   "content": "[{\"id\": 12, \"kind\": \"image\", \"seen_at\": \"2026-11-14T09:00:00+00:00\", \"text\": \"\", \"image_attached\": true}]"},
+   "content": "[{\"id\": 12, \"kind\": \"image\", \"seen_at\": \"2026-11-14T11:00:00+02:00\", \"text\": \"\", \"image_attached\": true}]"},
   {"role": "user", "content": [
     {"type": "text", "text": "The images found:"},
-    {"type": "text", "text": "Memory 12, seen at 2026-11-14T09:00:00+00:00:"},
+    {"type": "text", "text": "Memory 12, seen at 2026-11-14T11:00:00+02:00:"},
     {"type": "image_url", "image_url": {"url": "https://.../12.jpg"}}
   ]}
 ]
@@ -135,6 +135,9 @@ need its base URL, API key and model name.
 
 - `input` is a list of 1 to 6 strings. A search sends short texts (the query plus up to 5
   alternatives).
+- `input_type` says what the texts are: `"query"` for a search, `"document"` for a text memory
+  being stored, so each side gets EmbeddingGemma 2's prompt for it (`SearchQuery` or
+  `Document`, from its model card). The backend always sends it; images ignore it.
 - **Images arrive in the same field** as `data:image/jpeg;base64,...` strings, one per request,
   when someone uploads a memory on the backend's Memory lab page. Any input that starts with
   `data:image/` must go through the **image** encoder; everything else through the text encoder.
