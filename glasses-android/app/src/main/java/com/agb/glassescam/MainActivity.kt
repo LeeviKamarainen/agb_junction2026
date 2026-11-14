@@ -1,6 +1,7 @@
 package com.agb.glassescam
 
 import android.Manifest
+import android.content.pm.PackageManager
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -50,6 +51,13 @@ class MainActivity : ComponentActivity() {
             if (granted) viewModel.enableMock(applicationContext)
         }
 
+    // Microphone, for voice messages in memory mode: asked before memory mode is armed (not beside the
+    // Meta AI app's camera sheet). Arming goes ahead either way; without it, holding the button says so.
+    private val microphoneLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) {
+            viewModel.armMemory(::requestWearablesPermission)
+        }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         bluetoothLauncher.launch(Manifest.permission.BLUETOOTH_CONNECT)
@@ -69,7 +77,13 @@ class MainActivity : ComponentActivity() {
                     onArmQuick = { viewModel.armQuickShot(::requestWearablesPermission) },
                     onArmSnap = { viewModel.armSnapshot(::requestWearablesPermission) },
                     onArmLive = { viewModel.armLive(::requestWearablesPermission) },
-                    onArmMemory = { viewModel.armMemory(::requestWearablesPermission) },
+                    onArmMemory = {
+                        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+                            viewModel.armMemory(::requestWearablesPermission)
+                        } else {
+                            microphoneLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                        }
+                    },
                 )
             }
         }

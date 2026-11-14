@@ -1,6 +1,8 @@
 package com.agb.glassescam
 
+import android.Manifest
 import android.app.Activity
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.os.SystemClock
@@ -95,6 +97,12 @@ data class UiState(
     val memoryStatus: String = "",
     val memoryConnection: String = "Disconnected",
     val glassesMessage: GlassesMessage? = null, // the trigger message on the glasses right now
+    // Voice: recording = the glasses' mic is open, sending = the transcript is on its way to the backend,
+    // voiceText = what was heard so far, voiceQuestion = the backend asked for a question about the photos.
+    val voiceRecording: Boolean = false,
+    val voiceSending: Boolean = false,
+    val voiceText: String = "",
+    val voiceQuestion: Boolean = false,
     val photos: List<java.io.File> = emptyList(), // gallery, newest first
     val message: String = "",
 )
@@ -523,6 +531,11 @@ class GlassesViewModel : ViewModel() {
                             flexBox(direction = Direction.COLUMN, gap = 16, crossAlignment = Alignment.STRETCH) {
                                 flexBox(direction = Direction.ROW, gap = 8, alignment = Alignment.END) {
                                     when {
+                                        ui.voiceRecording -> {
+                                            icon(IconName.SPEECH_BUBBLE)
+                                            text("LISTENING", style = TextStyle.META)
+                                        }
+                                        ui.voiceSending -> icon(IconName.THREE_DOT_SPEECH_BUBBLE)
                                         ui.memoryStreaming -> {
                                             icon(IconName.VIDEO_CAMERA)
                                             text("REC", style = TextStyle.META)
@@ -532,7 +545,13 @@ class GlassesViewModel : ViewModel() {
                                     }
                                 }
                                 val message = ui.glassesMessage
-                                if (message?.type == MessageType.TRIGGER) {
+                                if (ui.voiceRecording || ui.voiceSending) {
+                                    // What was heard so far; a long message shows its end.
+                                    val heard = ui.voiceText.takeLast(VOICE_SHOWN_CHARS)
+                                    if (ui.voiceQuestion) text("Question about your photos", style = TextStyle.META)
+                                    text(heard.ifBlank { if (ui.voiceRecording) "Speak now..." else "..." }, style = TextStyle.BODY)
+                                    if (ui.voiceRecording) text("Press to send", style = TextStyle.META)
+                                } else if (message?.type == MessageType.TRIGGER) {
                                     // Something the backend noticed: a bell and a heading make it stand out.
                                     flexBox(direction = Direction.ROW, gap = 8, crossAlignment = Alignment.CENTER) {
                                         icon(IconName.BELL)
@@ -544,7 +563,7 @@ class GlassesViewModel : ViewModel() {
                                     if (message.title.isNotBlank()) text(message.title, style = TextStyle.META)
                                     text(message.text, style = TextStyle.BODY)
                                 } else if (!ui.memoryStreaming && !ui.memorySending) {
-                                    text("Double tap: record   Tap: photo", style = TextStyle.META)
+                                    text("Hold: talk   Double tap: record   Tap: photo", style = TextStyle.META)
                                 }
                             }
                         }
@@ -1118,12 +1137,21 @@ class GlassesViewModel : ViewModel() {
             )
         }
         memoryChannel.start()
-        say("Memory mode armed. Double tap or double press to stream, tap or press once for one photo.")
+        say("Memory mode armed. Double tap or double press to stream, tap or press once for one photo, hold to talk.")
     }
 
     private fun handleMemoryInput(event: InputEvent) {
+        // While talking, any press or tap ends the message. The rest of a double press (or a second tap)
+        // that ended it arrives just after, and must not start a stream.
+        if (_ui.value.voiceRecording) return stopVoice()
+        if (SystemClock.elapsedRealtime() - voiceStoppedAtMs < VOICE_STOP_GRACE_MS) return
         when (event) {
             is InputEvent.Capture -> when (event.pressType) {
+                // Hold the capture button to talk. A hold may be reported after a short press: drop that.
+                CapturePressType.HOLD -> {
+                    pendingShortPress?.cancel()
+                    startVoice()
+                }
                 // A double press arrives as SHORT_PRESS then DOUBLE_PRESS: hold the short press briefly.
                 CapturePressType.SHORT_PRESS -> {
                     pendingShortPress?.cancel()
@@ -1136,7 +1164,6 @@ class GlassesViewModel : ViewModel() {
                     pendingShortPress?.cancel()
                     toggleMemoryStream()
                 }
-                else -> Unit
             }
             // The Neural Band and the touchpad only report single taps; two close together are a double tap.
             is InputEvent.Select -> {
@@ -1246,6 +1273,127 @@ class GlassesViewModel : ViewModel() {
                 renderMemoryOnGlasses?.invoke()
             }
         }
+    }
+
+    // ------------------------------------------------------------------ voice
+
+    private var voice: VoiceInput? = null
+    private var voiceStart: Job? = null
+    private var voiceLimit: Job? = null
+    private var voiceStoppedAtMs = 0L
+    private var lastVoiceRenderMs = 0L
+
+    fun toggleVoice() {
+        if (_ui.value.voiceRecording) stopVoice() else startVoice()
+    }
+
+    /**
+     * Opens the glasses' microphone (see [VoiceInput]) until [stopVoice]: a press of the capture button, a
+     * tap, or the phone's button. Only the transcript goes to the backend, as a command over the memory
+     * WebSocket. [asQuestion]: the backend's last reply asked for a question about the photos.
+     */
+    fun startVoice(asQuestion: Boolean = false) {
+        if (mode != Mode.MEMORY || !_ui.value.memoryArmed) return say("Arm memory mode first")
+        if (_ui.value.voiceRecording || _ui.value.voiceSending) return
+        val ctx = appContext ?: return
+        if (ctx.checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            feedback?.failed()
+            _ui.update { it.copy(memoryStatus = "Allow the microphone: disarm and arm memory mode again") }
+            return
+        }
+        val v = voice ?: VoiceInput(
+            ctx,
+            onPartial = { heard ->
+                _ui.update { it.copy(voiceText = heard) }
+                // Not on every word: display updates share Bluetooth with everything else.
+                val now = SystemClock.elapsedRealtime()
+                if (now - lastVoiceRenderMs > VOICE_RENDER_MS) {
+                    lastVoiceRenderMs = now
+                    viewModelScope.launch { renderMemoryOnGlasses?.invoke() }
+                }
+            },
+            onError = { problem ->
+                _ui.update { it.copy(memoryStatus = problem) }
+                stopVoice() // sends whatever was heard before the error
+            },
+        ).also { voice = it }
+        messageClearJob?.cancel()
+        _ui.update {
+            it.copy(
+                voiceRecording = true, voiceQuestion = asQuestion, voiceText = "", glassesMessage = null,
+                memoryStatus = "Opening the microphone...",
+            )
+        }
+        feedback?.started()
+        voiceStart = viewModelScope.launch {
+            renderMemoryOnGlasses?.invoke()
+            if (!v.start()) {
+                voiceLimit?.cancel()
+                _ui.update { it.copy(voiceRecording = false) }
+                renderMemoryOnGlasses?.invoke()
+                return@launch
+            }
+            _ui.update { if (it.voiceRecording) it.copy(memoryStatus = "Listening (${v.mic})") else it }
+        }
+        voiceLimit?.cancel()
+        voiceLimit = viewModelScope.launch {
+            delay(VOICE_MAX_MS)
+            stopVoice()
+        }
+    }
+
+    /** Ends the message and sends what was heard; the backend's reply shows like any other message. */
+    fun stopVoice() {
+        if (!_ui.value.voiceRecording) return
+        voiceLimit?.cancel()
+        voiceStoppedAtMs = SystemClock.elapsedRealtime()
+        val asQuestion = _ui.value.voiceQuestion
+        _ui.update { it.copy(voiceRecording = false, voiceSending = true, memoryStatus = "Finishing...") }
+        viewModelScope.launch {
+            var listenAgain = false
+            try {
+                renderMemoryOnGlasses?.invoke()
+                voiceStart?.join() // a press during the Bluetooth set-up waits for it, so nothing is left open
+                val text = voice?.finish().orEmpty()
+                _ui.update { it.copy(voiceText = text) }
+                if (text.isBlank()) {
+                    feedback?.failed()
+                    _ui.update { it.copy(memoryStatus = "Heard nothing") }
+                    return@launch
+                }
+                _ui.update { it.copy(memoryStatus = "Sending \"$text\"") }
+                renderMemoryOnGlasses?.invoke()
+                when (val out = memoryChannel.command(text, asQuestion)) {
+                    is CommandOutcome.Ok -> {
+                        _ui.update { it.copy(memoryStatus = "Sent \"$text\"") }
+                        listenAgain = out.listenQuestion
+                        val reply = out.message
+                        if (reply != null) {
+                            _ui.update { it.copy(voiceSending = false) }
+                            showGlassesMessage(reply)
+                        } else {
+                            feedback?.done()
+                        }
+                    }
+                    is CommandOutcome.Fail -> {
+                        feedback?.failed()
+                        _ui.update { it.copy(memoryStatus = "Voice message failed: ${out.message}") }
+                    }
+                }
+            } finally {
+                _ui.update { it.copy(voiceSending = false, voiceQuestion = false) }
+                renderMemoryOnGlasses?.invoke()
+            }
+            // The reply asked for a question about the photos: listen for it straight away.
+            if (listenAgain && _ui.value.memoryArmed) startVoice(asQuestion = true)
+        }
+    }
+
+    private fun cancelVoice() {
+        voiceStart?.cancel()
+        voiceLimit?.cancel()
+        voice?.cancel()
+        voice = null
     }
 
     private fun openMemoryCamera(s: DeviceSession): Boolean {
@@ -1448,12 +1596,14 @@ class GlassesViewModel : ViewModel() {
         pendingSelect?.cancel()
         memoryPhotoJob?.cancel()
         memoryPhotoJob = null
+        cancelVoice()
         singleRequested = false
         renderMemoryOnGlasses = null
         _ui.update {
             it.copy(
                 quickArmed = false, snapArmed = false, liveArmed = false, liveImage = null, liveStatus = "",
                 memoryArmed = false, memoryStreaming = false, memorySending = false, glassesMessage = null,
+                voiceRecording = false, voiceSending = false, voiceText = "", voiceQuestion = false,
             )
         }
         camera = null
@@ -1478,6 +1628,10 @@ class GlassesViewModel : ViewModel() {
         const val DOUBLE_TAP_MS = 450L // two taps closer than this are a double tap
         const val SINGLE_WARMUP_MS = 1_200L // after the camera opens, before a single photo is taken
         const val MESSAGE_MS = 10_000L // how long a trigger message stays on the glasses
+        const val VOICE_MAX_MS = 60_000L // a voice message ends by itself after this
+        const val VOICE_STOP_GRACE_MS = 800L // presses this soon after ending a voice message are ignored
+        const val VOICE_RENDER_MS = 500L // at most two display updates a second while listening
+        const val VOICE_SHOWN_CHARS = 160 // the end of a long transcript, on the glasses
     }
 
     override fun onCleared() {
