@@ -52,6 +52,7 @@ class GlassesChannel(
     private val uploadLock = Mutex()
     private val ids = AtomicInteger(0)
     private val pending = mutableMapOf<Int, CompletableDeferred<FrameOutcome>>()
+    private val pendingCommands = mutableMapOf<Int, CompletableDeferred<CommandOutcome>>()
     private var job: Job? = null
     @Volatile private var socket: WebSocket? = null
     private var guestToken: String? = null
@@ -92,10 +93,18 @@ class GlassesChannel(
                                     when (json.optString("type")) {
                                         "pong" -> if (id == 0) authenticated.complete(webSocket)
                                         "memory_result" -> complete(id, parseMemoryResult(json.getJSONObject("result")))
-                                        "error" -> complete(id, FrameOutcome.Fail(
-                                            "${json.optInt("status")}: ${json.optString("detail")}",
-                                        ))
-                                        "reply" -> parsePushedReply(json.getJSONObject("reply"))?.let(onMessage)
+                                        "error" -> {
+                                            val detail = "${json.optInt("status")}: ${json.optString("detail")}"
+                                            complete(id, FrameOutcome.Fail(detail))
+                                            completeCommand(id, CommandOutcome.Fail(detail))
+                                        }
+                                        "reply" -> {
+                                            val reply = json.getJSONObject("reply")
+                                            // A reply with an id answers a command; without one it is a pushed warning.
+                                            if (!completeCommand(id, parseCommandReply(reply))) {
+                                                parsePushedReply(reply)?.let(onMessage)
+                                            }
+                                        }
                                     }
                                 } catch (_: Exception) {
                                     closed.complete("Unreadable server message")
@@ -197,6 +206,34 @@ class GlassesChannel(
         }
     }
 
+    /**
+     * What the wearer said, as POST /api/glasses/command: `text` (anything), or `question` (a question
+     * about their photos, after a reply asked for one). Waits for the backend's reply.
+     */
+    suspend fun command(text: String, asQuestion: Boolean = false): CommandOutcome {
+        if (!configured) return CommandOutcome.Fail("Set glasses.api in local.properties")
+        val ws = withTimeoutOrNull(10_000) { ready.filterNotNull().first() }
+            ?: return CommandOutcome.Fail("Not connected to the backend")
+        val id = ids.incrementAndGet()
+        val result = CompletableDeferred<CommandOutcome>()
+        val message = JSONObject().put("type", "command").put("id", id)
+            .put(if (asQuestion) "question" else "text", text.take(500))
+        try {
+            synchronized(sendLock) {
+                pendingCommands[id] = result
+                if (!ws.send(message.toString())) result.complete(CommandOutcome.Fail("Connection lost"))
+            }
+            // The answer may wait for the chat model.
+            return withTimeoutOrNull(60_000) { result.await() } ?: CommandOutcome.Fail("No reply from the backend")
+        } finally {
+            synchronized(sendLock) { pendingCommands.remove(id) }
+        }
+    }
+
+    /** True when [id] belonged to a command waiting for its answer. */
+    private fun completeCommand(id: Int, result: CommandOutcome): Boolean =
+        synchronized(sendLock) { pendingCommands.remove(id) }?.complete(result) != null
+
     private fun complete(id: Int, result: FrameOutcome) {
         synchronized(sendLock) { pending.remove(id) }?.complete(result)
     }
@@ -204,6 +241,8 @@ class GlassesChannel(
     private fun failPending(detail: String) {
         val waiting = synchronized(sendLock) { pending.values.toList().also { pending.clear() } }
         waiting.forEach { it.complete(FrameOutcome.Fail(detail)) }
+        val commands = synchronized(sendLock) { pendingCommands.values.toList().also { pendingCommands.clear() } }
+        commands.forEach { it.complete(CommandOutcome.Fail(detail)) }
     }
 
     private fun endpoint(path: String): String {

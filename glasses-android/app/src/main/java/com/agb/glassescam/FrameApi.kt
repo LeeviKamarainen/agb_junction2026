@@ -12,6 +12,19 @@ sealed interface FrameOutcome {
     data class Fail(val message: String) : FrameOutcome
 }
 
+/** The answer to a voice command: what to show ([message], null when the reply has no text), and
+ * [listenQuestion] when the backend wants the wearer's next words as a question about their photos. */
+sealed interface CommandOutcome {
+    data class Ok(val message: GlassesMessage?, val listenQuestion: Boolean) : CommandOutcome
+    data class Fail(val message: String) : CommandOutcome
+}
+
+internal fun parseCommandReply(reply: JSONObject): CommandOutcome.Ok =
+    CommandOutcome.Ok(
+        message = parsePushedReply(reply),
+        listenQuestion = reply.optString("client_action") == "listen_question",
+    )
+
 internal fun parseMemoryResult(json: JSONObject): FrameOutcome.Ok {
     val message = json.optJSONObject("message")?.let {
         GlassesMessage(
