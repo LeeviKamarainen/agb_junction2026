@@ -3,7 +3,7 @@
 import { LogIn, LogOut, ShieldCheck, UserRound } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { logOut, useSession } from "@/lib/session";
@@ -14,7 +14,7 @@ type Props = {
   className?: string;
 };
 
-/** Who is logged in, with Log out; or Log in and Register links. */
+/** Who is logged in, with Log out; or Log in and Try as guest links. */
 export function UserMenu({ requireLogin = false, className = "" }: Props) {
   const { user } = useSession();
   const router = useRouter();
@@ -46,10 +46,10 @@ export function UserMenu({ requireLogin = false, className = "" }: Props) {
           <LogIn size={15} aria-hidden="true" /> Log in
         </Link>
         <Link
-          href="/register"
+          href="/guest"
           className="text-muted-foreground hover:text-foreground"
         >
-          Register
+          Try as guest
         </Link>
       </span>
     );
@@ -74,10 +74,36 @@ export function UserMenu({ requireLogin = false, className = "" }: Props) {
         <span className="rounded-full border border-border px-1.5 text-xs text-muted-foreground">
           {admin ? "admin" : "guest"}
         </span>
+        {user.expires_at ? <TimeLeft until={user.expires_at} /> : null}
       </span>
       <Button variant="ghost" size="sm" onClick={() => void leave()}>
         <LogOut aria-hidden="true" /> Log out
       </Button>
+    </span>
+  );
+}
+
+/** A guest's minutes left; at zero the page goes to /login, since the account is gone. */
+function TimeLeft({ until }: { until: string }) {
+  const end = new Date(until).getTime();
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 15_000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const minutes = Math.max(0, Math.ceil((end - now) / 60_000));
+  useEffect(() => {
+    if (minutes === 0) window.location.replace("/login");
+  }, [minutes]);
+
+  return (
+    <span
+      className="text-xs text-muted-foreground"
+      title="Then this guest account and everything it added are deleted"
+    >
+      {minutes} min left
     </span>
   );
 }

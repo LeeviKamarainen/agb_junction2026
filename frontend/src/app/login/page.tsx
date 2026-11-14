@@ -6,13 +6,14 @@ import { AuthForm } from "./auth-form";
 
 export const metadata: Metadata = {
   title: "Log in — Junction / 26",
-  description: "Log in to the memory lab and the glasses harness.",
+  description:
+    "Start a 30-minute guest session, or log in as the admin, to use the memory lab and the glasses harness.",
 };
 
 export default function LoginPage() {
   return (
     <main className="flex flex-1 flex-col items-center justify-center gap-6 px-4 py-10">
-      <AuthForm mode="login" />
+      <AuthForm />
       <Link
         href="/"
         className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground"

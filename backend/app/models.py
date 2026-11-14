@@ -95,8 +95,9 @@ class ReminderCreate(SQLModel):
     text: str = Field(min_length=1, max_length=500)
 
 
-# Accounts: one admin, who sees everything, and guests, who see the demo memories and their own.
-# app/auth.py hashes passwords and checks sessions.
+# Accounts: one admin, who sees everything, and temporary guests, who see the demo memories and
+# their own. A guest has no password and expires after 30 minutes, with everything it added.
+# app/auth.py hashes passwords, checks sessions and deletes expired guests.
 
 
 class User(SQLModel, table=True):
@@ -105,6 +106,7 @@ class User(SQLModel, table=True):
     password_hash: str
     role: str = "guest"  # "admin" or "guest"
     created_at: datetime
+    expires_at: datetime | None = Field(default=None, index=True)  # guests only; None: never
 
 
 class AuthSession(SQLModel, table=True):
@@ -118,11 +120,14 @@ class UserPublic(SQLModel):
     id: int
     username: str
     role: str
+    expires_at: datetime | None = None  # when a guest account and its memories are deleted
 
 
 class Credentials(SQLModel):
-    username: str = Field(min_length=3, max_length=32)
-    password: str = Field(min_length=8, max_length=200)
+    """The admin's login; guests have no password."""
+
+    username: str = Field(min_length=1, max_length=64)
+    password: str = Field(min_length=1, max_length=200)
 
 
 class LoginResult(UserPublic):

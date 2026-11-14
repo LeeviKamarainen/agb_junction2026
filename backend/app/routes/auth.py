@@ -1,4 +1,4 @@
-"""Register, log in, log out and who am I. Registering makes a guest account and logs it in."""
+"""Start a guest session, log in (the admin), log out, and who am I."""
 
 from datetime import UTC, datetime
 
@@ -15,7 +15,16 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 
 def _public(user: User) -> UserPublic:
     assert user.id is not None
-    return UserPublic(id=user.id, username=user.username, role=user.role)
+    return UserPublic(
+        id=user.id, username=user.username, role=user.role, expires_at=user.expires_at
+    )
+
+
+def _seconds_left(user: User) -> int:
+    if user.expires_at is None:
+        return auth.SESSION_DAYS * 24 * 3600
+    expires = user.expires_at if user.expires_at.tzinfo else user.expires_at.replace(tzinfo=UTC)
+    return max(0, int((expires - datetime.now(UTC)).total_seconds()))
 
 
 def _logged_in(request: Request, response: Response, session, user: User) -> LoginResult:
@@ -26,7 +35,7 @@ def _logged_in(request: Request, response: Response, session, user: User) -> Log
     response.set_cookie(
         auth.COOKIE,
         token,
-        max_age=auth.SESSION_DAYS * 24 * 3600,
+        max_age=_seconds_left(user),
         httponly=True,
         samesite="lax",
         secure=https,
@@ -35,29 +44,17 @@ def _logged_in(request: Request, response: Response, session, user: User) -> Log
     return LoginResult(**_public(user).model_dump(), token=token)
 
 
-@router.post("/register", response_model=LoginResult, status_code=201)
-def register(body: Credentials, request: Request, response: Response, session: SessionDep):
-    """A new guest account, logged in. 409 when the username is taken."""
-    try:
-        name = auth.clean_username(body.username)
-    except ValueError as error:
-        raise HTTPException(422, str(error)) from error
-    if session.exec(select(User).where(User.username == name)).first() is not None:
-        raise HTTPException(409, "That username is taken")
-    user = User(
-        username=name,
-        password_hash=auth.hash_password(body.password),
-        role="guest",
-        created_at=datetime.now(UTC),
-    )
-    session.add(user)
-    session.flush()
-    return _logged_in(request, response, session, user)
+@router.post("/guest", response_model=LoginResult, status_code=201)
+def guest(request: Request, response: Response, session: SessionDep):
+    """A new temporary guest account, logged in: a generated name, no password. It and everything
+    it adds are deleted after 30 minutes (auth.GUEST_MINUTES)."""
+    return _logged_in(request, response, session, auth.create_guest(session))
 
 
 @router.post("/login", response_model=LoginResult)
 def login(body: Credentials, request: Request, response: Response, session: SessionDep):
-    """401 for a wrong username or password, without saying which."""
+    """The admin's login (guests have no password). 401 for a wrong username or password,
+    without saying which."""
     name = body.username.strip().lower()
     user = session.exec(select(User).where(User.username == name)).first()
     if user is None or not auth.verify_password(body.password, user.password_hash):

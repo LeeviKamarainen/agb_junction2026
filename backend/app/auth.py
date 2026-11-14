@@ -1,7 +1,9 @@
 """Accounts, sessions and who may see which memories.
 
-There is one admin, who sees every memory, and any number of guests, who register themselves and
-see the demo memories (owner DEMO_OWNER) and the ones they added. A login is a random token: the
+There is one admin, who logs in with a password and sees every memory, and any number of
+temporary guests: one click makes a guest with a generated name and no password, which sees the
+demo memories (owner DEMO_OWNER) and the ones it added. A guest expires after GUEST_MINUTES, and
+purge_expired_guests then deletes it with everything it added. A login is a random token: the
 browser keeps it in an HttpOnly cookie, other clients (the glasses' phone app) send it as
 `Authorization: Bearer <token>`. Only its sha256 is stored.
 
@@ -16,22 +18,28 @@ import hmac
 import logging
 import re
 import secrets
+import shutil
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
 from fastapi import Depends, HTTPException, Request
-from sqlmodel import Session, select
+from sqlmodel import Session, col, select
 
+from app import media, vectors
 from app.db import SessionDep
-from app.models import AuthSession, User
-from app.search import DEMO_OWNER  # memories every user sees; the admin adds them with demo=true
+from app.models import AuthSession, Memory, Reminder, User
+from app.search import (
+    DEMO_OWNER,  # memories every user sees; the admin adds them with demo=true
+    TABLE,
+)
 from app.settings import get_settings
 
 log = logging.getLogger(__name__)
 
 COOKIE = "session"
-SESSION_DAYS = 30
+SESSION_DAYS = 30  # the admin's logins
+GUEST_MINUTES = 30  # a guest account, its login and its memories
 USERNAME = re.compile(r"[a-z0-9][a-z0-9_.-]{2,31}")
 _SCRYPT = {"n": 2**14, "r": 8, "p": 1}  # about 50 ms and 16 MB per hash
 
@@ -68,11 +76,19 @@ def _token_hash(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
 
+def _aware(moment: datetime) -> datetime:
+    return moment if moment.tzinfo else moment.replace(tzinfo=UTC)  # SQLite drops the offset
+
+
 def start_session(session: Session, user: User) -> str:
-    """A new login for `user`; returns the token. The caller commits."""
+    """A new login for `user`, ending when a guest account does; returns the token. The caller
+    commits."""
     assert user.id is not None
     token = secrets.token_urlsafe(32)
-    expires = datetime.now(UTC) + timedelta(days=SESSION_DAYS)
+    if user.expires_at is not None:
+        expires = _aware(user.expires_at)
+    else:
+        expires = datetime.now(UTC) + timedelta(days=SESSION_DAYS)
     session.add(AuthSession(token_hash=_token_hash(token), user_id=user.id, expires_at=expires))
     return token
 
@@ -96,12 +112,75 @@ def user_for(session: Session, token: str | None) -> User | None:
     row = session.get(AuthSession, _token_hash(token))
     if row is None:
         return None
-    expires = row.expires_at if row.expires_at.tzinfo else row.expires_at.replace(tzinfo=UTC)
-    if expires <= datetime.now(UTC):
+    now = datetime.now(UTC)
+    if _aware(row.expires_at) <= now:
         session.delete(row)
         session.commit()
         return None
-    return session.get(User, row.user_id)
+    user = session.get(User, row.user_id)
+    if user is not None and user.expires_at is not None and _aware(user.expires_at) <= now:
+        purge_expired_guests(session)
+        return None
+    return user
+
+
+def create_guest(session: Session) -> User:
+    """A new temporary guest: a generated name, no password, GUEST_MINUTES to live. Deletes the
+    guests that already expired first. Commits."""
+    purge_expired_guests(session)
+    now = datetime.now(UTC)
+    while True:
+        name = f"guest-{secrets.token_hex(3)}"
+        if session.exec(select(User).where(User.username == name)).first() is None:
+            break
+    guest = User(
+        username=name,
+        password_hash="!",  # matches no password: guests cannot log in again
+        role="guest",
+        created_at=now,
+        expires_at=now + timedelta(minutes=GUEST_MINUTES),
+    )
+    session.add(guest)
+    session.commit()
+    session.refresh(guest)
+    return guest
+
+
+def purge_expired_guests(session: Session) -> int:
+    """Deletes every expired guest with its logins, memories (and their image files), reminders,
+    glasses photos and memory-API batch. Returns how many. Commits."""
+    from app.glasses import photos  # here: app.glasses imports this module
+
+    now = datetime.now(UTC)
+    expired = [
+        user
+        for user in session.exec(
+            select(User).where(User.role == "guest", col(User.expires_at).is_not(None))
+        )
+        if user.expires_at is not None and _aware(user.expires_at) <= now
+    ]
+    files: list[str] = []
+    for user in expired:
+        assert user.id is not None
+        for memory in session.exec(select(Memory).where(Memory.owner_id == user.id)):
+            vectors.delete(session.connection(), TABLE, memory.id or 0)
+            if memory.image_file:
+                files.append(memory.image_file)
+            session.delete(memory)
+        for reminder in session.exec(select(Reminder).where(Reminder.owner_id == user.id)):
+            session.delete(reminder)
+        for login in session.exec(select(AuthSession).where(AuthSession.user_id == user.id)):
+            session.delete(login)
+        session.delete(user)
+    session.commit()
+    for name in files:  # after the commit: a failed delete never leaves rows without files
+        media.delete(name)
+    for user in expired:
+        shutil.rmtree(photos.photos_dir() / str(user.id), ignore_errors=True)
+        (photos.photos_dir() / f"memory-batch-{user.id}.json").unlink(missing_ok=True)
+    if expired:
+        log.info("Deleted %d expired guest account(s)", len(expired))
+    return len(expired)
 
 
 @dataclass(frozen=True)

@@ -1,3 +1,5 @@
+import asyncio
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import APIRouter, FastAPI
@@ -8,13 +10,34 @@ from app.db import get_engine, init_db
 from app.routes import auth as auth_routes
 from app.routes import glasses, memories, notes
 
+log = logging.getLogger(__name__)
+SWEEP_EVERY_S = 300
+
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     init_db()
     with Session(get_engine()) as session:
         auth.ensure_admin(session)
+        auth.purge_expired_guests(session)
+    sweeper = asyncio.create_task(_sweep_guests())
     yield
+    sweeper.cancel()
+
+
+def _purge() -> None:
+    with Session(get_engine()) as session:
+        auth.purge_expired_guests(session)
+
+
+async def _sweep_guests() -> None:
+    """Deletes expired guests and their memories every few minutes, even with nobody logging in."""
+    while True:
+        await asyncio.sleep(SWEEP_EVERY_S)
+        try:
+            await asyncio.to_thread(_purge)
+        except Exception:
+            log.exception("Deleting expired guests failed")
 
 
 # Everything lives under /api: in production Caddy sends /api/* here and the rest to Next.js.

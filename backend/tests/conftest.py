@@ -42,19 +42,18 @@ def client(anonymous):
 
 @pytest.fixture
 def guest(anonymous):
-    """guest("name") registers a guest and returns headers that act as them (a bearer token),
-    on any client: the bearer wins over the admin's cookie."""
+    """guest(label) starts a new temporary guest and returns headers that act as it (a bearer
+    token), on any client: the bearer wins over the admin's cookie. The label only names it in
+    the test; guests get generated names."""
 
-    def register(name: str) -> dict[str, str]:
+    def start(_label: str = "") -> dict[str, str]:
         before = anonymous.cookies.get("session")
-        reply = anonymous.post(
-            "/api/auth/register", json={"username": name, "password": "guest-password"}
-        )
+        reply = anonymous.post("/api/auth/guest")
         assert reply.status_code == 201, reply.text
-        # Registering logs in by cookie too: put back whoever the client was (the admin, or no one).
+        # Starting a guest logs in by cookie too: put back whoever the client was.
         anonymous.cookies.clear()
         if before:
             anonymous.cookies.set("session", before)
         return {"Authorization": f"Bearer {reply.json()['token']}"}
 
-    return register
+    return start
