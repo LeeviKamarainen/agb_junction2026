@@ -154,3 +154,54 @@ def test_a_trigger_that_fires_shows_in_the_log(client, monkeypatch):
     assert [(e["kind"], e["text"]) for e in feed["events"]] == [
         ("trigger", "Keys: Your keys are on the bench.")
     ]
+
+
+def test_a_streams_full_page_logs_every_frame_and_the_chat_models_steps(client, guest):
+    from app.glasses import frames as frames_module
+
+    async def chat(_messages, tools):
+        return {"role": "assistant", "content": "On the bench."}
+
+    async def embed(inputs, input_type="query"):
+        return [[1.0] + [0.0] * 767 for _ in inputs]
+
+    frames_module.reset_streams()
+    app.dependency_overrides[optional_embedder] = lambda: embed
+    app.dependency_overrides[optional_chat] = lambda: chat
+    app.dependency_overrides[get_chat] = lambda: chat
+    app.dependency_overrides[get_embedder] = lambda: embed
+    aino = guest("aino")
+    try:
+        for _ in range(2):
+            reply = send(client, aino, source="stream", stream_id="s1", client="live")
+            assert reply.status_code == 200, reply.text
+        asked = client.post("/api/ask/stream", json={"question": "keys?"}, headers=aino)
+        assert asked.status_code == 200
+    finally:
+        app.dependency_overrides.clear()
+    (feed,) = client.get("/api/admin/streams").json()
+
+    page = client.get(f"/api/admin/streams/{feed['id']}")
+
+    assert page.status_code == 200
+    log = page.json()["log"]
+    kinds = [entry["kind"] for entry in log]
+    assert kinds[:2] == ["answer", "question"]  # newest first
+    frames = [entry for entry in log if entry["kind"] == "frame"]
+    assert len(frames) == 2
+    assert frames[-1]["text"].startswith("stored as memory #")  # the first frame of the stream
+    assert frames[-1]["detail"]["stored"] is True and frames[-1]["ms"] is not None
+    assert "not stored" in frames[0]["text"]  # the second is much like the first
+    # The tiles on the wall get the short log only, without details.
+    assert [e["kind"] for e in feed["events"]] == ["question"]
+    assert client.get(f"/api/admin/streams/{feed['id']}", headers=aino).status_code == 403
+
+
+def test_a_frame_that_cannot_be_embedded_is_logged_as_an_error(client, no_models):
+    send(client, source="stream", stream_id="s", client="live")
+    (feed,) = client.get("/api/admin/streams").json()
+
+    (entry,) = client.get(f"/api/admin/streams/{feed['id']}").json()["log"]
+
+    assert entry["kind"] == "error" and "EMBED_URL" in entry["text"]
+    assert client.get("/api/admin/streams/nope").status_code == 404

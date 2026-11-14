@@ -11,7 +11,10 @@ GET /api/admin/streams lists them for the admin (routes/streams.py).
 Each feed also carries its user's log: the questions they sent, the goals and reminders they
 set, and the triggers and warnings that fired for them (`note`), newest first, kept in memory
 for EVENTS_S and at most MAX_EVENTS per user. A question or goal is the user's, not one app's,
-so every feed of a user shows the same log.
+so every feed of a user shows the same log. The wall's tiles show only those (SUMMARY); the
+full page of one feed (GET /api/admin/streams/{id}) shows everything, verbose: what became of
+each frame (`frame_result`: stored or why not, every trigger's score against its level, what
+fired), the chat model's searches and answers, and errors, each with its JSON `detail`.
 """
 
 import hashlib
@@ -25,14 +28,21 @@ from typing import Literal
 from pydantic import BaseModel
 
 Kind = Literal["stream", "photo", "watch"]
-EventKind = Literal["question", "goal", "reminder", "trigger", "warning"]
+EventKind = Literal[
+    "question", "answer", "search", "goal", "reminder", "trigger", "warning", "frame", "error"
+]
+# What the wall's tiles show; the full page shows every kind.
+SUMMARY: set[str] = {"question", "goal", "reminder", "trigger", "warning"}
 
 IDLE_S = 60.0  # a feed with no frame for this long is dropped
 LIVE_S = 5.0  # a feed whose last frame is newer than this counts as live
 MAX_FEEDS = 64  # beyond this the feed idle longest makes room
 CLIENT_MAX = 40
 EVENTS_S = 1800.0  # how long a user's log keeps an event
-MAX_EVENTS = 30  # events kept per user
+MAX_EVENTS = 300  # events kept per user
+MAX_FRAME_LOG = 400  # frame results kept per feed: over three minutes at 2 fps
+TILE_EVENTS = 20  # events a tile on the wall gets
+PAGE_EVENTS = 500  # entries the full page gets
 
 
 class FeedEvent(BaseModel):
@@ -40,6 +50,8 @@ class FeedEvent(BaseModel):
     kind: EventKind
     text: str
     via: str  # how it arrived: "chat", "glasses", "stream", "watch", "panel"
+    ms: int | None = None  # how long the backend took, when measured
+    detail: dict | None = None  # the full answer or request, as JSON, for the full page
 
 
 class FeedPublic(BaseModel):
@@ -54,7 +66,11 @@ class FeedPublic(BaseModel):
     live: bool
     frames: int
     fps: float  # frames a second over the last few seconds
-    events: list[FeedEvent]  # the user's log, newest first
+    events: list[FeedEvent]  # the user's questions, goals, triggers..., newest first (SUMMARY)
+
+
+class FeedDetail(FeedPublic):
+    log: list[FeedEvent]  # everything: this feed's frame results and the user's log, newest first
 
 
 @dataclass
@@ -72,6 +88,7 @@ class _Feed:
     last_seen: float = 0.0  # time.monotonic() of the newest frame
     frames: int = 0
     recent: deque = field(default_factory=lambda: deque(maxlen=20))
+    log: deque = field(default_factory=lambda: deque(maxlen=MAX_FRAME_LOG))  # FeedEvents
 
 
 _lock = threading.Lock()
@@ -79,10 +96,19 @@ _feeds: dict[tuple, _Feed] = {}
 _events: dict[int, deque] = {}  # owner id -> (time.monotonic(), FeedEvent), oldest first
 
 
-def note(owner_id: int, kind: EventKind, text: str, via: str) -> None:
-    """Add to a user's log: a question they sent, a goal or reminder they set, a trigger or
-    warning that fired for them."""
-    event = FeedEvent(at=datetime.now(UTC), kind=kind, text=text.strip()[:300], via=via)
+def note(
+    owner_id: int,
+    kind: EventKind,
+    text: str,
+    via: str,
+    detail: dict | None = None,
+    ms: int | None = None,
+) -> None:
+    """Add to a user's log: a question they sent, a goal or reminder they set, a search or an
+    answer of the chat model, a trigger or warning that fired for them."""
+    event = FeedEvent(
+        at=datetime.now(UTC), kind=kind, text=text.strip()[:500], via=via, ms=ms, detail=detail
+    )
     with _lock:
         _events.setdefault(owner_id, deque(maxlen=MAX_EVENTS)).append((time.monotonic(), event))
 
@@ -94,6 +120,23 @@ def _log(owner_id: int, now: float) -> list[FeedEvent]:
     while events and now - events[0][0] > EVENTS_S:
         events.popleft()
     return [event for _, event in reversed(events)]
+
+
+def frame_result(
+    key: tuple,
+    text: str,
+    detail: dict | None = None,
+    ms: int | None = None,
+    kind: EventKind = "frame",
+) -> None:
+    """What became of a frame `record` returned `key` for: for its feed's full page."""
+    event = FeedEvent(
+        at=datetime.now(UTC), kind=kind, text=text[:500], via=key[1], ms=ms, detail=detail
+    )
+    with _lock:
+        feed = _feeds.get(key)
+        if feed is not None:
+            feed.log.append(event)
 
 
 def clean_client(name: str | None, default: str) -> str:
@@ -110,8 +153,9 @@ def record(
     stream_id: str,
     jpeg: bytes,
     demo: bool = False,
-) -> None:
-    """Keep `jpeg` (faces already blurred) as the newest frame of its feed."""
+) -> tuple:
+    """Keep `jpeg` (faces already blurred) as the newest frame of its feed; the feed's key, for
+    `frame_result`."""
     key = (owner_id, client, kind, stream_id)
     now, wall = time.monotonic(), datetime.now(UTC)
     with _lock:
@@ -127,6 +171,7 @@ def record(
         feed.jpeg, feed.last_at, feed.last_seen, feed.demo = jpeg, wall, now, demo
         feed.frames += 1
         feed.recent.append(now)
+    return key
 
 
 def _prune(now: float) -> None:
@@ -141,29 +186,48 @@ def _fps(feed: _Feed, now: float) -> float:
     return round((len(times) - 1) / max(times[-1] - times[0], 1e-3), 1)
 
 
+def _public(feed: _Feed, now: float) -> dict:
+    return {
+        "id": feed.id,
+        "client": feed.client,
+        "user": feed.user,
+        "kind": feed.kind,
+        "stream_id": feed.stream_id,
+        "demo": feed.demo,
+        "started_at": feed.started_at,
+        "last_at": feed.last_at,
+        "live": now - feed.last_seen <= LIVE_S,
+        "frames": feed.frames,
+        "fps": _fps(feed, now),
+        # The tile's short log: the summary kinds, without the details.
+        "events": [
+            event.model_copy(update={"detail": None})
+            for event in _log(feed.owner_id, now)
+            if event.kind in SUMMARY
+        ][:TILE_EVENTS],
+    }
+
+
 def active() -> list[FeedPublic]:
     """The feeds that sent a frame in the last IDLE_S, newest first."""
     now = time.monotonic()
     with _lock:
         _prune(now)
         feeds = sorted(_feeds.values(), key=lambda feed: feed.last_seen, reverse=True)
-        return [
-            FeedPublic(
-                id=feed.id,
-                client=feed.client,
-                user=feed.user,
-                kind=feed.kind,
-                stream_id=feed.stream_id,
-                demo=feed.demo,
-                started_at=feed.started_at,
-                last_at=feed.last_at,
-                live=now - feed.last_seen <= LIVE_S,
-                frames=feed.frames,
-                fps=_fps(feed, now),
-                events=_log(feed.owner_id, now),
-            )
-            for feed in feeds
-        ]
+        return [FeedPublic(**_public(feed, now)) for feed in feeds]
+
+
+def detail(feed_id: str) -> FeedDetail | None:
+    """One feed with its full log: its frame results and its user's log, newest first. None
+    when there is no such feed (any more)."""
+    now = time.monotonic()
+    with _lock:
+        _prune(now)
+        feed = next((feed for feed in _feeds.values() if feed.id == feed_id), None)
+        if feed is None:
+            return None
+        log = sorted([*feed.log, *_log(feed.owner_id, now)], key=lambda e: e.at, reverse=True)
+        return FeedDetail(**_public(feed, now), log=log[:PAGE_EVENTS])
 
 
 def latest(feed_id: str) -> bytes | None:

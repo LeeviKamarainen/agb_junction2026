@@ -267,6 +267,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/streams/{feed_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Stream Detail
+         * @description One feed with its full log, newest first: what became of each frame (stored or why not,
+         *     every trigger's score against its level, what fired), the user's questions, the chat
+         *     model's searches and answers, goals, reminders, warnings and errors, each with its JSON
+         *     `detail`. 404 once the feed has gone quiet.
+         */
+        get: operations["stream_detail_api_admin_streams__feed_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/streams/{feed_id}/frame": {
         parameters: {
             query?: never;
@@ -883,6 +906,44 @@ export interface components {
             /** Password */
             password: string;
         };
+        /** FeedDetail */
+        FeedDetail: {
+            /** Id */
+            id: string;
+            /** Client */
+            client: string;
+            /** User */
+            user: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "stream" | "photo" | "watch";
+            /** Stream Id */
+            stream_id: string;
+            /** Demo */
+            demo: boolean;
+            /**
+             * Started At
+             * Format: date-time
+             */
+            started_at: string;
+            /**
+             * Last At
+             * Format: date-time
+             */
+            last_at: string;
+            /** Live */
+            live: boolean;
+            /** Frames */
+            frames: number;
+            /** Fps */
+            fps: number;
+            /** Events */
+            events: components["schemas"]["FeedEvent"][];
+            /** Log */
+            log: components["schemas"]["FeedEvent"][];
+        };
         /** FeedEvent */
         FeedEvent: {
             /**
@@ -894,11 +955,17 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "question" | "goal" | "reminder" | "trigger" | "warning";
+            kind: "question" | "answer" | "search" | "goal" | "reminder" | "trigger" | "warning" | "frame" | "error";
             /** Text */
             text: string;
             /** Via */
             via: string;
+            /** Ms */
+            ms?: number | null;
+            /** Detail */
+            detail?: {
+                [key: string]: unknown;
+            } | null;
         };
         /** FeedPublic */
         FeedPublic: {
@@ -1935,6 +2002,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["FeedPublic"][];
+                };
+            };
+        };
+    };
+    stream_detail_api_admin_streams__feed_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                feed_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FeedDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

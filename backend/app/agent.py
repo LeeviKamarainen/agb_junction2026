@@ -176,7 +176,52 @@ def error_line(message: str) -> str:
     return Step(type="error", round=0, elapsed_ms=0, content=message).model_dump_json() + "\n"
 
 
+def _log_step(owner_id: int, step: Step) -> None:
+    """The steps worth seeing on the admin's stream wall (app/glasses/feeds.py): the searches,
+    what they found, the answer and what failed."""
+    if step.type == "tool_call":
+        args = step.arguments if isinstance(step.arguments, dict) else {}
+        what = args.get("user_query") or args.get("text") or args.get("goal_id") or ""
+        detail = {"name": step.name, "arguments": step.arguments, "round": step.round}
+        feeds.note(owner_id, "search", f"{step.name}({what})", "chat", detail, step.elapsed_ms)
+    elif step.type == "tool_result":
+        found = [
+            {"id": r.id, "kind": r.kind, "text": r.text[:120], "score": round(r.score, 4)}
+            for r in step.results or []
+        ]
+        text = (
+            f"{len(found)} result{'' if len(found) == 1 else 's'}"
+            if step.results is not None
+            else (step.content or "")
+        )
+        feeds.note(owner_id, "search", f"→ {text}", "chat", {"results": found}, step.elapsed_ms)
+    elif step.type == "answer":
+        feeds.note(
+            owner_id, "answer", step.content or "(empty answer)", "chat", None, step.elapsed_ms
+        )
+    elif step.type in ("error", "tool_error"):
+        feeds.note(owner_id, "error", step.content or step.type, "chat", None, step.elapsed_ms)
+
+
 async def run(
+    session: AsyncSession,
+    question: str,
+    chat: Chat,
+    embed: Embedder,
+    owners: list[int] | None,
+    now: datetime | None = None,
+    collections: list[str] | None = None,
+    owner_id: int | None = None,
+) -> AsyncIterator[Step]:
+    """Answer `question`, yielding each step; the last one is the answer. Each step worth seeing
+    also goes to the asker's log on the admin's stream wall."""
+    async for step in _run(session, question, chat, embed, owners, now, collections, owner_id):
+        if owner_id is not None:
+            _log_step(owner_id, step)
+        yield step
+
+
+async def _run(
     session: AsyncSession,
     question: str,
     chat: Chat,

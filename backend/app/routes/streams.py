@@ -21,6 +21,19 @@ async def list_streams(viewer: ViewerDep):
     return feeds.active()
 
 
+@router.get("/{feed_id}", response_model=feeds.FeedDetail)
+async def stream_detail(feed_id: str, viewer: ViewerDep):
+    """One feed with its full log, newest first: what became of each frame (stored or why not,
+    every trigger's score against its level, what fired), the user's questions, the chat
+    model's searches and answers, goals, reminders, warnings and errors, each with its JSON
+    `detail`. 404 once the feed has gone quiet."""
+    _admin(viewer)
+    found = feeds.detail(feed_id)
+    if found is None:
+        raise HTTPException(404, "No such stream, or it stopped")
+    return found
+
+
 @router.get(
     "/{feed_id}/frame",
     response_class=Response,

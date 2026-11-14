@@ -10,26 +10,33 @@ import {
   MonitorPlay,
   Radio,
   Smartphone,
+  Image as ImageIcon,
+  Search,
+  Sparkles,
   TriangleAlert,
   Zap,
 } from "lucide-react";
 import Link from "next/link";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 
 import { api } from "@/lib/api/browser";
 import type { components } from "@/lib/api/schema";
 import { useSession } from "@/lib/session";
 
-type Feed = components["schemas"]["FeedPublic"];
-type FeedEvent = Feed["events"][number];
+export type Feed = components["schemas"]["FeedPublic"];
+export type FeedEvent = Feed["events"][number];
 
 /** What the user sent the backend, or what fired for them. */
-const EVENTS: Record<FeedEvent["kind"], { label: string; Icon: typeof Bell; tone: string }> = {
+export const EVENTS: Record<FeedEvent["kind"], { label: string; Icon: typeof Bell; tone: string }> = {
   question: { label: "Question", Icon: MessageSquareText, tone: "text-sky-300" },
   goal: { label: "Watch for", Icon: Zap, tone: "text-amber-300" },
   reminder: { label: "Reminder", Icon: Bell, tone: "text-amber-300" },
   trigger: { label: "Trigger fired", Icon: BellRing, tone: "text-red-300" },
   warning: { label: "Warning", Icon: TriangleAlert, tone: "text-red-300" },
+  answer: { label: "Answer", Icon: Sparkles, tone: "text-emerald-300" },
+  search: { label: "Search", Icon: Search, tone: "text-violet-300" },
+  frame: { label: "Frame", Icon: ImageIcon, tone: "text-muted-foreground" },
+  error: { label: "Error", Icon: TriangleAlert, tone: "text-red-400" },
 };
 
 const LIST_EVERY_MS = 2_000; // how often the list of feeds is reloaded
@@ -41,19 +48,19 @@ const CLIENTS: Record<string, { label: string; Icon: typeof Glasses }> = {
   live: { label: "Live page", Icon: Smartphone },
   harness: { label: "Glasses harness", Icon: MonitorPlay },
 };
-const clientInfo = (name: string) => CLIENTS[name] ?? { label: name, Icon: Radio };
+export const clientInfo = (name: string) => CLIENTS[name] ?? { label: name, Icon: Radio };
 const order = (name: string) => {
   const index = Object.keys(CLIENTS).indexOf(name);
   return index < 0 ? 99 : index;
 };
 
-const KINDS: Record<Feed["kind"], string> = {
+export const KINDS: Record<Feed["kind"], string> = {
   stream: "stream",
   photo: "photos",
   watch: "reminder watch",
 };
 
-function since(iso: string, now: number): string {
+export function since(iso: string, now: number): string {
   const seconds = Math.max(0, Math.round((now - new Date(iso).getTime()) / 1000));
   return seconds < 60 ? `${seconds} s ago` : `${Math.floor(seconds / 60)} min ago`;
 }
@@ -188,7 +195,11 @@ export function StreamWall() {
 function FeedTile({ feed, now }: { feed: Feed; now: number }) {
   return (
     <article className="flex flex-col overflow-hidden rounded-lg border border-border bg-card">
-      <div className="relative aspect-video bg-black">
+      <Link
+        href={`/admin/streams/${feed.id}`}
+        aria-label={`Open ${feed.user}'s ${KINDS[feed.kind]} in full`}
+        className="group relative block aspect-video bg-black"
+      >
         <LiveFrame id={feed.id} live={feed.live} alt={`${feed.user}'s ${KINDS[feed.kind]}`} />
         <span
           className={`absolute top-2 left-2 flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium ${
@@ -203,7 +214,10 @@ function FeedTile({ feed, now }: { feed: Feed; now: number }) {
             <Film size={11} aria-hidden="true" /> demo clip
           </span>
         )}
-      </div>
+        <span className="absolute right-2 bottom-2 rounded bg-black/60 px-2 py-0.5 text-[11px] text-white opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100">
+          Open full view ↗
+        </span>
+      </Link>
       <div className="flex flex-col gap-0.5 p-3 text-xs">
         <p className="truncate text-sm font-medium" title={feed.user}>
           {feed.user}
@@ -263,9 +277,8 @@ function EventLog({ events, now }: { events: FeedEvent[]; now: number }) {
  * connection shows fewer frames instead of queueing requests. Frames are fetched as blobs and
  * swapped in once loaded, so the picture never flashes empty.
  */
-function LiveFrame({ id, live, alt }: { id: string; live: boolean; alt: string }) {
+export function LiveFrame({ id, live, alt }: { id: string; live: boolean; alt: string }) {
   const [src, setSrc] = useState<string | null>(null);
-  const current = useRef<string | null>(null);
 
   useEffect(() => {
     let stopped = false;
@@ -274,12 +287,7 @@ function LiveFrame({ id, live, alt }: { id: string; live: boolean; alt: string }
       const started = performance.now();
       try {
         const response = await fetch(`/api/admin/streams/${id}/frame`, { cache: "no-store" });
-        if (response.ok && !stopped) {
-          const url = URL.createObjectURL(await response.blob());
-          if (current.current) URL.revokeObjectURL(current.current);
-          current.current = url;
-          setSrc(url);
-        }
+        if (response.ok && !stopped) setSrc(URL.createObjectURL(await response.blob()));
       } catch {
         // The next try comes anyway; the list says when the feed is gone.
       }
@@ -294,11 +302,12 @@ function LiveFrame({ id, live, alt }: { id: string; live: boolean; alt: string }
     };
   }, [id, live]);
 
+  // A frame's blob URL is let go once the <img> shows the next one, or the tile goes.
   useEffect(
     () => () => {
-      if (current.current) URL.revokeObjectURL(current.current);
+      if (src) URL.revokeObjectURL(src);
     },
-    [],
+    [src],
   );
 
   return src ? (

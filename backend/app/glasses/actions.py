@@ -7,6 +7,7 @@ Without the chat and embedding models the glasses say memory search isn't set up
 """
 
 import logging
+import time
 from datetime import UTC, datetime
 from typing import Self
 
@@ -51,17 +52,21 @@ async def memory_frame(
     except ValueError as error:
         raise HTTPException(415, str(error)) from error
     kind: feeds.Kind = "stream" if source == "stream" else "photo"
-    feeds.record(viewer.id, viewer.user.username, client, kind, stream_id, data, demo=not store)
+    key = feeds.record(viewer.id, viewer.user.username, client, kind, stream_id, data, not store)
     if embed is None:
+        feeds.frame_result(key, "No embedding model configured: set EMBED_URL", kind="error")
         raise HTTPException(503, "No embedding model configured: set EMBED_URL")
+    started = time.perf_counter()
     try:
         reply = await frames.receive(
             session, data, embed, chat, source, stream_id, when, viewer.id, store
         )
-    except ValueError as error:
-        raise HTTPException(415, str(error)) from error
-    except UpstreamError as error:
-        raise HTTPException(502, str(error)) from error
+    except (ValueError, UpstreamError) as error:
+        feeds.frame_result(key, str(error), kind="error")
+        status = 415 if isinstance(error, ValueError) else 502
+        raise HTTPException(status, str(error)) from error
+    ms = round((time.perf_counter() - started) * 1000)
+    feeds.frame_result(key, _frame_summary(reply), reply.model_dump(mode="json"), ms)
     fired = next((match for match in reply.matches if match.fired), None)
     if reply.message is not None:
         title = reply.message.title or (fired.name if fired else "Trigger")
@@ -71,6 +76,29 @@ async def memory_frame(
             viewer.id, "trigger", f"{fired.name} fired: {reply.note or 'no message'}", "stream"
         )
     return reply
+
+
+def _frame_summary(reply: frames.FrameReply) -> str:
+    """One line on what became of a frame, for the stream wall's full page."""
+    parts = [f"stored as memory #{reply.memory_id}" if reply.stored else "not stored"]
+    fired = next((m for m in reply.matches if m.fired), None)
+    if fired is not None:
+        parts.append(f"fired {fired.name}")
+    elif reply.matches:
+        best = reply.matches[0]
+        if best.score is not None and best.level is not None:
+            parts.append(f"closest {best.name}: score {best.score:.3f} / level {best.level:.3f}")
+        elif best.score is not None:
+            parts.append(f"closest {best.name}: score {best.score:.3f}, level being measured")
+        else:
+            parts.append(f"closest {best.name}: distance {best.distance:.3f}")
+    else:
+        parts.append("no triggers")
+    if reply.message is not None:
+        parts.append(f"says “{reply.message.text}”")
+    if reply.note:
+        parts.append(reply.note)
+    return " · ".join(parts)
 
 
 # The wearer's gesture: the Neural Band's double index-finger tap ("double_tap", or "ask") opens
@@ -195,7 +223,20 @@ async def watch(
         data = await anyio.to_thread.run_sync(faces.anonymise, data)
     except ValueError as error:
         raise HTTPException(415, str(error)) from error
-    feeds.record(viewer.id, viewer.user.username, client, "watch", "", data)
+    key = feeds.record(viewer.id, viewer.user.username, client, "watch", "", data)
+    started = time.perf_counter()
+    result = await _check(session, viewer, data, chat)
+    seen = ", ".join(result.seen) or "nothing watched for"
+    text = f"{'warning · ' if result.warning else ''}{seen} in view · {result.note}"
+    ms = round((time.perf_counter() - started) * 1000)
+    feeds.frame_result(key, text, result.model_dump(mode="json", exclude={"warning"}), ms)
+    return result
+
+
+async def _check(
+    session: AsyncSession, viewer: Viewer, data: bytes, chat: Chat | None
+) -> WatchResult:
+    """Which of the viewer's reminders' objects the (blurred) frame shows."""
     watched = await reminders.active(session, viewer.id)  # your own, even for the admin
     try:
         found, note = await reminders.detect(data, [r.target for r in watched], chat)
