@@ -79,10 +79,8 @@ def test_home_is_an_empty_display(client):
 
 
 def test_no_screen_has_buttons(client):
-    """The wearer acts through the glasses and the Neural Band, never on the display."""
-    client.post("/api/glasses/photos", files={"photo": ("a.jpg", JPEG, "image/jpeg")})
+    """The wearer acts through the Neural Band, never on the display."""
     for body in [
-        {"action": "gallery"},
         {"action": "ask"},
         {"question": "where are my keys?"},
         {"question": "remind me about the stool"},
@@ -120,13 +118,6 @@ def test_an_empty_question_goes_home(client):
     assert reply["intent"] == "home"
 
 
-def test_the_capture_button_asks_the_client_to_capture(client):
-    reply = client.post("/api/glasses/command", json={"action": "take_photo"}).json()
-
-    assert reply["intent"] == "take_photo"
-    assert reply["client_action"] == "capture_photo"
-
-
 @pytest.mark.parametrize(
     "body",
     [
@@ -137,61 +128,13 @@ def test_the_capture_button_asks_the_client_to_capture(client):
         {"text": "where are my keys"},
         {"action": "help"},
         {"action": "home"},
+        # The glasses take no photos: no capture button, no gallery.
+        {"action": "take_photo"},
+        {"action": "gallery"},
     ],
 )
 def test_bad_commands_are_rejected(client, body):
     assert client.post("/api/glasses/command", json=body).status_code == 422
-
-
-def test_uploaded_photo_is_shown_and_listed(client):
-    upload = client.post("/api/glasses/photos", files={"photo": ("a.jpg", JPEG, "image/jpeg")})
-
-    assert upload.status_code == 201
-    assert "Photo saved" in texts(upload.json()["screen"])
-
-    gallery = client.post("/api/glasses/command", json={"action": "gallery"}).json()
-    assert "Latest 1 photos" in texts(gallery["screen"])
-    image = gallery["screen"]["children"][1]["children"][0]
-    fetched = client.get(image["src"])
-    assert fetched.status_code == 200
-    assert fetched.content == JPEG
-
-
-def test_photo_is_described_and_becomes_a_memory(client):
-    use_models(chat=says("A desk with a laptop and keys."), embed=fake_embed)
-
-    reply = client.post("/api/glasses/photos", files={"photo": ("a.jpg", JPEG, "image/jpeg")})
-
-    assert reply.status_code == 201
-    assert reply.json()["intent"] == "photo_described"
-    assert reply.json()["speech"] == "A desk with a laptop and keys."
-    assert "Saved to memory" in texts(reply.json()["screen"])
-    memories = client.get("/api/memories").json()
-    assert [(m["kind"], m["text"], m["collection"]) for m in memories] == [
-        ("image", "A desk with a laptop and keys.", "glasses")
-    ]
-
-
-def test_photo_is_kept_when_the_models_are_down(client):
-    use_models(chat=broken, embed=broken)
-
-    reply = client.post("/api/glasses/photos", files={"photo": ("a.jpg", JPEG, "image/jpeg")})
-
-    assert reply.status_code == 201
-    assert reply.json()["intent"] == "photo_saved"
-    assert "Couldn’t describe it; couldn’t save it to memory" in texts(reply.json()["screen"])
-    assert client.get("/api/memories").json() == []
-
-
-def test_non_jpeg_photo_is_rejected(client):
-    upload = client.post("/api/glasses/photos", files={"photo": ("a.png", b"\x89PNG", "image/png")})
-
-    assert upload.status_code == 415
-
-
-@pytest.mark.parametrize("name", ["../app.db", "nope.jpg", "20260101T000000000000.jpg"])
-def test_unknown_photo_is_404(client, name):
-    assert client.get(f"/api/glasses/photos/{name}").status_code == 404
 
 
 def test_question_without_models_says_so(client):
@@ -222,7 +165,6 @@ def test_unreachable_memory_is_spoken_not_raised(client):
 
 def test_answers_are_plain_text_without_images(client):
     use_models(chat=says("On the desk: * a **blue** mug * your keys"), embed=fake_embed)
-    client.post("/api/glasses/photos", files={"photo": ("a.jpg", JPEG, "image/jpeg")})
 
     reply = client.post("/api/glasses/command", json={"question": "what's on the desk"}).json()
 
@@ -377,22 +319,18 @@ def test_socket_reports_bad_messages_and_stays_open(client, message):
         assert ws.receive_json()["type"] == "pong"
 
 
-def test_socket_takes_photos_as_binary_frames(client):
+def test_socket_rejects_a_watched_frame_that_is_not_a_jpeg(client):
     with client.websocket_connect("/api/glasses/ws") as ws:
-        send_jpeg(ws, "photo", 5)
-        message = ws.receive_json()
-        assert message["type"] == "reply" and message["id"] == 5
-        assert "Photo saved" in texts(message["reply"]["screen"])
-
-        send_jpeg(ws, "photo", 6, b"not a jpeg")
+        ws.send_json({"type": "watch", "on": True})
+        send_jpeg(ws, "frame", 6, b"not a jpeg")
         assert ws.receive_json() == {
             "type": "error",
             "id": 6,
             "status": 415,
-            "detail": "photo must be a JPEG",
+            "detail": "frame must be a JPEG",
         }
-        ws.send_json({"type": "command", "id": 7, "action": "gallery"})
-        assert "Latest 1 photos" in texts(ws.receive_json()["reply"]["screen"])
+        ws.send_json({"type": "ping"})
+        assert ws.receive_json()["type"] == "pong"
 
 
 def test_socket_checks_frames_only_while_watching(client):
@@ -454,7 +392,7 @@ def test_socket_checks_only_the_latest_frame(client):
     [
         {"type": "ping"},
         {"type": "auth", "token": "wrong"},
-        {"type": "command", "id": 1, "action": "take_photo"},
+        {"type": "command", "id": 1, "action": "double_tap"},
     ],
 )
 def test_socket_refuses_a_client_that_is_not_logged_in(anonymous, first):

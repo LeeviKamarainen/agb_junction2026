@@ -5,13 +5,13 @@ every few seconds; `detect` asks the chat model which targets are in view. A tar
 a warning, at most once a minute per reminder.
 """
 
+import base64
 import re
 from datetime import UTC, datetime, timedelta
 
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from app.glasses import memory
 from app.llm import Chat, UpstreamError
 from app.models import Reminder
 
@@ -101,6 +101,10 @@ DETECT_PROMPT = (
 )
 
 
+def _data_url(jpeg: bytes) -> str:
+    return "data:image/jpeg;base64," + base64.b64encode(jpeg).decode()
+
+
 class Unavailable(Exception):
     """The chat model is not set up or cannot be reached, so nothing looks at the frame."""
 
@@ -119,7 +123,7 @@ async def detect(jpeg: bytes, targets: list[str], chat: Chat | None) -> tuple[li
                     "role": "user",
                     "content": [
                         {"type": "text", "text": DETECT_PROMPT.format(items=items)},
-                        {"type": "image_url", "image_url": {"url": memory.data_url(jpeg)}},
+                        {"type": "image_url", "image_url": {"url": _data_url(jpeg)}},
                     ],
                 }
             ],

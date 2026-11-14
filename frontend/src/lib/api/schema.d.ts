@@ -424,46 +424,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/glasses/photos": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Upload Photo
-         * @description Saves the still. With a chat model the glasses describe it; with an embedding model it also becomes an image memory, captioned with that description.
-         */
-        post: operations["upload_photo_api_glasses_photos_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/glasses/photos/{name}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Photo
-         * @description Your own photos only (the admin's: everyone's); 404 for anyone else's.
-         */
-        get: operations["get_photo_api_glasses_photos__name__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/glasses/reminders": {
         parameters: {
             query?: never;
@@ -695,14 +655,6 @@ export interface components {
             /** Seen At */
             seen_at?: string | null;
         };
-        /** Body_upload_photo_api_glasses_photos_post */
-        Body_upload_photo_api_glasses_photos_post: {
-            /**
-             * Photo
-             * @description One JPEG still
-             */
-            photo: string;
-        };
         /** Body_watch_api_glasses_watch_post */
         Body_watch_api_glasses_watch_post: {
             /**
@@ -860,7 +812,7 @@ export interface components {
             /** Speech */
             speech?: string | null;
             /** Client Action */
-            client_action?: ("capture_photo" | "listen_question") | null;
+            client_action?: "listen_question" | null;
             /** Dismiss After S */
             dismiss_after_s?: number | null;
         };
@@ -1814,77 +1766,6 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["GlassesReply"];
                 };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    upload_photo_api_glasses_photos_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "multipart/form-data": components["schemas"]["Body_upload_photo_api_glasses_photos_post"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["GlassesReply"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_photo_api_glasses_photos__name__get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                name: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "image/jpeg": unknown;
-                };
-            };
-            /** @description Not Found */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
             };
             /** @description Validation Error */
             422: {

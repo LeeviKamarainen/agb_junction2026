@@ -18,7 +18,6 @@ import hmac
 import logging
 import re
 import secrets
-import shutil
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Annotated
@@ -152,33 +151,19 @@ async def create_guest(session: AsyncSession) -> User:
         expires_at=now + timedelta(minutes=GUEST_MINUTES),
     )
     session.add(guest)
-    await session.flush()
-    assert guest.id is not None
-    await anyio.to_thread.run_sync(_delete_guest_files, guest.id)
     await session.commit()
     await session.refresh(guest)
     return guest
 
 
-def _delete_files(media_files: list[str], user_ids: list[int]) -> None:
+def _delete_files(media_files: list[str]) -> None:
     for name in media_files:
         media.delete(name)
-    for user_id in user_ids:
-        _delete_guest_files(user_id)
-
-
-def _delete_guest_files(user_id: int) -> None:
-    from app.glasses import photos  # here: app.glasses imports this module
-
-    try:
-        shutil.rmtree(photos.photos_dir() / str(user_id))
-    except FileNotFoundError:
-        pass
 
 
 async def purge_expired_guests(session: AsyncSession) -> int:
-    """Deletes every expired guest with its logins, memories (and their image files), reminders
-    and glasses photos. Returns how many. Commits."""
+    """Deletes every expired guest with its logins, memories (and their image files) and
+    reminders. Returns how many. Commits."""
     now = datetime.now(UTC)
     guests = await session.exec(
         select(User).where(User.role == "guest", col(User.expires_at).is_not(None))
@@ -204,9 +189,8 @@ async def purge_expired_guests(session: AsyncSession) -> int:
         await session.delete(user)
     await session.commit()
     # After the commit, so a failed delete never leaves rows without files; off the event loop,
-    # since a guest's photo folder can hold many files.
-    ids = [user.id for user in expired if user.id is not None]
-    await anyio.to_thread.run_sync(_delete_files, files, ids)
+    # since a guest can have many image files.
+    await anyio.to_thread.run_sync(_delete_files, files)
     if expired:
         log.info("Deleted %d expired guest account(s)", len(expired))
     return len(expired)
