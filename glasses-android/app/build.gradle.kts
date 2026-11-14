@@ -49,6 +49,13 @@ android {
             "BACKEND_URL",
             "\"${localProps.getProperty("backend.url", "")}\""
         )
+        // The Junction backend (its address, without /api) for memory mode: frames go to
+        // <glasses.api>/api/glasses/frames (see FrameApi.kt).
+        buildConfigField(
+            "String",
+            "GLASSES_API",
+            "\"${localProps.getProperty("glasses.api", "")}\""
+        )
     }
 
     buildFeatures {

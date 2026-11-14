@@ -69,6 +69,7 @@ class MainActivity : ComponentActivity() {
                     onArmQuick = { viewModel.armQuickShot(::requestWearablesPermission) },
                     onArmSnap = { viewModel.armSnapshot(::requestWearablesPermission) },
                     onArmLive = { viewModel.armLive(::requestWearablesPermission) },
+                    onArmMemory = { viewModel.armMemory(::requestWearablesPermission) },
                 )
             }
         }
