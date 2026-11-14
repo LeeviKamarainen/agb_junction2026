@@ -9,12 +9,12 @@ from datetime import datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, WebSocket
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse
 from sqlmodel import col, select
 
 from app.auth import ViewerDep
 from app.db import SessionDep
-from app.glasses import actions, channel, frames, photos, reminders, remote_memory, screens
+from app.glasses import actions, channel, frames, photos, reminders, screens
 from app.glasses.actions import Command, WatchResult
 from app.glasses.layout import GlassesReply
 from app.llm import Chat, Embedder, get_chat, get_embedder
@@ -99,25 +99,6 @@ async def get_photo(name: str, viewer: ViewerDep):
     if file is None:
         raise HTTPException(404, "no such photo")
     return FileResponse(file, media_type="image/jpeg")
-
-
-@router.get(
-    "/memory/{batch}/keyframes/{name}",
-    response_class=Response,
-    responses={200: {"content": {"image/jpeg": {}}}, 404: {}, 502: {}},
-)
-async def get_memory_keyframe(batch: str, name: str, viewer: ViewerDep):
-    """A still from the glass-memory API, fetched with the backend's token: only from your own
-    batch (the admin: any)."""
-    if not viewer.is_admin and batch != remote_memory.current_batch(viewer.id):
-        raise HTTPException(404, "no such keyframe")
-    try:
-        data = await remote_memory.keyframe(batch, name)
-    except remote_memory.Unavailable:
-        raise HTTPException(502, "the memory API is unreachable") from None
-    if data is None:
-        raise HTTPException(404, "no such keyframe")
-    return Response(data, media_type="image/jpeg")
 
 
 @router.get("/reminders", response_model=list[ReminderPublic])

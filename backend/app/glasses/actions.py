@@ -3,9 +3,8 @@
 model calls are awaited, so neither path ties up a thread while a model thinks.
 
 Memory is the backend's own (app/routes/memories.py): photos become image memories, questions go
-through the same question loop as /api/ask. When those models are not set or not reachable, the
-glasses fall back to the glass-memory API (MEMORY_API_URL, remote_memory.py), which runs Gemma
-itself. With neither, they still take and show photos and say memory search isn't set up.
+through the same question loop as /api/ask. Without the chat and embedding models the glasses
+still take and show photos, and say memory search isn't set up.
 """
 
 import logging
@@ -18,7 +17,7 @@ from pydantic import BaseModel, Field, model_validator
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.auth import Viewer
-from app.glasses import frames, memory, photos, reminders, remote_memory, screens
+from app.glasses import frames, memory, photos, reminders, screens
 from app.glasses.intents import BUTTON_ACTIONS, interpret
 from app.glasses.layout import GlassesReply
 from app.llm import Chat, Embedder, UpstreamError
@@ -127,22 +126,15 @@ async def _remind(
 async def _ask(
     session: AsyncSession, question: str, chat: Chat | None, embed: Embedder | None, viewer: Viewer
 ) -> GlassesReply:
-    if chat is not None and embed is not None:
-        try:
-            answer = await memory.ask(session, question, chat, embed, viewer.owners)
-            said = answer.answer or "I couldn’t find that in your memories."
-            return screens.memory_answer(question, said)
-        except UpstreamError as error:
-            log.warning("Memory question failed, falling back to the glass-memory API: %s", error)
-            if not remote_memory.configured():
-                return screens.memory_problem(question, "I can’t reach the memory right now.")
-    if remote_memory.configured():
-        try:
-            said, _stills = await remote_memory.ask(question, viewer.id, viewer.owners)
-        except remote_memory.Unavailable:
-            return screens.memory_problem(question, "I can’t reach the memory right now.")
-        return screens.memory_answer(question, said)
-    return screens.memory_problem(question, "Memory search isn’t set up yet.")
+    if chat is None or embed is None:
+        return screens.memory_problem(question, "Memory search isn’t set up yet.")
+    try:
+        answer = await memory.ask(session, question, chat, embed, viewer.owners)
+    except UpstreamError as error:
+        log.warning("Memory question failed: %s", error)
+        return screens.memory_problem(question, "I can’t reach the memory right now.")
+    said = answer.answer or "I couldn’t find that in your memories."
+    return screens.memory_answer(question, said)
 
 
 def check_jpeg(data: bytes, what: str) -> None:
@@ -166,12 +158,7 @@ async def photo(
             description = await memory.describe(chat, data)
         except UpstreamError as error:
             log.warning("Describing a photo failed: %s", error)
-    if not description and remote_memory.configured():
-        try:
-            description = await remote_memory.describe(data, name)
-        except remote_memory.Unavailable:
-            pass
-    if not description and (chat is not None or remote_memory.configured()):
+    if not description and chat is not None:
         problems.append("couldn’t describe it")
     if embed is not None:
         try:
