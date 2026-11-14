@@ -175,8 +175,8 @@ backend's environment:
 
 | Setting | Value we need from you | Example |
 | --- | --- | --- |
-| `LLM_URL` | Chat base URL, without `/v1` | `https://<vm2-ip-with-dashes>.sslip.io` |
-| `LLM_API_KEY` | vLLM API key | secret |
+| `LLM_URL` | Chat base URL, without `/v1`: the memory API, which passes chat to vLLM | `https://<vm2-ip-with-dashes>.sslip.io` |
+| `LLM_API_KEY` | The memory API's `GLASS_API_TOKEN` (vLLM's own key stays on VM2) | secret |
 | `LLM_MODEL` | Served model name | `google/gemma-4-31B-it` |
 | `EMBED_URL` | Embeddings base URL, without `/v1` | `https://<vm2-ip-with-dashes>.sslip.io` |
 | `EMBED_API_KEY` | Token for the embeddings route | secret |
@@ -204,7 +204,8 @@ The whole loop: open `/memory` on the web app, upload a few stills, then ask abo
 
 ## Open questions
 
-- Is vLLM's port 8000 reachable from VM1 over HTTPS, or should Caddy proxy a path to it?
+- ~~Is vLLM's port 8000 reachable from VM1 over HTTPS?~~ No, and it need not be: the memory API
+  serves `POST /v1/chat/completions` behind its token and passes each request to vLLM on VM2.
 - Who restarts the shared vLLM with the tool-calling flags, and when?
 - Should the glasses' stills reach our database through the memory API, or straight from the
   glasses to the backend's upload route?

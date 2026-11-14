@@ -18,7 +18,7 @@ import secrets
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 import numpy as np
 import polars as pl
@@ -220,6 +220,21 @@ def embeddings(body: Texts):
         ],
         "model": embed.MODEL,
     }
+
+
+@app.post("/v1/chat/completions")
+def chat_completions(body: dict[str, Any]):
+    """OpenAI-style chat, tool calls included, passed as it is to vLLM at GEMMA_URL, so services
+    that cannot reach port 8000 use the shared Gemma with this API's token. vLLM's answer comes
+    back unchanged, errors too; 503 without GEMMA_URL, 502 when vLLM does not answer."""
+    if body.get("stream"):
+        raise HTTPException(400, "streaming is not supported")
+    body.setdefault("model", ask.model_name())
+    try:
+        status, reply = ask.forward_chat(body)
+    except ask.ChatUnavailable as error:
+        raise HTTPException(error.status, str(error)) from None
+    return JSONResponse(reply, status)
 
 
 def _embedded(given):
