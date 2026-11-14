@@ -55,6 +55,10 @@ The API runs on the Gemma server (called VM2 in `memory/`), beside vLLM, behind 
 - `make memory-send FRAMES=<folder>`: post a folder of JPEG stills as one batch, the folder given from the repo root (needs `uv sync` in `memory/` first).
 - The server's address is `VM2_IP` in `memory/.env`, which is not in git. Its secrets live only in `/opt/glass-memory/.env`: `GLASS_API_TOKEN` and `GEMMA_API_KEY`.
 
+## Glasses
+
+`/glasses` in the frontend is a harness standing in for the glasses (webcam, mic, speakers, a 600×600 display); `glasses-android` is the real client. Both call `/api/glasses/*` (`backend/app/routes/glasses.py`) and draw the `GlassesReply` they get: the screens live in `backend/app/glasses/screens.py`, built only from the SDK's display components in `layout.py`, so a screen that works in the harness can be sent to the glasses. Voice arrives as text and `intents.py` interprets it with keyword rules. Photos are kept in `glasses-photos/` beside the database; with the chat and embedding models set (`LLM_URL`, `EMBED_URL`) each is also described and stored as an image memory (`glasses/memory.py`), and questions use `agent.answer`, as `/api/ask` does. Tests replace `optional_chat` and `optional_embedder` through `app.dependency_overrides`.
+
 ## Agent skills
 
 Skills live in `.agents/skills/` (`.claude/skills` is a symlink to it; edit the real path): `add-feature`, `ship`, `review`, `submission`.
