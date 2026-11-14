@@ -117,9 +117,10 @@ export function TriggerEditor({
           looks like the &ldquo;watch for&rdquo; text than the last 20 seconds
           did. When the score reaches the trigger&rsquo;s level, Gemma looks at
           the frame: it writes the message for the glasses, or finds a false
-          alarm, says nothing and raises the level. Then the stream is quiet for
-          2 seconds. A level is measured from the trigger&rsquo;s own noise
-          after about ten frames of streaming.
+          alarm, says nothing and raises the level. After a message the stream
+          is quiet for 5 seconds, so it can be read; after a false alarm for 2.
+          A level is measured from the trigger&rsquo;s own noise after about ten
+          frames of streaming.
         </p>
       </div>
       <form

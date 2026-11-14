@@ -141,9 +141,7 @@ def test_a_changed_scene_in_a_stream_is_stored(client, scene):
     assert send(client, "stream", "s1").json()["stored"] is True
 
 
-def test_a_matching_trigger_fires_and_the_stream_is_then_quiet_for_two_seconds(
-    client, scene, monkeypatch
-):
+def test_a_message_is_shown_and_the_wearer_gets_five_seconds_to_read_it(client, scene, monkeypatch):
     clock = Clock()
     monkeypatch.setattr(frames, "time", clock)
     trigger = add_trigger(client)
@@ -151,9 +149,9 @@ def test_a_matching_trigger_fires_and_the_stream_is_then_quiet_for_two_seconds(
     warm_up(client, scene, clock=clock)
 
     first = send(client, "stream", "s1").json()
-    clock.now += 0.5
-    too_soon = send(client, "stream", "s1").json()
-    clock.now += scores.SKIP_S
+    clock.now += scores.SKIP_S + 0.5
+    still_reading = send(client, "stream", "s1").json()
+    clock.now += scores.READ_S - scores.SKIP_S
     later = send(client, "stream", "s1").json()
 
     assert first["message"] == {
@@ -165,11 +163,30 @@ def test_a_matching_trigger_fires_and_the_stream_is_then_quiet_for_two_seconds(
     assert [(m["name"], m["fired"]) for m in first["matches"]] == [("Keys", True), ("Dog", False)]
     assert first["matches"][0]["distance"] == pytest.approx(0.0, abs=1e-6)
     assert first["matches"][1]["distance"] == pytest.approx(1.0, abs=1e-6)
-    assert too_soon["message"] is None and not too_soon["matches"][0]["fired"]
+    assert still_reading["message"] is None and not still_reading["matches"][0]["fired"]
     assert later["message"] is not None  # still new against the last 20 seconds
     assert scene.asked == 2
     listed = client.get("/api/glasses/triggers").json()
     assert listed[0]["last_fired_at"] is not None and listed[1]["last_fired_at"] is None
+
+
+def test_after_a_false_alarm_the_stream_is_quiet_for_two_seconds_only(client, scene, monkeypatch):
+    clock = Clock()
+    monkeypatch.setattr(frames, "time", clock)
+    add_trigger(client)
+    warm_up(client, scene, clock=clock)
+    scene.image, scene.say = toward_keys(0.70), None
+
+    alarm = send(client, "stream", "s1").json()
+    scene.image, scene.say = unit(0), "I see your keys."  # now they do come into view
+    clock.now += 0.5
+    too_soon = send(client, "stream", "s1").json()
+    clock.now += scores.SKIP_S
+    seen = send(client, "stream", "s1").json()
+
+    assert alarm["message"] is None and alarm["matches"][0]["fired"]
+    assert too_soon["message"] is None and not too_soon["matches"][0]["fired"]
+    assert seen["message"]["text"] == "I see your keys."
 
 
 def test_a_false_alarm_reaches_nobody_and_raises_the_level(client, scene, monkeypatch):

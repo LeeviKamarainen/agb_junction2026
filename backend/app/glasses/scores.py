@@ -32,6 +32,9 @@ IDLE_S = 600.0  # a stream that sent nothing for this long is forgotten
 # After a trigger fires, nothing fires in the stream for this long: with two frames a second the
 # chat model is asked at most every 2.5 s, which gives it time to answer.
 SKIP_S = 2.0
+# After a message was shown to the wearer the stream is quiet for this long instead, counted from
+# when the message was ready: time to read it before the next one replaces it.
+READ_S = 5.0
 # The highest level worth having: on real footage a clear, close view scores 0.10 to 0.20, so a
 # trigger above this would hardly fire again.
 MAX_LEVEL = 0.15
