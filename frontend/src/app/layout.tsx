@@ -20,8 +20,11 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
+    // Extensions such as the Meta Ray-Ban Display Simulator add attributes to <html> before React
+    // loads; this silences the hydration warning for this one element only, not its children.
     <html
       lang="en"
+      suppressHydrationWarning
       className={`${geistSans.variable} ${geistMono.variable} dark h-full antialiased`}
     >
       <body className="min-h-full flex flex-col">{children}</body>
