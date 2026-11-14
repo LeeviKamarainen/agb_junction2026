@@ -9,6 +9,7 @@ dependencies = [
     "av>=19.0.2",
     "fastapi[standard]>=0.162.7",
     "numpy>=2.5.4",
+    "opencv-python-headless>=5.0.0.93",
     "pillow>=13.0.0",
     "polars>=2.1.0",
     "sentence-transformers>=6.3.0",
