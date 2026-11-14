@@ -1,14 +1,14 @@
-import { ArrowLeft, Asterisk } from "lucide-react";
+import { ArrowLeft, Asterisk, Glasses } from "lucide-react";
 import type { Metadata } from "next";
 import Link from "next/link";
 
-import { AskChat } from "./ask-chat";
-import { MemoryLibrary } from "./memory-library";
+import "../glasses/glasses.css";
+import { MemoryLab } from "./lab";
 
 export const metadata: Metadata = {
   title: "Memory lab — Junction / 26",
   description:
-    "Add images and notes to the memory database, then ask Gemma about them and watch it search.",
+    "Add images and notes to the memory database, ask Gemma about them and watch it search, or try it all through the glasses.",
 };
 
 export default function MemoryLabPage() {
@@ -21,21 +21,27 @@ export default function MemoryLabPage() {
             <h1 className="text-xl font-semibold tracking-tight">Memory lab</h1>
             <p className="text-sm text-muted-foreground">
               Add memories on the left, ask about them on the right. Every
-              vector_search call Gemma makes shows up as it happens.
+              vector_search call Gemma makes shows up as it happens; the Glasses
+              tab shows the same memory through the glasses.
             </p>
           </div>
         </div>
-        <Link
-          href="/"
-          className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground"
-        >
-          <ArrowLeft size={15} aria-hidden="true" /> Home
-        </Link>
+        <nav className="flex items-center gap-4" aria-label="Pages">
+          <Link
+            href="/glasses"
+            className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground"
+          >
+            <Glasses size={15} aria-hidden="true" /> Full-screen glasses
+          </Link>
+          <Link
+            href="/"
+            className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground"
+          >
+            <ArrowLeft size={15} aria-hidden="true" /> Home
+          </Link>
+        </nav>
       </header>
-      <main className="grid flex-1 gap-6 lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)]">
-        <MemoryLibrary />
-        <AskChat />
-      </main>
+      <MemoryLab />
     </div>
   );
 }

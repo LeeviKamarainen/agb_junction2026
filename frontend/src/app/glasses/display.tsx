@@ -12,7 +12,14 @@ import {
   type LucideIcon,
   Mic,
 } from "lucide-react";
-import type { CSSProperties, KeyboardEvent, Ref } from "react";
+import {
+  type CSSProperties,
+  type KeyboardEvent,
+  type Ref,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 
 import type { FlexBoxNode, LayoutNode } from "./types";
 
@@ -27,6 +34,9 @@ const icons: Record<string, LucideIcon> = {
   image: ImageIcon,
   mic: Mic,
 };
+
+// The glasses' display in pixels; smaller columns get a scaled-down copy.
+const SIZE = 600;
 
 const flexAlign = {
   start: "flex-start",
@@ -55,6 +65,18 @@ export function Display({
   ref,
   children,
 }: Props) {
+  const frameRef = useRef<HTMLDivElement>(null);
+  const [scale, setScale] = useState(1);
+  useEffect(() => {
+    const frame = frameRef.current;
+    if (!frame) return;
+    const observer = new ResizeObserver(([entry]) =>
+      setScale(Math.min(1, entry.contentRect.width / SIZE)),
+    );
+    observer.observe(frame);
+    return () => observer.disconnect();
+  }, []);
+
   // The Neural Band's D-pad: arrows move focus between buttons, Enter (a pinch) presses.
   function onKeyDown(event: KeyboardEvent<HTMLDivElement>) {
     const step = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[
@@ -77,17 +99,26 @@ export function Display({
   }
 
   return (
-    <div className={`gh-display ${seeThrough ? "gh-see-through" : ""}`}>
-      {children}
+    <div
+      ref={frameRef}
+      className="gh-display-frame"
+      style={{ height: SIZE * scale }}
+    >
       <div
-        ref={ref}
-        className="gh-display-content"
-        onKeyDown={onKeyDown}
-        role="region"
-        aria-label="Glasses display"
-        aria-live="polite"
+        className={`gh-display ${seeThrough ? "gh-see-through" : ""}`}
+        style={scale < 1 ? { transform: `scale(${scale})` } : undefined}
       >
-        {screen ? <Node node={screen} onAction={onAction} /> : null}
+        {children}
+        <div
+          ref={ref}
+          className="gh-display-content"
+          onKeyDown={onKeyDown}
+          role="region"
+          aria-label="Glasses display"
+          aria-live="polite"
+        >
+          {screen ? <Node node={screen} onAction={onAction} /> : null}
+        </div>
       </div>
     </div>
   );

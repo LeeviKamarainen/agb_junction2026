@@ -1,6 +1,6 @@
-/* The glasses harness (/glasses). Everything is prefixed gh- to stay out of the main site's way. */
+/* The glasses harness (/glasses, and the Memory lab's Glasses tab). Everything is prefixed gh- to stay out of the main site's way. */
 
-.gh-page {
+.gh-root {
   --gh-bg: #0b0b0d;
   --gh-panel: #141418;
   --gh-line: #2a2a31;
@@ -10,6 +10,11 @@
   --gh-danger: #ff7a7a;
   --gh-ok: #5be3a1;
 
+  color: var(--gh-text);
+  font-family: var(--font-geist-sans), system-ui, sans-serif;
+}
+
+.gh-page {
   min-height: 100vh;
   padding: 28px clamp(16px, 3vw, 40px) 40px;
   background: var(--gh-bg);
@@ -38,6 +43,31 @@
   font-family: var(--font-geist-mono), monospace;
   font-size: 12px;
   letter-spacing: 0.12em;
+}
+
+.gh-header-side {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 10px;
+}
+
+.gh-nav {
+  display: flex;
+  gap: 16px;
+  font-size: 14px;
+}
+
+.gh-nav a {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--gh-muted);
+  text-decoration: none;
+}
+
+.gh-nav a:hover {
+  color: var(--gh-text);
 }
 
 .gh-status {
@@ -69,7 +99,7 @@
 
 .gh-main {
   display: grid;
-  grid-template-columns: 600px minmax(320px, 1fr);
+  grid-template-columns: minmax(0, 600px) minmax(320px, 1fr);
   gap: 28px;
   align-items: start;
 }
@@ -82,8 +112,14 @@
 
 /* --- The display ------------------------------------------------------------------------- */
 
+.gh-display-frame {
+  width: 100%;
+  max-width: 600px;
+}
+
 .gh-display {
   position: relative;
+  transform-origin: top left;
   width: 600px;
   height: 600px;
   overflow: hidden;
@@ -188,7 +224,8 @@
   flex-wrap: wrap;
   justify-content: space-between;
   gap: 10px;
-  width: 600px;
+  width: 100%;
+  max-width: 600px;
   margin-top: 14px;
   color: var(--gh-muted);
   font-size: 13px;
@@ -416,4 +453,36 @@
 .gh-log-error p {
   margin: 4px 0 0;
   color: var(--gh-danger);
+}
+
+/* --- Inside the Memory lab ---------------------------------------------------------------- */
+
+.gh-embedded {
+  padding: 16px;
+  border: 1px solid var(--gh-line);
+  border-radius: 12px;
+  background: var(--gh-bg);
+}
+
+.gh-embedded > .gh-status {
+  margin-bottom: 14px;
+}
+
+.gh-embedded .gh-main {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 20px;
+}
+
+.gh-embedded .gh-stage {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.gh-embedded .gh-controls {
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+}
+
+.gh-embedded .gh-log-card {
+  grid-column: 1 / -1;
 }

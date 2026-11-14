@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  ArrowLeft,
   Camera,
   Mic,
   RotateCcw,
@@ -14,10 +15,13 @@ import {
   type FormEvent,
   useEffect,
   useEffectEvent,
+  useId,
   useRef,
   useState,
   useSyncExternalStore,
 } from "react";
+
+import Link from "next/link";
 
 import { api } from "@/lib/api/browser";
 
@@ -81,7 +85,20 @@ const MAX_LOG = 50;
  * speechSynthesis = speakers, arrow keys + Enter = Neural Band. Everything else happens in the
  * backend's /api/glasses endpoints, the same ones the Android app calls.
  */
-export function GlassesHarness() {
+type HarnessProps = {
+  /** Inside another page (the Memory lab): no page header, one column. */
+  embedded?: boolean;
+  /** False while hidden behind another tab: Space no longer starts the microphone. */
+  active?: boolean;
+  /** After a photo upload, which may have added an image memory. */
+  onPhotoStored?: () => void;
+};
+
+export function GlassesHarness({
+  embedded = false,
+  active = true,
+  onPhotoStored,
+}: HarnessProps = {}) {
   const [screen, setScreen] = useState<FlexBoxNode | null>(null);
   const [status, setStatus] = useState<Status>("connecting");
   const [log, setLog] = useState<LogEntry[]>([]);
@@ -100,6 +117,14 @@ export function GlassesHarness() {
     () => true,
   );
 
+  // Unique per harness: Next.js can keep a hidden copy of this page mounted beside another.
+  const uid = useId();
+  const ids = {
+    typed: `${uid}-typed`,
+    camera: `${uid}-camera`,
+    voice: `${uid}-voice`,
+    log: `${uid}-log`,
+  };
   const displayRef = useRef<HTMLDivElement>(null);
   const previewRef = useRef<HTMLVideoElement>(null);
   const backdropRef = useRef<HTMLVideoElement>(null);
@@ -233,6 +258,7 @@ export function GlassesHarness() {
         (await response.json()) as GlassesReply,
         started,
       );
+      onPhotoStored?.();
     } catch (error) {
       fail(request, String(error));
     }
@@ -312,7 +338,7 @@ export function GlassesHarness() {
 
   // Hold Space to talk, like holding the glasses' touchpad.
   const onKey = useEffectEvent((event: KeyboardEvent) => {
-    if (event.code !== "Space" || event.repeat) return;
+    if (!active || event.code !== "Space" || event.repeat) return;
     const target = event.target as HTMLElement;
     if (target.closest("input, textarea, button")) return;
     event.preventDefault();
@@ -329,28 +355,32 @@ export function GlassesHarness() {
     };
   }, []);
 
-  // Release the webcam when leaving the page.
-  useEffect(
-    () => () => streamRef.current?.getTracks().forEach((track) => track.stop()),
-    [],
-  );
+  // Release the webcam when leaving the page. Next.js keeps a page it navigates away from
+  // mounted but hidden, and runs this then too, so the controls must show the camera as off.
+  const releaseCamera = useEffectEvent(stopCamera);
+  useEffect(() => () => releaseCamera(), []);
 
   return (
-    <div className="gh-page">
-      <header className="gh-header">
-        <div>
-          <p className="gh-eyebrow">GLASSES HARNESS</p>
-          <h1>What the wearer sees</h1>
-        </div>
-        <p className={`gh-status gh-status-${status}`} role="status">
-          <span aria-hidden="true" />
-          {status === "online"
-            ? "Backend connected"
-            : status === "offline"
-              ? "Backend unreachable"
-              : "Connecting…"}
-        </p>
-      </header>
+    <div className={`gh-root ${embedded ? "gh-embedded" : "gh-page"}`}>
+      {embedded ? (
+        <StatusLine status={status} />
+      ) : (
+        <header className="gh-header">
+          <div>
+            <p className="gh-eyebrow">GLASSES HARNESS</p>
+            <h1>What the wearer sees</h1>
+          </div>
+          <div className="gh-header-side">
+            <nav className="gh-nav" aria-label="Pages">
+              <Link href="/memory">Memory lab</Link>
+              <Link href="/">
+                <ArrowLeft size={14} aria-hidden="true" /> Home
+              </Link>
+            </nav>
+            <StatusLine status={status} />
+          </div>
+        </header>
+      )}
 
       <main className="gh-main">
         <section className="gh-stage" aria-label="Display">
@@ -398,9 +428,9 @@ export function GlassesHarness() {
         </section>
 
         <aside className="gh-controls">
-          <section className="gh-card" aria-labelledby="gh-camera-title">
+          <section className="gh-card" aria-labelledby={ids.camera}>
             <div className="gh-card-heading">
-              <h2 id="gh-camera-title">Camera</h2>
+              <h2 id={ids.camera}>Camera</h2>
               {camera ? (
                 <button type="button" className="gh-chip" onClick={stopCamera}>
                   <VideoOff size={14} aria-hidden="true" /> Turn off
@@ -437,9 +467,9 @@ export function GlassesHarness() {
             </button>
           </section>
 
-          <section className="gh-card" aria-labelledby="gh-voice-title">
+          <section className="gh-card" aria-labelledby={ids.voice}>
             <div className="gh-card-heading">
-              <h2 id="gh-voice-title">Voice</h2>
+              <h2 id={ids.voice}>Voice</h2>
               <button
                 type="button"
                 className="gh-chip"
@@ -478,11 +508,11 @@ export function GlassesHarness() {
             </p>
             {micError ? <p className="gh-error">{micError}</p> : null}
             <form className="gh-typed" onSubmit={submitTyped}>
-              <label htmlFor="gh-typed" className="gh-sr-only">
+              <label htmlFor={ids.typed} className="gh-sr-only">
                 Type what the wearer says
               </label>
               <input
-                id="gh-typed"
+                id={ids.typed}
                 value={typed}
                 onChange={(event) => setTyped(event.target.value)}
                 placeholder="…or type what the wearer says"
@@ -499,12 +529,9 @@ export function GlassesHarness() {
             </form>
           </section>
 
-          <section
-            className="gh-card gh-log-card"
-            aria-labelledby="gh-log-title"
-          >
+          <section className="gh-card gh-log-card" aria-labelledby={ids.log}>
             <div className="gh-card-heading">
-              <h2 id="gh-log-title">Backend log</h2>
+              <h2 id={ids.log}>Backend log</h2>
               <button
                 type="button"
                 className="gh-chip"
@@ -544,5 +571,18 @@ export function GlassesHarness() {
         </aside>
       </main>
     </div>
+  );
+}
+
+function StatusLine({ status }: { status: Status }) {
+  return (
+    <p className={`gh-status gh-status-${status}`} role="status">
+      <span aria-hidden="true" />
+      {status === "online"
+        ? "Backend connected"
+        : status === "offline"
+          ? "Backend unreachable"
+          : "Connecting…"}
+    </p>
   );
 }
