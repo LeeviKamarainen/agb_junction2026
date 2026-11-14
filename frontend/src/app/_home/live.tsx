@@ -221,6 +221,7 @@ export function LiveHome() {
       form.append("seen_at", new Date().toISOString());
       // The demo clips are demo memories already: only check them against the triggers.
       form.append("store", String(source === "camera"));
+      form.append("client", "live"); // for the admin's stream wall
       const response = await fetch("/api/glasses/frames", { method: "POST", body: form });
       const body = await response.json().catch(() => null);
       if (response.status === 401) {

@@ -17,6 +17,7 @@ export function SiteNav() {
       {user?.role === "admin" ? (
         <>
           <Link href="/admin">Manage demos</Link>
+          <Link href="/admin/streams">Streams</Link>
           <Link href="/glasses">Glasses harness</Link>
           <Link href="/memory">Memory lab</Link>
         </>

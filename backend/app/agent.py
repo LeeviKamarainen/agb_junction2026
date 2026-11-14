@@ -25,7 +25,7 @@ from pydantic import BaseModel, Field, ValidationError
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app import media
-from app.glasses import triggers
+from app.glasses import feeds, triggers
 from app.llm import Chat, Embedder
 from app.models import Goal, Memory
 from app.search import (
@@ -275,6 +275,7 @@ async def run(
                         yield step("tool_error", round, call_id=call_id, content=str(error))
                     else:
                         await triggers.add(session, owner_id, goal_text, drafts)
+                        feeds.note(owner_id, "goal", goal_text, "chat")
                         started_goals.add(goal_text.lower())
                         names = [draft.name for draft in drafts]
                         content = json.dumps({"now_watching": goal_text, "triggers": names})

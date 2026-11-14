@@ -8,7 +8,7 @@ from app import auth, demo, faces
 from app.db import get_engine, init_db, new_session
 from app.llm import get_embedder
 from app.routes import auth as auth_routes
-from app.routes import glasses, memories, showcases
+from app.routes import glasses, memories, showcases, streams
 from app.settings import get_settings
 
 log = logging.getLogger(__name__)
@@ -73,6 +73,7 @@ def health() -> dict[str, str]:
 
 api.include_router(auth_routes.router)
 api.include_router(showcases.router)
+api.include_router(streams.router)
 api.include_router(memories.router)
 api.include_router(glasses.router)
 app.include_router(api)

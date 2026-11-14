@@ -17,7 +17,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app import agent, faces
 from app.auth import Viewer
-from app.glasses import dejavu, frames, reminders, screens
+from app.glasses import dejavu, feeds, frames, reminders, screens
 from app.glasses.layout import GlassesReply
 from app.llm import Chat, Embedder, UpstreamError
 
@@ -37,23 +37,40 @@ async def memory_frame(
     stream_id: str = "",
     seen_at: datetime | None = None,
     store: bool = True,
+    client: str = "web",
 ) -> frames.FrameReply:
     """The memory-mode upload, shared by HTTP and the Android socket. Every face in the frame is
-    blurred first, so nothing stores, embeds or shows one."""
-    if embed is None:
-        raise HTTPException(503, "No embedding model configured: set EMBED_URL")
+    blurred first, so nothing stores, embeds or shows one. The blurred frame also becomes the
+    newest of its client's feed on the admin's stream wall (feeds.py), even when it cannot be
+    embedded."""
     if len(data) > MAX_FRAME:
         raise HTTPException(413, "frame is larger than 10 MB")
     when = seen_at if seen_at is None or seen_at.tzinfo else seen_at.replace(tzinfo=UTC)
     try:
         data = await anyio.to_thread.run_sync(faces.anonymise, data)
-        return await frames.receive(
+    except ValueError as error:
+        raise HTTPException(415, str(error)) from error
+    kind: feeds.Kind = "stream" if source == "stream" else "photo"
+    feeds.record(viewer.id, viewer.user.username, client, kind, stream_id, data, demo=not store)
+    if embed is None:
+        raise HTTPException(503, "No embedding model configured: set EMBED_URL")
+    try:
+        reply = await frames.receive(
             session, data, embed, chat, source, stream_id, when, viewer.id, store
         )
     except ValueError as error:
         raise HTTPException(415, str(error)) from error
     except UpstreamError as error:
         raise HTTPException(502, str(error)) from error
+    fired = next((match for match in reply.matches if match.fired), None)
+    if reply.message is not None:
+        title = reply.message.title or (fired.name if fired else "Trigger")
+        feeds.note(viewer.id, "trigger", f"{title}: {reply.message.text}", "stream")
+    elif fired is not None:
+        feeds.note(
+            viewer.id, "trigger", f"{fired.name} fired: {reply.note or 'no message'}", "stream"
+        )
+    return reply
 
 
 # The wearer's gesture: the Neural Band's double index-finger tap ("double_tap", or "ask") opens
@@ -102,7 +119,9 @@ async def command(
     if not question:
         return screens.home()
     if reminders.is_reminder(question):
+        feeds.note(viewer.id, "reminder", question, "glasses")
         return await _remind(session, question, chat, viewer)
+    feeds.note(viewer.id, "question", question, "glasses")
     if dejavu.is_recall(question):
         view = (
             dejavu.DemoView(body.demo_clip_id, body.demo_at_s or 0.0)
@@ -167,15 +186,16 @@ def check_jpeg(data: bytes, what: str) -> None:
 
 
 async def watch(
-    session: AsyncSession, viewer: Viewer, data: bytes, chat: Chat | None
+    session: AsyncSession, viewer: Viewer, data: bytes, chat: Chat | None, client: str = "web"
 ) -> WatchResult:
     """Checks one frame for every reminder's object; never raises for a model's failure. Every
-    face in the frame is blurred before the chat model sees it."""
+    face in the frame is blurred before the chat model sees it, or the stream wall shows it."""
     check_jpeg(data, "frame")
     try:
         data = await anyio.to_thread.run_sync(faces.anonymise, data)
     except ValueError as error:
         raise HTTPException(415, str(error)) from error
+    feeds.record(viewer.id, viewer.user.username, client, "watch", "", data)
     watched = await reminders.active(session, viewer.id)  # your own, even for the admin
     try:
         found, note = await reminders.detect(data, [r.target for r in watched], chat)
@@ -191,6 +211,7 @@ async def watch(
     if first is not None:
         first.last_warned_at = now
         session.add(first)
+        feeds.note(viewer.id, "warning", f"{first.target}: {first.text}", "watch")
     await session.commit()
     return WatchResult(
         seen=[r.target for r in seen],

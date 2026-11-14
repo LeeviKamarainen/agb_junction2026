@@ -323,6 +323,18 @@ def test_demo_video_frames_are_stored_with_their_faces_blurred(client, models, d
     assert models.all_filled()
 
 
+def test_the_admins_stream_wall_shows_frames_with_their_faces_blurred(client, models):
+    """GET /api/admin/streams/{id}/frame serves what clients send, so it must be the blurred
+    frame."""
+    send_frame(client, "stream")
+    (feed,) = [f for f in client.get("/api/admin/streams").json() if f["kind"] == "stream"]
+
+    shown = client.get(f"/api/admin/streams/{feed['id']}/frame")
+
+    assert shown.status_code == 200
+    assert face_blurred(picture(shown.content))
+
+
 def test_every_upload_route_is_one_of_those_tested_here():
     """A new multipart upload route fails this until it fills faces first and has its test here.
     It cannot see an image sent another way: the WebSocket's frames are tested above by hand, and

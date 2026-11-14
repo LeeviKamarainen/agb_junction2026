@@ -9,7 +9,8 @@ export type ClientMessage =
   | ({ type: "command"; id: number } & (
       { action: string } | { question: string }
     ))
-  | { type: "frame"; id: number }
+  // `client` names this app on the admin's stream wall.
+  | { type: "frame"; id: number; client?: string }
   | { type: "watch"; on: boolean }
   | { type: "ping"; id: number }
   | { type: "auth"; token: string };

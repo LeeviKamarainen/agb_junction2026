@@ -246,6 +246,47 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/streams": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Streams
+         * @description Every client that sent a frame in the last minute, newest first: who, which app, what
+         *     kind of frames and how fast. Faces are blurred in every frame, as everywhere.
+         */
+        get: operations["list_streams_api_admin_streams_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/streams/{feed_id}/frame": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Latest Frame
+         * @description The newest frame of a feed, as a JPEG. 404 once the feed has gone quiet.
+         */
+        get: operations["latest_frame_api_admin_streams__feed_id__frame_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/memories": {
         parameters: {
             query?: never;
@@ -598,7 +639,8 @@ export interface paths {
          *     `message` is what to show on the glasses.
          *
          *     `store=false` only checks the frame against the triggers: the home page sends the demo clips
-         *     this way, since they are stored as demo memories already.
+         *     this way, since they are stored as demo memories already. `client` names the app sending it
+         *     ("live", "harness", ...) for the admin's stream wall.
          */
         post: operations["upload_frame_api_glasses_frames_post"];
         delete?: never;
@@ -777,6 +819,11 @@ export interface components {
              * @default true
              */
             store: boolean;
+            /**
+             * Client
+             * @default
+             */
+            client: string;
         };
         /** Body_watch_api_glasses_watch_post */
         Body_watch_api_glasses_watch_post: {
@@ -785,6 +832,11 @@ export interface components {
              * @description One JPEG frame
              */
             photo: string;
+            /**
+             * Client
+             * @default
+             */
+            client: string;
         };
         /** Button */
         Button: {
@@ -830,6 +882,59 @@ export interface components {
             username: string;
             /** Password */
             password: string;
+        };
+        /** FeedEvent */
+        FeedEvent: {
+            /**
+             * At
+             * Format: date-time
+             */
+            at: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "question" | "goal" | "reminder" | "trigger" | "warning";
+            /** Text */
+            text: string;
+            /** Via */
+            via: string;
+        };
+        /** FeedPublic */
+        FeedPublic: {
+            /** Id */
+            id: string;
+            /** Client */
+            client: string;
+            /** User */
+            user: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "stream" | "photo" | "watch";
+            /** Stream Id */
+            stream_id: string;
+            /** Demo */
+            demo: boolean;
+            /**
+             * Started At
+             * Format: date-time
+             */
+            started_at: string;
+            /**
+             * Last At
+             * Format: date-time
+             */
+            last_at: string;
+            /** Live */
+            live: boolean;
+            /** Frames */
+            frames: number;
+            /** Fps */
+            fps: number;
+            /** Events */
+            events: components["schemas"]["FeedEvent"][];
         };
         /** FlexBox */
         FlexBox: {
@@ -1801,6 +1906,57 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ShowcasePublic"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_streams_api_admin_streams_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FeedPublic"][];
+                };
+            };
+        };
+    };
+    latest_frame_api_admin_streams__feed_id__frame_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                feed_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "image/jpeg": unknown;
                 };
             };
             /** @description Validation Error */

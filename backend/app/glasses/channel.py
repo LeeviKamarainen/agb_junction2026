@@ -45,7 +45,7 @@ from pydantic import BaseModel, Field, TypeAdapter, ValidationError
 from app import auth
 from app.auth import Viewer
 from app.db import new_session
-from app.glasses import actions, frames
+from app.glasses import actions, feeds, frames
 from app.glasses.actions import Command, WatchResult
 from app.glasses.layout import GlassesReply
 from app.llm import Chat, Embedder
@@ -54,6 +54,8 @@ log = logging.getLogger(__name__)
 
 # The WebSocket close code for a refused token (policy violation).
 REFUSED = 1008
+# What the admin's stream wall calls a socket client that does not name itself: the Android app.
+DEFAULT_CLIENT = "glasses"
 # How long a client has to send its `auth` message.
 AUTH_TIMEOUT_S = 10
 # Commands and frames one client may have running at once.
@@ -73,6 +75,7 @@ class FrameMessage(BaseModel):
 
     type: Literal["frame"]
     id: int | None = None
+    client: str = Field(default="", max_length=100)  # the app, for the admin's stream wall
 
 
 class MemoryFrameMessage(BaseModel):
@@ -81,6 +84,7 @@ class MemoryFrameMessage(BaseModel):
     source: frames.Source = "single"
     stream_id: str = Field(default="", max_length=100)
     seen_at: datetime | None = None
+    client: str = Field(default="", max_length=100)  # the app, for the admin's stream wall
 
 
 class WatchMessage(BaseModel):
@@ -193,6 +197,7 @@ class Channel:
         self.frame: tuple[int | None, bytes] | None = None
         self.dropped = 0
         self.frame_ready = anyio.Event()
+        self.watch_client = DEFAULT_CLIENT  # what the latest watched frame said it came from
 
     async def send(self, message: ServerMessage) -> None:
         async with self.send_lock:
@@ -260,6 +265,7 @@ class Channel:
                             ErrorMessage(id=message.id, status=409, detail="send watch on first")
                         )
                     else:
+                        self.watch_client = feeds.clean_client(message.client, DEFAULT_CLIENT)
                         self.offer_frame(message.id, data)
 
     async def receive_jpeg(self, id: int | None) -> bytes | None:
@@ -288,7 +294,9 @@ class Channel:
             (id, data), self.frame = self.frame, None
             dropped, self.dropped = self.dropped, 0
             started = time.perf_counter()
-            result = await self.work(id, actions.watch, self.viewer, data, self.chat)
+            result = await self.work(
+                id, actions.watch, self.viewer, data, self.chat, self.watch_client
+            )
             if result is None:
                 continue
             ms = round((time.perf_counter() - started) * 1000)
@@ -316,6 +324,8 @@ class Channel:
                 message.source,
                 message.stream_id,
                 message.seen_at,
+                True,
+                feeds.clean_client(message.client, DEFAULT_CLIENT),
             )
             if result is not None:
                 await self.send(MemoryResultMessage(id=message.id, result=result))
