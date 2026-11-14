@@ -41,7 +41,9 @@ class Hit:
 # e.g. VectorTable(768, {"source": "TEXT", "frame": "INTEGER"}).
 VECTOR_TABLES: dict[str, VectorTable] = {
     "note_embedding": VectorTable(768),
-    # One row per Memory (app/models.py), same id. kind is copied here so a search can filter on it.
+    # One row per Memory (app/models.py), same id. The width must be EMBED_MODEL's: if the model
+    # changes, change it here and the database rebuilds. kind is copied here so a search can
+    # filter on it.
     "memory_embedding": VectorTable(768, {"kind": "TEXT"}),
 }
 

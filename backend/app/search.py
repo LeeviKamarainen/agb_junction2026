@@ -20,7 +20,7 @@ from sqlalchemy import or_
 from sqlmodel import Session, col, select
 
 from app import vectors
-from app.llm import Embedder
+from app.llm import Embedder, UpstreamError
 from app.models import Memory, MemoryPublic
 
 TABLE = "memory_embedding"
@@ -190,6 +190,17 @@ def _keyword_ranking(
     return ranking[:candidates], matched
 
 
+def width_error(got: int) -> str | None:
+    """Why a vector of `got` numbers cannot go in the table, or None when it fits."""
+    width = vectors.VECTOR_TABLES[TABLE].dimensions
+    if got == width:
+        return None
+    return (
+        f"The embedding model gives {got} numbers per input, but {TABLE} holds {width}: "
+        f"set its width in app/vectors.py to match (the database rebuilds)"
+    )
+
+
 def vector_search(session: Session, args: VectorSearchArgs, embed: Embedder) -> list[SearchResult]:
     """Run one vector_search call: the best `args.limit` memories, best first."""
     candidates = args.limit * CANDIDATES_PER_LIST
@@ -206,6 +217,8 @@ def vector_search(session: Session, args: VectorSearchArgs, embed: Embedder) -> 
     best_distance: dict[int, float] = {}
     connection = session.connection()
     for vector in embed(queries) if queries else []:
+        if problem := width_error(len(vector)):
+            raise UpstreamError(problem)
         hits = [
             hit
             for where in filters

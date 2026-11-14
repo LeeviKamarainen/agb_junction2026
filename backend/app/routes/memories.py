@@ -10,7 +10,15 @@ from app import agent, media, vectors
 from app.db import SessionDep, get_engine
 from app.llm import Chat, Embedder, UpstreamError, get_chat, get_embedder
 from app.models import Memory, MemoryPublic, TextMemoryCreate
-from app.search import TABLE, SearchResult, VectorSearchArgs, add_memory, public, vector_search
+from app.search import (
+    TABLE,
+    SearchResult,
+    VectorSearchArgs,
+    add_memory,
+    public,
+    vector_search,
+    width_error,
+)
 
 router = APIRouter(tags=["memories"])
 
@@ -31,9 +39,8 @@ def _embed_one(embed: Embedder, input: str) -> list[float]:
         (vector,) = embed([input])
     except UpstreamError as error:
         raise HTTPException(502, str(error)) from error
-    width = vectors.VECTOR_TABLES[TABLE].dimensions
-    if len(vector) != width:
-        raise HTTPException(502, f"The embedding model gave {len(vector)} numbers, not {width}")
+    if problem := width_error(len(vector)):
+        raise HTTPException(502, problem)
     return vector
 
 
