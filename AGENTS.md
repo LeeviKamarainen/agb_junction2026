@@ -30,7 +30,7 @@ Vector search lives in the same file, through the sqlite-vec extension (`backend
 
 ## Frontend
 
-Read `frontend/AGENTS.md` before writing frontend code.
+Read `frontend/AGENTS.md` before writing frontend code. Every new page gets a link from the site: in the home page's navigation (`frontend/src/app/page.tsx`), and from related pages where it fits.
 
 ## Deploying
 
