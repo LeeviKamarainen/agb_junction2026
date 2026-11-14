@@ -1,6 +1,8 @@
 "use client";
 
-import { LoaderCircle } from "lucide-react";
+import Link from "next/link";
+
+import { LoaderCircle, Settings2 } from "lucide-react";
 import { type FormEvent, useId, useState } from "react";
 
 import { GuestButton } from "@/components/guest-button";
@@ -139,6 +141,14 @@ export function AuthForm({ admin = false }: { admin?: boolean }) {
               password.
             </p>
           </section>
+          <Link
+            href="/admin"
+            aria-label="Admin login"
+            title="Admin login"
+            className="self-end rounded-md p-2 text-muted-foreground/40 transition-colors hover:text-muted-foreground focus-visible:text-foreground focus-visible:outline-2 focus-visible:outline-ring"
+          >
+            <Settings2 size={14} aria-hidden="true" />
+          </Link>
         </>
       ) : null}
     </div>
