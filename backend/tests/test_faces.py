@@ -1,5 +1,5 @@
 """The face anonymiser (app/faces.py) on its own, and on the way in: every image the backend
-receives, over HTTP or the glasses' WebSocket, has its faces filled before it is stored, embedded
+receives, over HTTP or the glasses' WebSocket, has its faces blurred before it is stored, embedded
 or shown to the chat model."""
 
 import base64
@@ -35,11 +35,12 @@ def jpeg(image: Image.Image, **options) -> bytes:
     return buffer.getvalue()
 
 
-def face_filled(image: Image.Image) -> bool:
-    """Whether the middle of the portrait's face is one flat colour, give or take JPEG noise."""
+def face_blurred(image: Image.Image) -> bool:
+    """Whether the middle of the portrait's face has lost its detail: its pixels vary less than
+    half as much as in the photo (a standard deviation of 37; blurred, 8)."""
     x, y, w, h = FACE
     middle = image.convert("L").crop((x + w // 4, y + h // 4, x + 3 * w // 4, y + 3 * h // 4))
-    return float(np.asarray(middle, float).std()) < 3
+    return float(np.asarray(middle, float).std()) < 15
 
 
 def inside(face: faces.Face, box: tuple) -> bool:
@@ -48,13 +49,22 @@ def inside(face: faces.Face, box: tuple) -> bool:
 
 
 def test_the_portrait_face_is_not_flat_to_begin_with():
-    assert not face_filled(picture(PORTRAIT))  # else the checks below would prove nothing
+    assert not face_blurred(picture(PORTRAIT))  # else the checks below would prove nothing
 
 
 def test_finds_the_face_in_a_portrait():
     (face,) = faces.detect(picture(PORTRAIT))
 
     assert inside(face, FACE)
+
+
+def test_a_face_taller_than_a_third_of_the_image_is_not_filled():
+    """The price of the cap that keeps big false fills off scenes: a face this close is left."""
+    x, y, w, h = FACE
+    close_up = picture(PORTRAIT).crop((x - w // 4, y - h // 4, x + w + w // 4, y + h + h // 4))
+
+    assert faces.detect(close_up) == []
+    assert len(faces.detect(close_up, max_face=float("inf"))) == 1  # found, left for its size
 
 
 def test_finds_small_faces_in_a_glasses_frame():
@@ -76,22 +86,22 @@ def test_finds_small_faces_in_a_glasses_frame():
     assert all(any(inside(face, box) for face in found) for box in placed)
 
 
-def test_cover_fills_the_enlarged_face_and_nothing_else():
+def test_cover_blurs_the_enlarged_face_and_nothing_else():
     rows, columns = np.indices((200, 200))
     board = ((rows // 4 + columns // 4) % 2 * 255).astype(np.uint8)  # 4 px black and white squares
     image = Image.fromarray(np.stack([board] * 3, axis=-1))
 
-    covered = np.asarray(faces.cover(image, [faces.Face(60, 60, 80, 80, 0.9)]))
+    covered = np.asarray(faces.cover(image, [faces.Face(60, 60, 80, 80, 0.9)]), float)
 
-    assert (covered[70:130, 70:130] == faces.FILL).all()  # the face
-    # below the face's box, inside the enlarged one
-    assert (covered[143:150, 98:102] == faces.FILL).all()
+    face = covered[70:130, 70:130]
+    assert face.std() < 3 and 120 < face.mean() < 135  # the squares blurred into one grey
+    assert covered[143:150, 98:102].std() < 3  # below the face's box, inside the enlarged one
     untouched = np.ones((200, 200), bool)
     untouched[47:154, 47:154] = False  # the enlarged box: 1.3 times 80 px about the middle
     assert (covered[untouched] == np.asarray(image)[untouched]).all()
 
 
-def test_anonymise_fills_the_face_turns_the_image_upright_and_drops_metadata():
+def test_anonymise_blurs_the_face_turns_the_image_upright_and_drops_metadata():
     exif = Image.Exif()
     exif[0x0112] = 6  # Orientation: turn it a quarter clockwise to view it
     exif[0x010F] = "Meta"  # Make
@@ -101,7 +111,7 @@ def test_anonymise_fills_the_face_turns_the_image_upright_and_drops_metadata():
     result = Image.open(io.BytesIO(faces.anonymise(sideways)))
 
     assert result.format == "JPEG"
-    assert face_filled(result)  # where the face is when the portrait is upright
+    assert face_blurred(result)  # where the face is when the portrait is upright
     assert not result.getexif()
     assert "comment" not in result.info
 
@@ -170,7 +180,7 @@ class Models:
     def all_filled(self) -> bool:
         """Whether the models were given images, and every one had its face filled."""
         images = self.embedded + self.shown
-        return bool(images) and all(map(face_filled, images))
+        return bool(images) and all(map(face_blurred, images))
 
 
 @pytest.fixture
@@ -197,7 +207,7 @@ def stored_image(client, memory_id: int) -> Image.Image:
     return picture(client.get(f"/api/memories/{memory_id}/image").content)
 
 
-def test_a_frame_is_stored_embedded_and_shown_with_its_face_filled(client, models):
+def test_a_frame_is_stored_embedded_and_shown_with_its_face_blurred(client, models):
     """The chat model sees a frame when a trigger fires on it, so the portrait is streamed until
     the trigger's level is measured (as in test_frames.py), then brought into view."""
     instruction = "Say who is there."  # the goal: what the wearer asked for
@@ -211,22 +221,22 @@ def test_a_frame_is_stored_embedded_and_shown_with_its_face_filled(client, model
     fired = send_frame(client, "stream")
 
     assert fired["message"] is not None and fired["stored"]
-    assert face_filled(stored_image(client, fired["memory_id"]))
+    assert face_blurred(stored_image(client, fired["memory_id"]))
     assert models.shown and models.all_filled()
 
 
-def test_a_frame_over_the_socket_is_stored_and_embedded_with_its_face_filled(client, models):
+def test_a_frame_over_the_socket_is_stored_and_embedded_with_its_face_blurred(client, models):
     with client.websocket_connect("/api/glasses/ws") as ws:
         ws.send_json({"type": "memory_frame", "id": 1, "source": "single"})
         ws.send_bytes(PORTRAIT)
         result = ws.receive_json()
 
     assert result["type"] == "memory_result" and result["result"]["stored"], result
-    assert face_filled(stored_image(client, result["result"]["memory_id"]))
+    assert face_blurred(stored_image(client, result["result"]["memory_id"]))
     assert models.all_filled()
 
 
-def test_a_watched_frame_is_shown_with_its_face_filled(client, models):
+def test_a_watched_frame_is_shown_with_its_face_blurred(client, models):
     client.post("/api/glasses/reminders", json={"text": "warn me about the stool"})
     models.answer = "1"  # the chat model sees item 1, the stool
 
@@ -236,7 +246,7 @@ def test_a_watched_frame_is_shown_with_its_face_filled(client, models):
     assert models.all_filled()
 
 
-def test_a_watched_frame_over_the_socket_is_shown_with_its_face_filled(client, models):
+def test_a_watched_frame_over_the_socket_is_shown_with_its_face_blurred(client, models):
     client.post("/api/glasses/reminders", json={"text": "warn me about the stool"})
     models.answer = "1"
     with client.websocket_connect("/api/glasses/ws") as ws:
@@ -249,11 +259,11 @@ def test_a_watched_frame_over_the_socket_is_shown_with_its_face_filled(client, m
     assert models.all_filled()
 
 
-def test_an_uploaded_image_memory_has_its_face_filled(client, models):
+def test_an_uploaded_image_memory_has_its_face_blurred(client, models):
     reply = client.post("/api/memories/image", files={"file": ("p.jpg", PORTRAIT, "image/jpeg")})
 
     assert reply.status_code == 201
-    assert face_filled(stored_image(client, reply.json()["id"]))
+    assert face_blurred(stored_image(client, reply.json()["id"]))
     assert models.all_filled()
 
 
@@ -276,14 +286,53 @@ def test_a_watched_frame_that_is_not_an_image_is_refused(client, models, how):
     assert not models.shown
 
 
-def test_uploaded_demo_images_have_their_faces_filled(client):
+def test_uploaded_demo_images_have_their_faces_blurred(client):
     clip = client.post("/api/demo/clips", json={"title": "Portrait"}).json()
     uploaded = client.post(
         f"/api/demo/clips/{clip['id']}/media",
         files={"files": ("portrait.jpg", PORTRAIT, "image/jpeg")},
     )
     assert uploaded.status_code == 200, uploaded.text
-    assert face_filled(picture(client.get(uploaded.json()["assets"][0]["url"]).content))
+    assert face_blurred(picture(client.get(uploaded.json()["assets"][0]["url"]).content))
+
+
+def test_demo_video_frames_are_stored_with_their_faces_blurred(client, models, db, tmp_path):
+    """Demo videos are kept as uploaded, so their frames are blurred when stored as memories."""
+    import cv2
+
+    from app import demo
+
+    still = cv2.imdecode(np.frombuffer(PORTRAIT, np.uint8), cv2.IMREAD_COLOR)
+    path = tmp_path / "portrait.mp4"
+    height, width = still.shape[:2]
+    writer = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"mp4v"), 2, (width, height))
+    for _ in range(2):
+        writer.write(still)
+    writer.release()
+    clip = client.post("/api/demo/clips", json={"title": "Portrait", "kind": "video"}).json()
+    files = {"files": ("portrait.mp4", path.read_bytes(), "video/mp4")}
+    assert client.post(f"/api/demo/clips/{clip['id']}/media", files=files).status_code == 200
+    client.put(f"/api/demo/clips/{clip['id']}", json={**clip, "published": True})
+
+    async def work(session):
+        return await demo.sync(session, models.embed)
+
+    assert db(work) == 1
+    stored = [m for m in client.get("/api/memories").json() if m["collection"] == "demo"]
+    assert stored and all(face_blurred(stored_image(client, m["id"])) for m in stored)
+    assert models.all_filled()
+
+
+def test_the_admins_stream_wall_shows_frames_with_their_faces_blurred(client, models):
+    """GET /api/admin/streams/{id}/frame serves what clients send, so it must be the blurred
+    frame."""
+    send_frame(client, "stream")
+    (feed,) = [f for f in client.get("/api/admin/streams").json() if f["kind"] == "stream"]
+
+    shown = client.get(f"/api/admin/streams/{feed['id']}/frame")
+
+    assert shown.status_code == 200
+    assert face_blurred(picture(shown.content))
 
 
 def test_every_upload_route_is_one_of_those_tested_here():

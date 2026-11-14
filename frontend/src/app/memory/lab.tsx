@@ -1,6 +1,6 @@
 "use client";
 
-import { Glasses, MessageSquareText, Video } from "lucide-react";
+import { MessageSquareText, Video } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { api } from "@/lib/api/browser";
@@ -8,18 +8,18 @@ import { api } from "@/lib/api/browser";
 import { GlassesHarness } from "../glasses/harness";
 import { AskChat } from "./ask-chat";
 import { useCollections } from "./collections";
-import { type GlassesReply, GlassesStream } from "./glasses-stream";
+import type { GlassesReply } from "../glasses/types";
+import Link from "next/link";
 import { MemoryLibrary } from "./memory-library";
 import { MemoryMap } from "./memory-map";
 import { type Match, TriggerEditor } from "./trigger-editor";
 import { errorText } from "./types";
 
-type Tab = "ask" | "glasses" | "stream";
+type Tab = "ask" | "stream";
 
-const tabs: { id: Tab; label: string; Icon: typeof Glasses }[] = [
+const tabs: { id: Tab; label: string; Icon: typeof Video }[] = [
   { id: "ask", label: "Ask", Icon: MessageSquareText },
-  { id: "glasses", label: "Glasses", Icon: Glasses },
-  { id: "stream", label: "Stream", Icon: Video },
+  { id: "stream", label: "Memory", Icon: Video },
 ];
 
 // What the chat under the stream suggests: déjà vu, a goal for the triggers, a memory question.
@@ -43,7 +43,7 @@ const REFRESH_EVERY_MS = 5_000; // while streaming, reload the library and map a
  * Below, the map of every stored vector, ringing what the latest question found.
  */
 export function MemoryLab() {
-  const [tab, setTab] = useState<Tab>("ask");
+  const [tab, setTab] = useState<Tab>("stream");
   const [refreshKey, setRefreshKey] = useState(0); // the Stream tab stored a frame
   const [version, setVersion] = useState(0); // memories changed here or on the glasses
   const [found, setFound] = useState<number[]>([]);
@@ -88,7 +88,7 @@ export function MemoryLab() {
         <div className="flex min-w-0 flex-col gap-3">
           <div
             role="tablist"
-            aria-label="Ask, glasses or stream"
+            aria-label="Ask or Memory"
             className="inline-flex w-fit gap-1 rounded-lg border border-border bg-card p-1"
           >
             {tabs.map(({ id, label, Icon }) => (
@@ -125,9 +125,18 @@ export function MemoryLab() {
             hidden={tab !== "stream"}
             className={tab === "stream" ? "flex flex-col gap-4" : "hidden"}
           >
-            <GlassesStream
+            <Link href="/glasses" className="text-sm text-primary underline">
+              Open fullscreen glasses emulator ↗
+            </Link>
+            <p className="text-sm text-muted-foreground">
+              Set up your memories and triggers here. The fullscreen emulator
+              uses the same camera, microphone and backend pipeline.
+            </p>
+            <GlassesHarness
+              embedded
+              active={tab === "stream"}
               recalled={recalled}
-              onReply={(reply) => {
+              onFrame={(reply) => {
                 setMatches(
                   new Map(
                     reply.matches?.map((m) => [
@@ -166,14 +175,6 @@ export function MemoryLab() {
               firedCount={fired}
               visible={tab === "stream"}
             />
-          </div>
-          <div
-            role="tabpanel"
-            id="lab-panel-glasses"
-            aria-labelledby="lab-tab-glasses"
-            hidden={tab !== "glasses"}
-          >
-            <GlassesHarness embedded active={tab === "glasses"} />
           </div>
         </div>
       </main>

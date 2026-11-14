@@ -185,9 +185,12 @@ async def receive(
     stream_id: str = "",
     seen_at: datetime | None = None,
     owner_id: int = 0,
+    store: bool = True,
 ) -> FrameReply:
     """Embed one frame of `owner_id`'s, store it when it is new enough, and fire at most one
     trigger of their enabled goals.
+
+    With `store` False the frame is only checked against the triggers, never stored.
 
     Raises ValueError for data that is not an image and UpstreamError when embedding fails.
     """
@@ -203,7 +206,12 @@ async def receive(
         server_now = datetime.now(UTC)
         reply = FrameReply(stored=False)
 
-        if (why_not := _should_store(source, (owner_id, stream_id), vector, now)) is None:
+        why_not = (
+            _should_store(source, (owner_id, stream_id), vector, now)
+            if store
+            else "not stored: only checked against the triggers"
+        )
+        if why_not is None:
             memory = await add_memory(
                 session, "image", vector, moment, "", name, collection=COLLECTION, owner_id=owner_id
             )

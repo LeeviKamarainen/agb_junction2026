@@ -77,7 +77,7 @@ def client(monkeypatch, tmp_path, gemma):
         embed, "encoder", lambda: pytest.fail("the test loaded the embedding model")
     )
     # The frames here are not pictures (see jpeg), so filling their faces is faked too;
-    # test_faces_are_filled_before_a_frame_is_kept checks that the real one is used.
+    # test_faces_are_blurred_before_a_frame_is_kept checks that the real one is used.
     monkeypatch.setattr(faces, "anonymise", lambda still: still)
     with TestClient(api.app) as client:
         yield client
@@ -93,7 +93,7 @@ def post(client, n=4, **form):
     return client.post("/batches", files=files, data=form, headers=AUTH)
 
 
-def test_faces_are_filled_before_a_frame_is_kept(client, monkeypatch):
+def test_faces_are_blurred_before_a_frame_is_kept(client, monkeypatch):
     monkeypatch.setattr(faces, "anonymise", lambda still: still + b" filled")
     batch = post(client, n=2).json()["batch"]
 
@@ -382,7 +382,7 @@ def test_an_image_input_is_embedded_as_an_image(client, monkeypatch):
     still = "data:image/jpeg;base64," + base64.b64encode(bytes([7, 8, 9])).decode()
     data = embedded("keys", still).json()["data"]
     assert data[0]["embedding"] == fake_text("keys").tolist()
-    assert data[1]["embedding"] == [7.0, 8.0, 9.0, 10.0]  # its faces filled before it is embedded
+    assert data[1]["embedding"] == [7.0, 8.0, 9.0, 10.0]  # its faces blurred before it is embedded
     assert embedded("data:image/jpeg;base64,not base64!").status_code == 400
 
 
