@@ -32,6 +32,7 @@ import {
 
 import Link from "next/link";
 
+import type { components } from "@/lib/api/schema";
 import { UserMenu } from "@/components/user-menu";
 import { api } from "@/lib/api/browser";
 
@@ -101,7 +102,10 @@ async function liveFrame(video: HTMLVideoElement): Promise<boolean> {
       if (callback !== undefined) video.cancelVideoFrameCallback(callback);
       resolve(false);
     }, 3000);
-    const painted = () => { clearTimeout(timeout); resolve(true); };
+    const painted = () => {
+      clearTimeout(timeout);
+      resolve(true);
+    };
     if ("requestVideoFrameCallback" in video)
       callback = video.requestVideoFrameCallback(painted);
     else setTimeout(painted, 100);
@@ -130,6 +134,8 @@ const MAX_LOG = 600;
  * home screen and reminders over its HTTP routes.
  */
 type HarnessProps = {
+  onFrame?: (reply: components["schemas"]["FrameReply"]) => void;
+  recalled?: GlassesReply | null;
   /** Inside another page (the Memory lab): no page header, one column. */
   embedded?: boolean;
   /** False while hidden behind another tab: Space no longer starts the microphone. */
@@ -139,12 +145,18 @@ type HarnessProps = {
 export function GlassesHarness({
   embedded = false,
   active = true,
+  onFrame,
+  recalled,
 }: HarnessProps = {}) {
   const rootRef = useRef<HTMLDivElement>(null);
   const controlsRef = useRef<HTMLElement>(null);
   const [fullscreen, setFullscreen] = useState(false);
   const [fullscreenError, setFullscreenError] = useState<string | null>(null);
-  const landscape = useSyncExternalStore(subscribeLandscape, isLandscapePhone, () => false);
+  const landscape = useSyncExternalStore(
+    subscribeLandscape,
+    isLandscapePhone,
+    () => false,
+  );
   const theater = !embedded && (landscape || fullscreen);
   useEffect(() => {
     if (theater) {
@@ -153,7 +165,8 @@ export function GlassesHarness({
     }
   }, [theater]);
   useEffect(() => {
-    const changed = () => setFullscreen(document.fullscreenElement === rootRef.current);
+    const changed = () =>
+      setFullscreen(document.fullscreenElement === rootRef.current);
     document.addEventListener("fullscreenchange", changed);
     return () => document.removeEventListener("fullscreenchange", changed);
   }, []);
@@ -161,14 +174,20 @@ export function GlassesHarness({
   async function toggleFullscreen() {
     setFullscreenError(null);
     try {
-      if (document.fullscreenElement === rootRef.current) await document.exitFullscreen();
+      if (document.fullscreenElement === rootRef.current)
+        await document.exitFullscreen();
       else if (rootRef.current?.requestFullscreen) {
         await rootRef.current.requestFullscreen();
         rootRef.current.scrollTop = 0;
         rootRef.current.scrollIntoView({ block: "start" });
-      } else setFullscreenError("Fullscreen is unavailable here. Rotate your phone for the edge-to-edge view.");
+      } else
+        setFullscreenError(
+          "Fullscreen is unavailable here. Rotate your phone for the edge-to-edge view.",
+        );
     } catch {
-      setFullscreenError("Could not enter fullscreen. Rotate your phone for the edge-to-edge view.");
+      setFullscreenError(
+        "Could not enter fullscreen. Rotate your phone for the edge-to-edge view.",
+      );
     }
   }
 
@@ -186,11 +205,17 @@ export function GlassesHarness({
   const [typed, setTyped] = useState("");
   const [speak, setSpeak] = useState(true);
   const [seeThrough, setSeeThrough] = useState(!embedded);
-  const [cameraFacing, setCameraFacing] = useState<"environment" | "user">("environment");
+  const [cameraFacing, setCameraFacing] = useState<"environment" | "user">(
+    "environment",
+  );
   const [cameraStarting, setCameraStarting] = useState(false);
   const [reminders, setReminders] = useState<Reminder[]>([]);
   const [newReminder, setNewReminder] = useState("");
   const [reminderError, setReminderError] = useState<string | null>(null);
+  const [streaming, setStreaming] = useState(false);
+  const [streamNote, setStreamNote] = useState("");
+  const memoryBusy = useRef(false);
+  const memoryStreamId = useRef("");
   const [watching, setWatching] = useState(false);
   const [lastWatch, setLastWatch] = useState<string | null>(null);
   const [showWatchLog, setShowWatchLog] = useState(true);
@@ -259,8 +284,8 @@ export function GlassesHarness({
       json: JSON.stringify(reply, null, 2),
     });
     if (reply.speech && speak) say(reply.speech);
-    questionRef.current = reply.client_action === "listen_question";
-    if (questionRef.current) startListening("question");
+    // A trigger can arrive while a question is recording; it must not cancel that question.
+    if (reply.client_action === "listen_question") startListening("question");
   }
 
   function fail(request: string, error: string, watch = false) {
@@ -429,7 +454,9 @@ export function GlassesHarness({
       await Promise.resolve(); // publish the shared request before any synchronous API error
       try {
         if (!navigator.mediaDevices?.getUserMedia) {
-          throw new Error("Open this site over HTTPS to use your phone camera.");
+          throw new Error(
+            "Open this site over HTTPS to use your phone camera.",
+          );
         }
         const stream = await navigator.mediaDevices.getUserMedia({
           video: {
@@ -472,10 +499,12 @@ export function GlassesHarness({
     setCamera(null);
     setSeeThrough(false);
     setWatching(false);
+    setStreaming(false);
   }
 
   async function switchCamera() {
     const next = cameraFacing === "environment" ? "user" : "environment";
+    const resumeStreaming = streaming;
     const resumeWatching = watching;
     const resumeSeeThrough = seeThrough;
     stopCamera();
@@ -484,6 +513,8 @@ export function GlassesHarness({
     if (stream && streamRef.current === stream) {
       setSeeThrough(resumeSeeThrough);
       setWatching(resumeWatching);
+      if (resumeStreaming) memoryStreamId.current = crypto.randomUUID();
+      setStreaming(resumeStreaming);
     }
   }
 
@@ -497,23 +528,31 @@ export function GlassesHarness({
     if (!stream || !video)
       return { error: "No camera: allow camera access, then try again." };
     if (video.srcObject !== stream) video.srcObject = stream;
-    if (!(await liveFrame(video))) return { error: "Camera did not produce a frame. Try turning it off and on." };
+    if (!(await liveFrame(video)))
+      return {
+        error: "Camera did not produce a frame. Try turning it off and on.",
+      };
     // A webcam that just turned on is still adjusting its exposure; its first frames are dark.
     if (justStarted)
       await new Promise((resolve) => setTimeout(resolve, CAMERA_WARMUP_MS));
     if (streamRef.current !== stream || !cameraMounted.current)
       return { error: "Camera was stopped before the photo was ready." };
     const canvas = document.createElement("canvas");
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
-    canvas.getContext("2d")?.drawImage(video, 0, 0);
+    const scale = Math.min(
+      1,
+      896 / Math.max(video.videoWidth, video.videoHeight),
+    );
+    canvas.width = Math.round(video.videoWidth * scale);
+    canvas.height = Math.round(video.videoHeight * scale);
+    canvas
+      .getContext("2d")
+      ?.drawImage(video, 0, 0, canvas.width, canvas.height);
     const blob = await new Promise<Blob | null>((resolve) =>
       canvas.toBlob(resolve, "image/jpeg", 0.9),
     );
     if (!blob) return { error: "Could not encode the frame as JPEG." };
     return { blob, width: canvas.width, height: canvas.height };
   }
-
 
   async function loadReminders() {
     const request = "GET /api/glasses/reminders";
@@ -598,6 +637,94 @@ export function GlassesHarness({
     else fail(request, `HTTP ${response.status}`);
   }
 
+  async function toggleMemoryStream() {
+    if (streaming) {
+      setWatching(false);
+      setStreaming(false);
+      return;
+    }
+    if (!(await startCamera())) return;
+    memoryStreamId.current = crypto.randomUUID();
+    setStreaming(true);
+    setWatching(true);
+  }
+
+  // Same memory/trigger pipeline as the phone app. Only one upload in flight; skip overdue frames.
+  async function memoryTick(stopped: () => boolean) {
+    if (memoryBusy.current) return;
+    memoryBusy.current = true;
+    try {
+      const frame = await grabFrame();
+      if (stopped()) return;
+      if ("error" in frame) {
+        setStreamNote(frame.error);
+        setStreaming(false);
+        return;
+      }
+      const form = new FormData();
+      form.append("frame", frame.blob, "frame.jpg");
+      form.append("source", "stream");
+      form.append("stream_id", memoryStreamId.current);
+      form.append("seen_at", new Date().toISOString());
+      const { data, error } = await api.POST("/api/glasses/frames", {
+        body: form as never,
+        bodySerializer: () => form,
+      });
+      if (stopped()) return;
+      if (!data) {
+        setStreamNote(
+          typeof error?.detail === "string"
+            ? error.detail
+            : "Stream upload failed. Check the backend connection.",
+        );
+        return;
+      }
+      setStreamNote(
+        data.note ?? (data.stored ? "Memory stored" : "Frame checked"),
+      );
+      onFrame?.(data);
+      if (data.message)
+        apply("Stream", {
+          intent: "trigger",
+          speech: data.message.text,
+          dismiss_after_s: 8,
+          screen: {
+            type: "flexbox",
+            direction: "column",
+            justify: "end",
+            align: "stretch",
+            padding: 32,
+            gap: 16,
+            children: [
+              { type: "text", value: data.message.text, style: "BODY" },
+            ],
+          },
+        });
+    } catch {
+      if (!stopped()) setStreamNote("Could not reach the backend. Retrying…");
+    } finally {
+      memoryBusy.current = false;
+    }
+  }
+  const onMemoryTick = useEffectEvent(memoryTick);
+  useEffect(() => {
+    if (!streaming || !active) return;
+    let stopped = false;
+    const timer = setInterval(() => void onMemoryTick(() => stopped), 500);
+    return () => {
+      stopped = true;
+      clearInterval(timer);
+    };
+  }, [streaming, active]);
+  const showRecalled = useEffectEvent((reply: GlassesReply) =>
+    apply("Memory question", reply),
+  );
+  useEffect(() => {
+    // Synchronize the emulator with a reply received by the Memory panel's chat.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    if (recalled) showRecalled(recalled);
+  }, [recalled]);
+
   /** One watched frame: the backend checks the newest for every reminder's object. */
   async function watchOnce(stopped: () => boolean) {
     const frame = await grabFrame();
@@ -634,6 +761,7 @@ export function GlassesHarness({
         setMicError("No speech recognition here: use Chrome, or type below.");
       return;
     }
+    if (mode === "question") questionRef.current = true;
     const recognition = new Recognition();
     recognition.lang = "en-US";
     recognition.continuous = mode === "hold";
@@ -671,6 +799,7 @@ export function GlassesHarness({
         // Typed instead, or no mic: the Listening screen waits for a typed question.
         if (!questionRef.current || blocked) return;
         questionRef.current = false;
+        if (!text) return;
         void command({ question: text }, `asked “${text}”`);
       } else if (text) void command({ question: text }, `said “${text}”`);
     };
@@ -678,8 +807,26 @@ export function GlassesHarness({
     setMicError(null);
     setHeard("");
     setListening(true);
-    recognition.start();
+    try {
+      recognition.start();
+    } catch {
+      recognitionRef.current = null;
+      questionRef.current = false;
+      setListening(false);
+      setMicError(
+        "Could not start the microphone. Try again or type your question.",
+      );
+    }
   }
+
+  const pauseMicrophone = useEffectEvent(() => {
+    questionRef.current = false;
+    finalRef.current = "";
+    recognitionRef.current?.abort();
+  });
+  useEffect(() => {
+    if (!active) pauseMicrophone();
+  }, [active]);
 
   function stopListening() {
     // Stopping (not aborting) lets the last words settle; onend sends them.
@@ -740,7 +887,7 @@ export function GlassesHarness({
     send({ type: "watch", on }, on ? "start watching" : "stop watching");
   });
   useEffect(() => {
-    if (!watching) return;
+    if (!watching || !active) return;
     onWatching(true);
     let stopped = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -756,7 +903,7 @@ export function GlassesHarness({
       clearTimeout(timer);
       onWatching(false);
     };
-  }, [watching]);
+  }, [watching, active]);
 
   // Both <video>s show the same webcam stream.
   useEffect(() => {
@@ -819,7 +966,10 @@ export function GlassesHarness({
   }, []);
 
   return (
-    <div ref={rootRef} className={`gh-root ${embedded ? "gh-embedded" : "gh-page"}${theater ? " gh-theater" : ""}`}>
+    <div
+      ref={rootRef}
+      className={`gh-root ${embedded ? "gh-embedded" : "gh-page"}${theater ? " gh-theater" : ""}`}
+    >
       {embedded ? (
         <StatusLine link={link} />
       ) : (
@@ -866,24 +1016,75 @@ export function GlassesHarness({
           {!embedded ? (
             <div className="gh-pov-actions">
               {!camera ? (
-                <button type="button" className="gh-chip" onClick={() => cameraStarting ? stopCamera() : void startCamera()}>
-                  <Video size={16} aria-hidden="true" /> {cameraStarting ? "Cancel camera" : "Start camera"}
+                <button
+                  type="button"
+                  className="gh-chip"
+                  onClick={() =>
+                    cameraStarting ? stopCamera() : void startCamera()
+                  }
+                >
+                  <Video size={16} aria-hidden="true" />{" "}
+                  {cameraStarting ? "Cancel camera" : "Start camera"}
                 </button>
               ) : null}
-              <button type="button" className="gh-chip" onClick={() => void toggleFullscreen()}>
-                {fullscreen ? <Minimize size={16} aria-hidden="true" /> : <Maximize size={16} aria-hidden="true" />}
+              <button
+                type="button"
+                className="gh-chip"
+                aria-pressed={streaming}
+                onClick={() => void toggleMemoryStream()}
+              >
+                {streaming ? "Stop stream" : "Start memory stream"}
+              </button>
+              <button
+                type="button"
+                className="gh-chip"
+                aria-pressed={listening}
+                onClick={() =>
+                  listening ? stopListening() : startListening("question")
+                }
+              >
+                <Mic size={16} aria-hidden="true" />
+                {listening ? "Send question" : "Ask with microphone"}
+              </button>
+              <button
+                type="button"
+                className="gh-chip"
+                onClick={() => void toggleFullscreen()}
+              >
+                {fullscreen ? (
+                  <Minimize size={16} aria-hidden="true" />
+                ) : (
+                  <Maximize size={16} aria-hidden="true" />
+                )}
                 {fullscreen ? "Exit fullscreen" : "Fullscreen"}
               </button>
-              <button type="button" className="gh-chip" onClick={() => controlsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })}>
+              <button
+                type="button"
+                className="gh-chip"
+                onClick={() =>
+                  controlsRef.current?.scrollIntoView({
+                    behavior: "smooth",
+                    block: "start",
+                  })
+                }
+              >
                 <ChevronDown size={16} aria-hidden="true" /> Controls
               </button>
-              {fullscreenError ? <p role="status" className="gh-error">{fullscreenError}</p> : null}
+              {fullscreenError ? (
+                <p role="status" className="gh-error">
+                  {fullscreenError}
+                </p>
+              ) : null}
             </div>
           ) : null}
           <div className="gh-stage-bar">
             <span>
-              <span className="gh-keyboard-hint">600 × 600 · T T = double tap (ask) · hold Space = talk</span>
-              <span className="gh-phone-hint">Turn your phone sideways · rear camera preferred</span>
+              <span className="gh-keyboard-hint">
+                600 × 600 · T T = double tap (ask) · hold Space = talk
+              </span>
+              <span className="gh-phone-hint">
+                Turn your phone sideways · rear camera preferred
+              </span>
             </span>
             <span className="gh-stage-actions">
               <label className="gh-toggle">
@@ -912,7 +1113,8 @@ export function GlassesHarness({
               <h2 id={ids.camera}>Camera</h2>
               {camera || cameraStarting ? (
                 <button type="button" className="gh-chip" onClick={stopCamera}>
-                  <VideoOff size={14} aria-hidden="true" /> {cameraStarting ? "Cancel camera" : "Turn off"}
+                  <VideoOff size={14} aria-hidden="true" />{" "}
+                  {cameraStarting ? "Cancel camera" : "Turn off"}
                 </button>
               ) : (
                 <button
@@ -921,12 +1123,18 @@ export function GlassesHarness({
                   disabled={cameraStarting}
                   onClick={() => void startCamera()}
                 >
-                  <Video size={14} aria-hidden="true" /> {cameraStarting ? "Opening camera…" : "Start camera"}
+                  <Video size={14} aria-hidden="true" />{" "}
+                  {cameraStarting ? "Opening camera…" : "Start camera"}
                 </button>
               )}
             </div>
             {camera ? (
-              <button type="button" className="gh-chip" disabled={cameraStarting} onClick={() => void switchCamera()}>
+              <button
+                type="button"
+                className="gh-chip"
+                disabled={cameraStarting}
+                onClick={() => void switchCamera()}
+              >
                 <SwitchCamera size={16} aria-hidden="true" /> Switch camera
               </button>
             ) : null}
@@ -939,7 +1147,10 @@ export function GlassesHarness({
                 hidden={!camera}
               />
               {!camera ? (
-                <p>Start your phone camera to see its feed here and on the display. Rotate to landscape for the best view.</p>
+                <p>
+                  Start your phone camera to see its feed here and on the
+                  display. Rotate to landscape for the best view.
+                </p>
               ) : null}
             </div>
             {cameraError ? <p className="gh-error">{cameraError}</p> : null}
@@ -1023,64 +1234,88 @@ export function GlassesHarness({
             </form>
           </section>
 
-          <section className="gh-card" aria-labelledby={ids.reminders}>
-            <div className="gh-card-heading">
-              <h2 id={ids.reminders}>Reminders</h2>
-              <button
-                type="button"
-                className="gh-chip"
-                aria-pressed={watching}
-                onClick={() => setWatching((on) => !on)}
-              >
-                {watching ? (
-                  <EyeOff size={14} aria-hidden="true" />
-                ) : (
-                  <Eye size={14} aria-hidden="true" />
-                )}
-                {watching ? "Stop watching" : "Watch"}
-              </button>
-            </div>
-            <p className="gh-note">
-              Say or type “remind me not to trip over the stool”. While
-              watching, the camera sends a frame every second over the socket
-              and the backend pushes a warning when the thing is in view.
+          <section className="gh-card" aria-label="Memory streaming">
+            <button
+              type="button"
+              className="gh-chip"
+              aria-pressed={streaming}
+              onClick={() => void toggleMemoryStream()}
+            >
+              {streaming ? "Stop stream" : "Start memory stream (2 fps)"}
+            </button>
+            <p role="status" className="gh-note">
+              {streaming
+                ? "Streaming to memory and checking your triggers. "
+                : "Stream stopped. "}
+              {streamNote}
             </p>
-            {lastWatch ? (
-              <p className="gh-heard" aria-live="polite">
-                {lastWatch}
-              </p>
-            ) : null}
-            {reminders.length ? (
-              <ReminderList
-                reminders={reminders}
-                onPretend={pretendSeen}
-                onDelete={deleteReminder}
-              />
-            ) : (
-              <p className="gh-note">No reminders yet.</p>
-            )}
-            <form className="gh-typed" onSubmit={addReminder}>
-              <label htmlFor={ids.newReminder} className="gh-sr-only">
-                New reminder
-              </label>
-              <input
-                id={ids.newReminder}
-                value={newReminder}
-                onChange={(event) => setNewReminder(event.target.value)}
-                placeholder="Remind me not to trip over the stool"
-                maxLength={500}
-                autoComplete="off"
-              />
-              <button
-                type="submit"
-                className="gh-chip"
-                disabled={!newReminder.trim()}
-              >
-                <BellPlus size={14} aria-hidden="true" /> Add
-              </button>
-            </form>
-            {reminderError ? <p className="gh-error">{reminderError}</p> : null}
+            <Link href="/memory?tab=stream">
+              Configure memories and triggers
+            </Link>
           </section>
+
+          {embedded ? (
+            <section className="gh-card" aria-labelledby={ids.reminders}>
+              <div className="gh-card-heading">
+                <h2 id={ids.reminders}>Reminders</h2>
+                <button
+                  type="button"
+                  className="gh-chip"
+                  aria-pressed={watching}
+                  onClick={() => setWatching((on) => !on)}
+                >
+                  {watching ? (
+                    <EyeOff size={14} aria-hidden="true" />
+                  ) : (
+                    <Eye size={14} aria-hidden="true" />
+                  )}
+                  {watching ? "Stop watching" : "Watch"}
+                </button>
+              </div>
+              <p className="gh-note">
+                Say or type “remind me not to trip over the stool”. While
+                watching, the camera sends a frame every second over the socket
+                and the backend pushes a warning when the thing is in view.
+              </p>
+              {lastWatch ? (
+                <p className="gh-heard" aria-live="polite">
+                  {lastWatch}
+                </p>
+              ) : null}
+              {reminders.length ? (
+                <ReminderList
+                  reminders={reminders}
+                  onPretend={pretendSeen}
+                  onDelete={deleteReminder}
+                />
+              ) : (
+                <p className="gh-note">No reminders yet.</p>
+              )}
+              <form className="gh-typed" onSubmit={addReminder}>
+                <label htmlFor={ids.newReminder} className="gh-sr-only">
+                  New reminder
+                </label>
+                <input
+                  id={ids.newReminder}
+                  value={newReminder}
+                  onChange={(event) => setNewReminder(event.target.value)}
+                  placeholder="Remind me not to trip over the stool"
+                  maxLength={500}
+                  autoComplete="off"
+                />
+                <button
+                  type="submit"
+                  className="gh-chip"
+                  disabled={!newReminder.trim()}
+                >
+                  <BellPlus size={14} aria-hidden="true" /> Add
+                </button>
+              </form>
+              {reminderError ? (
+                <p className="gh-error">{reminderError}</p>
+              ) : null}
+            </section>
+          ) : null}
 
           <section className="gh-card gh-log-card" aria-labelledby={ids.log}>
             <div className="gh-card-heading">
