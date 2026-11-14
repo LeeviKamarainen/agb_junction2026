@@ -42,7 +42,7 @@ Minimal Android app that streams the camera from Meta glasses via the
 
 **Arm memory mode** opens a session with the glasses' inputs and display, without the camera. Frames then go to
 the Junction backend over one WebSocket (`<glasses.api>/api/glasses/ws`, see `GlassesChannel.kt`), which embeds each one into the
-vector database (the `glasses` collection) and checks it against the triggers set up in the Memory lab.
+vector database (the `glasses` collection) and checks the frames of a stream against the triggers set up in the Memory lab.
 
 - **Stream (2 fps):** the phone's **Start stream** button, a **double tap** on the Neural Band or the glasses
   touchpad, or a **double press** of the capture button starts or stops a 504x896, 2 fps video stream. Every

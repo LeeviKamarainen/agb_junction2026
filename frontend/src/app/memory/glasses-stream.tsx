@@ -39,7 +39,7 @@ const DOUBLE_TAP_MS = 450; // two taps closer than this are a double tap
 export function GlassesStream({
   onReply,
 }: {
-  /** Every reply, e.g. to show the trigger distances. */
+  /** Every reply, e.g. to show each trigger's score and level. */
   onReply: (reply: FrameReply) => void;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -224,8 +224,8 @@ export function GlassesStream({
           The webcam stands in for the glasses&rsquo; camera. Click the view
           once to send one photo, double click it to start or stop streaming{" "}
           {FPS} frames a second, as a Neural Band tap and double tap do. Every
-          frame is embedded into the glasses collection and checked against the
-          triggers.
+          frame is embedded into the glasses collection; the frames of a stream
+          are also checked against the triggers.
         </p>
       </div>
 

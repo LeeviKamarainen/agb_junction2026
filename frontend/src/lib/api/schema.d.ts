@@ -611,6 +611,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/glasses/triggers/generate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Generate Triggers
+         * @description Gemma writes the triggers for what the wearer wants watched ("tell me when my bus comes")
+         *     and they are saved, enabled. 503 without a chat model; 502 when it fails or its answer holds
+         *     no trigger.
+         */
+        post: operations["generate_triggers_api_glasses_triggers_generate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/glasses/triggers/{id}": {
         parameters: {
             query?: never;
@@ -1106,20 +1128,23 @@ export interface components {
             /** Instruction */
             instruction: string;
             /**
-             * Max Distance
-             * @default 0.75
+             * Sigmas
+             * @default 3
              */
-            max_distance: number;
-            /**
-             * Cooldown S
-             * @default 120
-             */
-            cooldown_s: number;
+            sigmas: number;
             /**
              * Enabled
              * @default true
              */
             enabled: boolean;
+        };
+        /**
+         * TriggerGoal
+         * @description What the wearer wants the glasses to watch out for, in their own words.
+         */
+        TriggerGoal: {
+            /** Goal */
+            goal: string;
         };
         /** TriggerMatch */
         TriggerMatch: {
@@ -1131,6 +1156,10 @@ export interface components {
             distance: number;
             /** Fired */
             fired: boolean;
+            /** Score */
+            score?: number | null;
+            /** Level */
+            level?: number | null;
         };
         /** TriggerPublic */
         TriggerPublic: {
@@ -1141,15 +1170,10 @@ export interface components {
             /** Instruction */
             instruction: string;
             /**
-             * Max Distance
-             * @default 0.75
+             * Sigmas
+             * @default 3
              */
-            max_distance: number;
-            /**
-             * Cooldown S
-             * @default 120
-             */
-            cooldown_s: number;
+            sigmas: number;
             /**
              * Enabled
              * @default true
@@ -1159,6 +1183,8 @@ export interface components {
             id: number;
             /** Last Fired At */
             last_fired_at: string | null;
+            /** Level */
+            level: number | null;
         };
         /** UserPublic */
         UserPublic: {
@@ -2158,6 +2184,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TriggerPublic"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    generate_triggers_api_glasses_triggers_generate_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TriggerGoal"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TriggerPublic"][];
                 };
             };
             /** @description Validation Error */
