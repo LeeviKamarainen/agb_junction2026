@@ -67,15 +67,14 @@ Watch `/demos` without logging in. Published videos and ordered image sequences 
 
 At `/admin`, add a draft, upload one MP4/WebM video (up to 200 MB) or a batch of images (up to 100, 15 MB each, 200 MB per upload), then publish. Adjust image dwell time, reorder images and move demos earlier or later. Video length is detected in the browser and can be adjusted. Published media is public; drafts are visible only to the admin. Publishing a demo also makes it searchable: the backend stores a video's frames at 2 fps (skipping near-duplicates) and each image of a sequence as demo memories that everyone can ask about, faces blurred, and replaces or removes them when the demo changes or is unpublished. That needs the embedding model (`EMBED_URL`) and takes a while for a long video.
 
-Media files live in `showcase-media/` beside the database. Schema or seed changes rebuild the disposable database and remove demo configurations; old files are not reassigned to new demos. The seed contains an unpublished starter draft, so upload and publish your media after a rebuild.
+Media files live in `showcase-media/` beside the database. Schema or seed changes rebuild the disposable database and remove demo configurations; old files are not reassigned to new demos. The database starts empty; upload your own memories and curated media after a rebuild.
 
 ### Memory lab (`/memory`)
 
 - **Library:** add memories by uploading images, taking a webcam picture, or writing a note; group them into collections. Browse stable thumbnails in pages of 24, search captions/collections, and tap a memory to inspect the full image.
 - **Ask tab:** ask Gemma a question and watch it search the memories step by step.
 - **Map:** every stored vector projected to 2D and 3D; the memories found by the last question are ringed.
-- **Glasses tab:** the glasses harness inside the lab: what the wearer sees and hears.
-- **Stream tab:** the webcam acts as the glasses (frames go to the backend as the Android app sends them), next to the editor for what the glasses watch out for: you say a goal, Gemma writes its triggers, and each shows its score on the latest frame against its level.
+- **Memory tab:** configure camera streaming, microphone questions, reminders and triggers in the shared glasses emulator. Say a goal and Gemma writes its triggers. Open the fullscreen emulator to use the same experience across the phone display.
 
 ### Glasses harness (`/glasses`)
 
@@ -139,3 +138,5 @@ and Enter to pinch.
 - `npm run typecheck`: TypeScript check
 - `npm run build`: production build into `dist/`
 - `npm run preview`: serve the production build
+
+The Memory tab in `/memory` configures the live experience: stream the camera at 2 fps, ask questions with the microphone, and manage goals and triggers. `/glasses` uses the same emulator in fullscreen, with Start memory stream and Ask with microphone controls over the view. Triggers configured in Memory belong to the logged-in account and run on its streamed frames. Camera and microphone access require HTTPS (or localhost); speech recognition depends on browser support.

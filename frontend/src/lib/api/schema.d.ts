@@ -246,24 +246,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/notes": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** List Notes */
-        get: operations["list_notes_api_notes_get"];
-        put?: never;
-        /** Create Note */
-        post: operations["create_note_api_notes_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/memories": {
         parameters: {
             query?: never;
@@ -1069,18 +1051,6 @@ export interface components {
             /** Embedding */
             embedding: string;
         };
-        /** NoteCreate */
-        NoteCreate: {
-            /** Text */
-            text: string;
-        };
-        /** NotePublic */
-        NotePublic: {
-            /** Text */
-            text: string;
-            /** Id */
-            id: number;
-        };
         /** ReminderCreate */
         ReminderCreate: {
             /** Text */
@@ -1831,59 +1801,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ShowcasePublic"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_notes_api_notes_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["NotePublic"][];
-                };
-            };
-        };
-    };
-    create_note_api_notes_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["NoteCreate"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["NotePublic"];
                 };
             };
             /** @description Validation Error */

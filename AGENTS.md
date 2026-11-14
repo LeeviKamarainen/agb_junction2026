@@ -92,3 +92,5 @@ Every image the backend receives has its faces blurred by `faces.anonymise` (`ba
 ## Agent skills
 
 Skills live in `.agents/skills/` (`.claude/skills` is a symlink to it; edit the real path): `add-feature`, `ship`, `review`, `submission`.
+
+The database starts empty: there is no built-in sample-day loader. The Memory tab and `/glasses` share `GlassesHarness`; streaming posts frames through `/api/glasses/frames` and microphone questions use the glasses WebSocket. Manage goals and triggers in the Memory tab.

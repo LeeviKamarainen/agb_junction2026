@@ -27,7 +27,7 @@ import {
   type GlassesReply,
   RECALL,
   Recalled,
-} from "../memory/glasses-stream";
+} from "./recalled";
 import { type Match, TriggerEditor } from "../memory/trigger-editor";
 import { errorText } from "../memory/types";
 import { HoldToTalk } from "./hold-to-talk";

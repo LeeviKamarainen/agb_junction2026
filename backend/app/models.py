@@ -2,28 +2,6 @@ from datetime import UTC, datetime
 
 from sqlmodel import Field, SQLModel
 
-# Example feature: delete Note (route, seed rows, page, tests too) once a real feature exists.
-
-
-class NoteBase(SQLModel):
-    text: str = Field(min_length=1, max_length=500)
-
-
-class Note(NoteBase, table=True):
-    id: int | None = Field(default=None, primary_key=True)
-
-
-class NoteCreate(NoteBase):
-    pass
-
-
-class NotePublic(NoteBase):
-    id: int
-
-
-# What the glasses remember. Each memory has one embedding in the memory_embedding vector table
-# (app/vectors.py) under the same id; add both with app.search.add_memory.
-
 
 class Memory(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
