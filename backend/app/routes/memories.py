@@ -160,7 +160,7 @@ async def add_image(
     collection: Annotated[str, Form(max_length=40)] = "manual",
     demo: Annotated[bool, Form()] = False,
 ):
-    """Store one image: fill every face in it, shrink it, embed it with the image model, keep an
+    """Store one image: blur every face in it, shrink it, embed it with the image model, keep an
     optional caption.
 
     collection groups it, e.g. "glasses" for stills from the glasses (default "manual"). It is
@@ -172,10 +172,10 @@ async def add_image(
     if len(data) > MAX_UPLOAD:
         raise HTTPException(413, "Images can be at most 25 MB")
     try:
-        # Filling faces, decoding and shrinking are CPU work: off the event loop. The fill comes
+        # Blurring faces, decoding and shrinking are CPU work: off the event loop. The blur comes
         # first, so nothing below sees a face.
-        filled = await anyio.to_thread.run_sync(faces.anonymise, data)
-        name = await anyio.to_thread.run_sync(media.save_image, filled)
+        blurred = await anyio.to_thread.run_sync(faces.anonymise, data)
+        name = await anyio.to_thread.run_sync(media.save_image, blurred)
     except ValueError as error:
         raise HTTPException(422, str(error)) from error
     try:

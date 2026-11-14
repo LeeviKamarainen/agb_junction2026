@@ -49,7 +49,7 @@ this project's API. **VM1** is the GPU server that runs the segmenter (SAM 3).
 
 ## Faces
 
-- **Faces are filled as frames arrive** (`faces.anonymise`, the same file as the backend's), in
+- **Faces are blurred as frames arrive** (`faces.anonymise`, the same file as the backend's), in
   `/batches`, in `embed.keyframes` and in the images `/v1/embeddings` embeds, before anything
   stores, embeds or summarises them. `/v1/chat/completions` passes images to Gemma as they came.
   Batches stored before that are kept as they were. Why, and the measurements:

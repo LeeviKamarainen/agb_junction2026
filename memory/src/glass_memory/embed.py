@@ -62,7 +62,7 @@ def embed_text(text, input_type="query"):
 
 
 def keyframes(video, out_dir, every_s=1.0, max_side=768):
-    """Save one upright still every `every_s` seconds, every face in it filled; return (seconds,
+    """Save one upright still every `every_s` seconds, every face in it blurred; return (seconds,
     file name) pairs."""
     out_dir.mkdir(parents=True, exist_ok=True)
     saved, next_t = [], 0.0
