@@ -50,6 +50,7 @@ const flexAlign = {
 
 type Props = {
   screen: FlexBoxNode | null;
+  immersive?: boolean;
   /** The microphone is recording: a blinking red light in the corner, over any screen. */
   listening?: boolean;
   onAction: (action: string) => void;
@@ -64,6 +65,7 @@ type Props = {
  */
 export function Display({
   screen,
+  immersive = false,
   listening = false,
   onAction,
   seeThrough,
@@ -104,6 +106,8 @@ export function Display({
   }
 
   return (
+    <div className={immersive ? `gh-pov ${seeThrough ? "gh-pov-live" : ""}` : "gh-display-host"}>
+      {immersive ? children : null}
     <div
       ref={frameRef}
       className="gh-display-frame"
@@ -113,7 +117,7 @@ export function Display({
         className={`gh-display ${seeThrough ? "gh-see-through" : ""}`}
         style={scale < 1 ? { transform: `scale(${scale})` } : undefined}
       >
-        {children}
+        {!immersive ? children : null}
         <div
           ref={ref}
           className="gh-display-content"
@@ -132,6 +136,7 @@ export function Display({
           </span>
         ) : null}
       </div>
+    </div>
     </div>
   );
 }

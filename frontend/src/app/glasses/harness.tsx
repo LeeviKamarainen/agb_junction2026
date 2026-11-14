@@ -7,6 +7,9 @@ import {
   Eye,
   EyeOff,
   Mic,
+  Maximize,
+  Minimize,
+  ChevronDown,
   Pointer,
   RotateCcw,
   SwitchCamera,
@@ -72,6 +75,14 @@ type Pending = {
 const CAPTURE_DELAY_MS = 400;
 const CAMERA_WARMUP_MS = 800;
 const subscribeToNothing = () => () => {};
+const landscapeQuery = "(orientation: landscape) and (max-height: 700px)";
+function subscribeLandscape(changed: () => void) {
+  const media = window.matchMedia(landscapeQuery);
+  media.addEventListener("change", changed);
+  return () => media.removeEventListener("change", changed);
+}
+const isLandscapePhone = () => window.matchMedia(landscapeQuery).matches;
+
 // How often the camera sends a frame while watching. The backend checks the newest and drops
 // any that arrive while it is busy, so a slow vision model never builds a queue.
 const WATCH_EVERY_MS = 1000;
@@ -135,6 +146,38 @@ export function GlassesHarness({
   active = true,
   onPhotoStored,
 }: HarnessProps = {}) {
+  const rootRef = useRef<HTMLDivElement>(null);
+  const controlsRef = useRef<HTMLElement>(null);
+  const [fullscreen, setFullscreen] = useState(false);
+  const [fullscreenError, setFullscreenError] = useState<string | null>(null);
+  const landscape = useSyncExternalStore(subscribeLandscape, isLandscapePhone, () => false);
+  const theater = !embedded && (landscape || fullscreen);
+  useEffect(() => {
+    if (theater) {
+      rootRef.current?.scrollIntoView({ block: "start" });
+      if (rootRef.current) rootRef.current.scrollTop = 0;
+    }
+  }, [theater]);
+  useEffect(() => {
+    const changed = () => setFullscreen(document.fullscreenElement === rootRef.current);
+    document.addEventListener("fullscreenchange", changed);
+    return () => document.removeEventListener("fullscreenchange", changed);
+  }, []);
+
+  async function toggleFullscreen() {
+    setFullscreenError(null);
+    try {
+      if (document.fullscreenElement === rootRef.current) await document.exitFullscreen();
+      else if (rootRef.current?.requestFullscreen) {
+        await rootRef.current.requestFullscreen();
+        rootRef.current.scrollTop = 0;
+        rootRef.current.scrollIntoView({ block: "start" });
+      } else setFullscreenError("Fullscreen is unavailable here. Rotate your phone for the edge-to-edge view.");
+    } catch {
+      setFullscreenError("Could not enter fullscreen. Rotate your phone for the edge-to-edge view.");
+    }
+  }
+
   const [screen, setScreen] = useState<FlexBoxNode | null>(null);
   const [link, setLink] = useState<SocketState>({
     state: "connecting",
@@ -805,7 +848,7 @@ export function GlassesHarness({
   }, []);
 
   return (
-    <div className={`gh-root ${embedded ? "gh-embedded" : "gh-page"}`}>
+    <div ref={rootRef} className={`gh-root ${embedded ? "gh-embedded" : "gh-page"}${theater ? " gh-theater" : ""}`}>
       {embedded ? (
         <StatusLine link={link} />
       ) : (
@@ -831,6 +874,7 @@ export function GlassesHarness({
         <section className="gh-stage" aria-label="Display">
           <Display
             ref={displayRef}
+            immersive={!embedded}
             screen={screen}
             listening={listening}
             seeThrough={seeThrough && camera !== null}
@@ -848,6 +892,23 @@ export function GlassesHarness({
               />
             ) : null}
           </Display>
+          {!embedded ? (
+            <div className="gh-pov-actions">
+              {!camera ? (
+                <button type="button" className="gh-chip" onClick={() => cameraStarting ? stopCamera() : void startCamera()}>
+                  <Video size={16} aria-hidden="true" /> {cameraStarting ? "Cancel camera" : "Start camera"}
+                </button>
+              ) : null}
+              <button type="button" className="gh-chip" onClick={() => void toggleFullscreen()}>
+                {fullscreen ? <Minimize size={16} aria-hidden="true" /> : <Maximize size={16} aria-hidden="true" />}
+                {fullscreen ? "Exit fullscreen" : "Fullscreen"}
+              </button>
+              <button type="button" className="gh-chip" onClick={() => controlsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })}>
+                <ChevronDown size={16} aria-hidden="true" /> Controls
+              </button>
+              {fullscreenError ? <p role="status" className="gh-error">{fullscreenError}</p> : null}
+            </div>
+          ) : null}
           <div className="gh-stage-bar">
             <span>
               <span className="gh-keyboard-hint">600 × 600 · C = capture · T T = ask · Space = talk</span>
@@ -874,7 +935,7 @@ export function GlassesHarness({
           </div>
         </section>
 
-        <aside className="gh-controls">
+        <aside ref={controlsRef} className="gh-controls">
           <section className="gh-card" aria-labelledby={ids.camera}>
             <div className="gh-card-heading">
               <h2 id={ids.camera}>Camera</h2>

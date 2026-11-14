@@ -605,80 +605,56 @@
   }
 }
 
-/* Keep the display in view while the thumb scrolls controls on a landscape phone. */
-@media (orientation: landscape) and (max-height: 600px) {
-  .gh-page {
-    height: 100dvh;
-    min-height: 0;
-    display: flex;
-    flex-direction: column;
-    padding: max(8px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) max(8px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
-    overflow: hidden;
-  }
-  .gh-page .gh-header {
-    margin-bottom: 8px;
-    gap: 8px;
-    align-items: center;
-  }
-  .gh-page .gh-header h1 {
-    font-size: 18px;
-  }
-  .gh-page .gh-eyebrow {
-    display: none;
-  }
-  .gh-page .gh-header-side {
-    gap: 4px;
-  }
-  .gh-page .gh-nav {
-    font-size: 12px;
-    gap: 10px;
-    justify-content: flex-end;
-  }
-  .gh-page .gh-status {
-    font-size: 11px;
-  }
-  .gh-page .gh-main {
-    flex: 1;
-    min-height: 0;
-    grid-template-columns: minmax(0, 1fr) minmax(260px, 40%);
-    gap: 16px;
-  }
-  .gh-page .gh-stage {
-    min-height: 0;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-  }
-  .gh-page .gh-display-frame {
-    width: min(100%, calc(100dvh - 140px));
-  }
-  .gh-page .gh-stage-bar {
-    width: 100%;
-    justify-content: center;
-    margin-top: 8px;
-  }
-  .gh-page .gh-stage-bar > span:first-child {
-    display: none;
-  }
-  .gh-page .gh-controls {
-    height: 100%;
-    min-height: 0;
-    overflow-y: auto;
-    overscroll-behavior: contain;
-    padding: 0 4px 12px 0;
-  }
-  .gh-page .gh-card {
-    padding: 12px;
-  }
-  .gh-page button {
-    min-height: 44px;
-    touch-action: manipulation;
-  }
-}
 
-@media (orientation: landscape) and (max-height: 600px) {
-  .gh-page .gh-preview {
-    max-height: 110px;
-    overflow: hidden;
-  }
+/* The camera fills the POV; the SDK overlay remains square and keeps its proportions. */
+.gh-pov {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  max-width: 600px;
+  aspect-ratio: 1;
+  overflow: hidden;
+  background: #000;
 }
+.gh-pov > .gh-display-frame { position: relative; width: 100%; }
+.gh-pov .gh-display { border: 0; border-radius: 0; box-shadow: none; }
+.gh-pov-live > .gh-display-frame { mix-blend-mode: screen; }
+.gh-stage { position: relative; }
+.gh-pov-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+.gh-pov-actions button { min-height: 44px; }
+
+/* On rotation the POV is the first viewport. Everything else follows in page scroll. */
+.gh-page.gh-theater {
+  display: grid;
+  grid-template-areas: "pov" "header" "controls";
+  grid-template-columns: minmax(0, 1fr);
+  padding: 0;
+  min-height: 100dvh;
+}
+.gh-theater .gh-main { display: contents; }
+.gh-theater .gh-stage { grid-area: pov; }
+.gh-theater .gh-pov {
+  width: 100%;
+  max-width: none;
+  height: 100dvh;
+  aspect-ratio: auto;
+}
+.gh-theater .gh-pov > .gh-display-frame { width: min(100%, 100dvh, 600px); }
+.gh-theater .gh-header { grid-area: header; margin: 0; padding: 20px; flex-wrap: wrap; }
+.gh-theater .gh-controls { grid-area: controls; padding: 20px; height: auto; overflow: visible; }
+.gh-theater .gh-stage-bar { margin: 0; padding: 16px 20px; }
+.gh-theater .gh-pov-actions {
+  position: absolute;
+  top: calc(100dvh - 12px - env(safe-area-inset-bottom));
+  transform: translateY(-100%);
+  right: max(12px, env(safe-area-inset-right));
+  left: max(12px, env(safe-area-inset-left));
+  margin: 0;
+  justify-content: flex-end;
+  z-index: 2;
+}
+.gh-theater .gh-pov-actions .gh-chip { background: rgb(0 0 0 / 0.65); color: white; }
+.gh-theater .gh-pov-actions .gh-error { background: #181818; padding: 8px; }
+.gh-page:fullscreen { overflow-y: auto; height: 100%; background: #000; }
