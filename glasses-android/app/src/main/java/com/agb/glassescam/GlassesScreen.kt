@@ -202,6 +202,7 @@ fun GlassesScreen(
                 onArm = { if (ui.memoryArmed) viewModel.stopStreaming() else onArmMemory() },
                 onToggleStream = viewModel::toggleMemoryStream,
                 onPhoto = viewModel::memoryPhoto,
+                onVoice = viewModel::toggleVoice,
                 onDismissMessage = viewModel::dismissGlassesMessage,
             )
 
@@ -293,6 +294,7 @@ private fun MemoryModeCard(
     onArm: () -> Unit,
     onToggleStream: () -> Unit,
     onPhoto: () -> Unit,
+    onVoice: () -> Unit,
     onDismissMessage: () -> Unit,
 ) {
     val busyElsewhere = ui.quickArmed || ui.snapArmed || ui.liveArmed
@@ -313,7 +315,22 @@ private fun MemoryModeCard(
                     OutlinedButton(onClick = onPhoto, enabled = !ui.memorySending) {
                         Text(if (ui.memorySending) "Sending photo..." else "Send one photo")
                     }
+                    OutlinedButton(onClick = onVoice, enabled = !ui.voiceSending) {
+                        Text(
+                            when {
+                                ui.voiceRecording -> "Stop and send"
+                                ui.voiceSending -> "Sending voice..."
+                                else -> "Talk"
+                            },
+                        )
+                    }
                 }
+            }
+            if (ui.voiceRecording || ui.voiceSending) {
+                Text(
+                    (if (ui.voiceRecording) "Heard: " else "Sending: ") + ui.voiceText.ifBlank { "..." },
+                    style = MaterialTheme.typography.bodyMedium,
+                )
             }
             if (ui.memoryArmed) {
                 val indicator = when {
@@ -325,7 +342,8 @@ private fun MemoryModeCard(
                 Text(indicator + ui.memoryStatus)
                 Text(
                     "On the glasses: double tap (Neural Band or touchpad) or double press the capture button to " +
-                        "start or stop streaming; one tap or press sends one photo.",
+                        "start or stop streaming; one tap or press sends one photo. Hold the capture button to " +
+                        "talk, press it (or tap) to send: only the text goes to the backend.",
                     style = MaterialTheme.typography.bodySmall,
                 )
             }

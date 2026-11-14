@@ -1,30 +1,77 @@
-# Junction 2026
+# Junction 2026: memory for Meta glasses
 
-Our team's project for [Junction 2026](https://2026.hackjunction.com/) (13–15 November 2026, Espoo). The challenge is not chosen yet.
+Our project for [Junction 2026](https://2026.hackjunction.com/) (13–15 November 2026, Espoo).
+
+**We give smart glasses a memory.** What the Meta Ray-Ban Display glasses see is embedded into a vector database, so the wearer can ask about their own past, and the glasses can speak up on their own. It works in two ways:
+
+- **Reactive:** you ask, the glasses answer. Double-tap the Neural Band (or hold the capture button) and say "where did I leave my keys?". The question is embedded, the closest stills are retrieved, and a Gemma model answers from those stills and when they were seen. You can also take a photo on purpose, which is stored as a memory.
+- **Proactive:** the glasses speak first. While you wear them, frames stream to the backend (2 per second), and each is compared with things you asked to be warned about. Say "remind me to take my keys" or "warn me about the stool in the kitchen" and the glasses flash a warning when that object comes into view. You can also write *triggers* in the web app ("a bike without a helmet in view → remind them to put it on"); the closest frame within a distance fires one, and Gemma words the message for the display.
+
+Everything runs on our own servers with open models (EmbeddingGemma 2 for the embeddings, Gemma for the answers), so the footage never goes to a third party.
+
+```
+Meta glasses ──► Android app ──WebSocket──► backend (FastAPI + SQLite + sqlite-vec) ──► Memory API / Gemma server
+ camera, mic,     (glasses-android)           memories, triggers, reminders, accounts     EmbeddingGemma 2 + Gemma (vLLM)
+ Neural Band,                                           ▲
+ display  ◄───────── messages and warnings ─────────────┤
+                                        Next.js web app: Memory lab, glasses harness
+```
+
+## What's in this repo
+
+| Folder | What it is |
+|---|---|
+| `backend/` | FastAPI backend (SQLModel on SQLite, vector search with sqlite-vec). Stores memories, runs the ask loop, checks frames against triggers and reminders, decides what the glasses display. All routes are under `/api`. |
+| `frontend/` | Next.js web app: the **Memory lab** (`/memory`), the **glasses harness** (`/glasses`) and the login pages. |
+| `glasses-android/` | The real glasses client: an Android app that streams the Meta glasses' camera and sends frames, photos and voice to the backend; see [its README](glasses-android/README.md). |
+| `memory/` | The visual memory service that runs on the Gemma server: embeds frames, serves the embeddings and chat, and draws the memory map; see [its README](memory/README.md). Its own uv project (about 6 GB with torch). |
+| `my-glasses-app/` | A small web app for the glasses' display (React, Meta's UI toolkit), see below. |
+| `deploy/`, `compose.yaml` | Production: Docker Compose with Caddy on a Hetzner VM. |
 
 ## Getting started
 
 You need [uv](https://docs.astral.sh/uv/), Node.js 24 and npm, Docker, `make`, and the GitHub CLI (`gh`).
 
 ```sh
-make dev     # http://localhost:3000
+make dev     # backend on :8000, frontend on :3000
 make check   # what CI runs
 ```
 
-Commands, deployment and production tasks are in [AGENTS.md](AGENTS.md), which every coding agent here reads too. Codex users: mark the project as trusted, or Codex ignores `AGENTS.md`.
+Open http://localhost:3000. API docs are at http://localhost:3000/api/docs.
 
-To get SSH access to the server, add an SSH key to your GitHub account (Settings → SSH and GPG keys) and ask someone with access to run `make prod-import-keys`.
+Without any configuration the app runs and you can add memories and browse them, but asking questions needs the models. Put these in `backend/.env` (ask a teammate for the values):
 
-## What's in this repo
+```sh
+LLM_URL=...          # chat model, any OpenAI-style server with tool calling (Gemma)
+LLM_API_KEY=...
+EMBED_URL=...        # embeddings server: must be EmbeddingGemma 2, the model the memories use
+EMBED_API_KEY=...
+MEMORY_API_URL=...   # optional: the memory API, used as a fallback to describe photos
+MEMORY_API_TOKEN=...
+ADMIN_PASSWORD=...   # optional: otherwise a random admin password is printed in the backend log
+```
 
-- `backend/` and `frontend/`: the web app and its API, run with `make dev`. The glasses harness lives here too: http://localhost:3000/glasses (see below).
-- `my-glasses-app/`: a web app for Meta Ray-Ban Display glasses (see below).
-- `glasses-android/`: an Android app that streams the Meta glasses camera; see [its README](glasses-android/README.md).
-- `memory/`: the visual memory for the glasses; see [its README](memory/README.md).
+`LLM_URL` and `EMBED_URL` can both point to the memory API on the Gemma server (`https://<vm2-ip-with-dashes>.sslip.io`) with its token. `make reset-db` deletes the local database; it is rebuilt and re-seeded on the next start.
 
-## Glasses harness
+## How to use it
 
-http://localhost:3000/glasses (after `make dev`) stands in for the glasses and the Android app, so the glasses UI can be built without them: the webcam is the camera, the laptop mic is the microphone (hold Space or the talk button; Chrome only, and Chrome sends the audio to Google to transcribe), the speakers read replies aloud, and the arrow keys and Enter stand in for the Neural Band. You can also type what the wearer says.
+### Log in
+
+Open http://localhost:3000 and start a **guest**: a generated name, no password, valid for 60 minutes, which sees the demo memories and the ones it adds. The admin sees every memory and logs in at `/admin` with `ADMIN_PASSWORD`, reached through the small settings icon on the login form. See [AGENTS.md](AGENTS.md) for how accounts and scoping work.
+
+### Memory lab (`/memory`)
+
+- **Library:** add memories by uploading images, taking a webcam picture, or writing a note; group them into collections.
+- **Ask tab:** ask Gemma a question and watch it search the memories step by step.
+- **Map:** every stored vector projected to 2D and 3D; the memories found by the last question are ringed.
+- **Glasses tab:** the glasses harness inside the lab, so photos it takes appear in the library.
+- **Stream tab:** the webcam acts as the glasses (frames go to the backend as the Android app sends them), next to the **triggers** editor where you write what to watch for, what to tell the wearer, the distance threshold and the cooldown.
+
+### Glasses harness (`/glasses`)
+
+Stands in for the glasses and the Android app, so the glasses UI can be built and tried without them: the webcam is the camera, the laptop mic is the microphone (hold Space or the talk button; Chrome only, and Chrome sends the audio to Google to transcribe), the speakers read replies aloud, and the arrow keys and Enter stand in for the Neural Band. You can also type what the wearer says.
+
+It calls the same `/api/glasses/*` endpoints and WebSocket the Android app uses. The backend decides what to show, as layouts made of the glasses SDK's display components in `backend/app/glasses/screens.py`, and the harness draws them on a 600×600 display. "See-through" blends the display over the webcam the way the real display adds light to the world.
 
 On a phone, open the HTTPS site at `/glasses`, rotate to landscape, and tap **Start camera**. The
 feed comes from that phone, preferring the rear camera; **Switch camera** requests the other lens.
@@ -34,11 +81,22 @@ controls scroll beside it. Portrait and desktop layouts are supported too. Use *
 release the camera, or **Cancel camera** if the permission request is still waiting. Camera access
 on a real phone requires HTTPS; an ordinary HTTP LAN address will not work.
 
-The login form has a small settings icon for the password-protected `/admin` form.
+Things to try: take a photo ("take a photo"), ask "where did I leave my keys?", say "remind me about the stool" and point the webcam at one.
 
-It calls the same `/api/glasses/*` endpoints the Android app will. The backend decides what to show, as layouts made of the SDK's display components (FlexBox, Text, Image, Icon, Button) in `backend/app/glasses/screens.py`, and the harness draws them on a 600×600 display. "See-through" blends the display over the webcam the way the glasses' display adds light to the world.
+### The real glasses
 
-With `LLM_URL` set, a photo is described by the chat model ("what am I looking at?" takes one); with `EMBED_URL` too, it becomes an image memory captioned with that description, so it shows in the Memory lab and questions such as "where did I leave my keys?" find it through the same loop as `/api/ask`. Without them the harness still takes and shows photos.
+1. Pair the glasses in the Meta AI app, turn on Developer Mode, and build `glasses-android` in Android Studio (setup is in [its README](glasses-android/README.md)).
+2. Copy `local.properties.example` to `local.properties` and set `glasses.api` to the backend's address (without `/api`). Without `glasses.token` the app starts a guest account by itself.
+3. In the app press **Register**, then **Arm memory mode**. A double tap or double press of the capture button starts and stops the 2 fps stream; one tap or short press sends one photo; holding the capture button records a voice message, which is turned into text on the phone and sent as a command.
+4. Triggers and reminders now warn you on the display. Memories show up in the Memory lab.
+
+The memory service itself (embedding, the map page, deploying to the Gemma server) is described in [memory/README.md](memory/README.md).
+
+### Deploying
+
+Every change goes through a pull request; what lands on `main` is deployed to the VM by GitHub Actions. Commands, the Git workflow, deployment and production tasks are in [AGENTS.md](AGENTS.md), which every coding agent here reads too. Codex users: mark the project as trusted, or Codex ignores `AGENTS.md`.
+
+To get SSH access to the server, add an SSH key to your GitHub account (Settings → SSH and GPG keys) and ask someone with access to run `make prod-import-keys`.
 
 ## my-glasses-app
 
@@ -70,14 +128,3 @@ and Enter to pinch.
 - `npm run typecheck`: TypeScript check
 - `npm run build`: production build into `dist/`
 - `npm run preview`: serve the production build
-
-## Built before the event
-
-Junction's rules require pre-existing work to be disclosed. Everything up to the git tag `pre-event-scaffold` was written before the event and contains no challenge-specific code:
-
-- FastAPI backend with SQLModel on SQLite, a health endpoint and an example "notes" feature
-- Next.js frontend with Tailwind and shadcn/ui, and a TypeScript client generated from the backend's OpenAPI schema
-- Docker Compose stack with Caddy, a GitHub Actions workflow that checks and deploys to a Hetzner VM, and the VM's cloud-init setup
-- Instructions and skills for coding agents (`AGENTS.md`, `.agents/skills/`)
-
-Compare with `git diff pre-event-scaffold..HEAD` to see what was built during the event.
