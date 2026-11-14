@@ -183,3 +183,19 @@ class TriggerPublic(TriggerBase):
     id: int
     last_fired_at: datetime | None
     level: float | None
+
+
+class ShowcaseFields(SQLModel):
+    title: str = Field(min_length=1, max_length=100)
+    description: str = Field(default="", max_length=1000)
+    kind: str = "images"
+    duration_s: float = Field(default=30, gt=0, le=3600)
+    image_seconds: float = Field(default=3, ge=0.25, le=60)
+    position: int = Field(default=0, ge=0, le=10000)
+    published: bool = False
+
+
+class Showcase(ShowcaseFields, table=True):
+    id: int | None = Field(default=None, primary_key=True)
+    # Only the upload endpoint writes this list of random file names and original labels.
+    assets_json: str = "[]"

@@ -161,6 +161,111 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/demo/clips": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Public */
+        get: operations["list_public_api_demo_clips_get"];
+        put?: never;
+        /** Create */
+        post: operations["create_api_demo_clips_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/demo/manage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Admin */
+        get: operations["list_admin_api_demo_manage_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/demo/clips/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Update */
+        put: operations["update_api_demo_clips__id__put"];
+        post?: never;
+        /** Remove */
+        delete: operations["remove_api_demo_clips__id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/demo/clips/{id}/media": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Upload */
+        post: operations["upload_api_demo_clips__id__media_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/demo/clips/{id}/media/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Media */
+        get: operations["get_media_api_demo_clips__id__media__name__get"];
+        put?: never;
+        post?: never;
+        /** Remove Asset */
+        delete: operations["remove_asset_api_demo_clips__id__media__name__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/demo/order": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Reorder */
+        post: operations["reorder_api_demo_order_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/notes": {
         parameters: {
             query?: never;
@@ -695,6 +800,13 @@ export interface components {
              */
             demo: boolean;
         };
+        /** Body_upload_api_demo_clips__id__media_post */
+        Body_upload_api_demo_clips__id__media_post: {
+            /** Files */
+            files: string[];
+            /** Video Duration S */
+            video_duration_s?: number | null;
+        };
         /** Body_upload_frame_api_glasses_frames_post */
         Body_upload_frame_api_glasses_frames_post: {
             /**
@@ -1043,6 +1155,99 @@ export interface components {
             matched_keywords: string[];
             /** Score */
             score: number;
+        };
+        /** ShowcaseAsset */
+        ShowcaseAsset: {
+            /** Name */
+            name: string;
+            /** Label */
+            label: string;
+            /** Url */
+            url: string;
+            /** Content Type */
+            content_type: string;
+        };
+        /** ShowcaseOrder */
+        ShowcaseOrder: {
+            /** Ids */
+            ids: number[];
+        };
+        /** ShowcasePublic */
+        ShowcasePublic: {
+            /** Title */
+            title: string;
+            /**
+             * Description
+             * @default
+             */
+            description: string;
+            /**
+             * Kind
+             * @default images
+             */
+            kind: string;
+            /**
+             * Duration S
+             * @default 30
+             */
+            duration_s: number;
+            /**
+             * Image Seconds
+             * @default 3
+             */
+            image_seconds: number;
+            /**
+             * Position
+             * @default 0
+             */
+            position: number;
+            /**
+             * Published
+             * @default false
+             */
+            published: boolean;
+            /** Id */
+            id: number;
+            /** Assets */
+            assets: components["schemas"]["ShowcaseAsset"][];
+        };
+        /** ShowcaseWrite */
+        ShowcaseWrite: {
+            /** Title */
+            title: string;
+            /**
+             * Description
+             * @default
+             */
+            description: string;
+            /**
+             * Kind
+             * @default images
+             * @enum {string}
+             */
+            kind: "video" | "images";
+            /**
+             * Duration S
+             * @default 30
+             */
+            duration_s: number;
+            /**
+             * Image Seconds
+             * @default 3
+             */
+            image_seconds: number;
+            /**
+             * Position
+             * @default 0
+             */
+            position: number;
+            /**
+             * Published
+             * @default false
+             */
+            published: boolean;
+            /** Asset Order */
+            asset_order?: string[] | null;
         };
         /**
          * Step
@@ -1431,6 +1636,275 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DemoTimeline"];
+                };
+            };
+        };
+    };
+    list_public_api_demo_clips_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShowcasePublic"][];
+                };
+            };
+        };
+    };
+    create_api_demo_clips_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ShowcaseWrite"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShowcasePublic"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_admin_api_demo_manage_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShowcasePublic"][];
+                };
+            };
+        };
+    };
+    update_api_demo_clips__id__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ShowcaseWrite"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShowcasePublic"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    remove_api_demo_clips__id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    upload_api_demo_clips__id__media_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_upload_api_demo_clips__id__media_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShowcasePublic"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_media_api_demo_clips__id__media__name__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    remove_asset_api_demo_clips__id__media__name__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShowcasePublic"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reorder_api_demo_order_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ShowcaseOrder"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShowcasePublic"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
