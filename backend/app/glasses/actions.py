@@ -1,29 +1,29 @@
-"""What the glasses' commands, photos and watched frames do, shared by the HTTP routes
+"""What the glasses' commands, memory frames and watched frames do, shared by the HTTP routes
 (app/routes/glasses.py) and the WebSocket (channel.py). All are coroutines: the database and the
 model calls are awaited, so neither path ties up a thread while a model thinks.
 
-Memory is the backend's own (app/routes/memories.py): photos become image memories, questions go
-through the same question loop as /api/ask. Without the chat and embedding models the glasses
-still take and show photos, and say memory search isn't set up.
+Questions go through the same question loop as /api/ask (app.agent), over the asker's memories.
+Without the chat and embedding models the glasses say memory search isn't set up.
 """
 
 import logging
 from datetime import UTC, datetime
 from typing import Self
 
-import anyio
 from fastapi import HTTPException
 from pydantic import BaseModel, Field, model_validator
 from sqlmodel.ext.asyncio.session import AsyncSession
 
+from app import agent
 from app.auth import Viewer
-from app.glasses import frames, memory, photos, reminders, screens
+from app.glasses import frames, reminders, screens
 from app.glasses.layout import GlassesReply
 from app.llm import Chat, Embedder, UpstreamError
 
 log = logging.getLogger(__name__)
 
 MAX_FRAME = 10 * 1024 * 1024
+JPEG_START = b"\xff\xd8\xff"  # the first bytes of every JPEG file
 
 
 async def memory_frame(
@@ -52,10 +52,9 @@ async def memory_frame(
         raise HTTPException(502, str(error)) from error
 
 
-# The wearer's buttons and gestures: the glasses' capture button takes a photo, "gallery" shows the
-# newest ones, and the Neural Band's double index-finger tap ("double_tap", or "ask") opens the
-# microphone for a question.
-ACTIONS = {"take_photo", "gallery", "ask", "double_tap"}
+# The wearer's gesture: the Neural Band's double index-finger tap ("double_tap", or "ask") opens
+# the microphone for a question.
+ACTIONS = {"ask", "double_tap"}
 
 
 class Command(BaseModel):
@@ -90,10 +89,6 @@ async def command(
     if body.action is not None:
         if body.action not in ACTIONS:
             raise HTTPException(422, f"unknown action {body.action!r}")
-        if body.action == "take_photo":
-            return screens.capture()
-        if body.action == "gallery":
-            return screens.gallery(viewer.owners)
         return screens.listen()
     question = (body.question or "").strip()
     if not question:
@@ -118,7 +113,7 @@ async def _ask(
     if chat is None or embed is None:
         return screens.memory_problem(question, "Memory search isn’t set up yet.")
     try:
-        answer = await memory.ask(session, question, chat, embed, viewer.owners)
+        answer = await agent.answer(session, question, chat, embed, viewer.owners)
     except UpstreamError as error:
         log.warning("Memory question failed: %s", error)
         return screens.memory_problem(question, "I can’t reach the memory right now.")
@@ -128,39 +123,10 @@ async def _ask(
 
 def check_jpeg(data: bytes, what: str) -> None:
     """413 or 415 for a still the glasses would not have sent."""
-    if len(data) > photos.MAX_BYTES:
+    if len(data) > MAX_FRAME:
         raise HTTPException(413, f"{what} is larger than 10 MB")
-    if not photos.is_jpeg(data):
+    if not data.startswith(JPEG_START):
         raise HTTPException(415, f"{what} must be a JPEG")
-
-
-async def photo(
-    session: AsyncSession, viewer: Viewer, data: bytes, chat: Chat | None, embed: Embedder | None
-) -> GlassesReply:
-    """Saves the still, describes it with the chat model and stores it as an image memory."""
-    check_jpeg(data, "photo")
-    name = await anyio.to_thread.run_sync(photos.save, data, viewer.id)
-
-    description, problems, stored = "", [], False
-    if chat is not None:
-        try:
-            description = await memory.describe(chat, data)
-        except UpstreamError as error:
-            log.warning("Describing a photo failed: %s", error)
-    if not description and chat is not None:
-        problems.append("couldn’t describe it")
-    if embed is not None:
-        try:
-            await memory.remember(session, embed, data, description, viewer.id)
-            stored = True
-        except UpstreamError as error:
-            log.warning("Storing a photo as a memory failed: %s", error)
-            problems.append("couldn’t save it to memory")
-
-    note = "; ".join(problems) or ("saved to memory" if stored else None)
-    if description:
-        return screens.photo_described(name, description, note)
-    return screens.photo_saved(name, note)
 
 
 async def watch(

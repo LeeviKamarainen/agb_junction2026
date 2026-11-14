@@ -28,7 +28,7 @@ http://localhost:3000/glasses (after `make dev`) stands in for the glasses and t
 
 It calls the same `/api/glasses/*` endpoints the Android app will. The backend decides what to show, as layouts made of the SDK's display components (FlexBox, Text, Image, Icon, Button) in `backend/app/glasses/screens.py`, and the harness draws them on a 600×600 display. "See-through" blends the display over the webcam the way the glasses' display adds light to the world.
 
-With `LLM_URL` set, a photo is described by the chat model ("what am I looking at?" takes one); with `EMBED_URL` too, it becomes an image memory captioned with that description, so it shows in the Memory lab and questions such as "where did I leave my keys?" find it through the same loop as `/api/ask`. Without them the harness still takes and shows photos.
+With `LLM_URL` and `EMBED_URL` set, what the wearer says goes to Gemma, which searches the memories through the same loop as `/api/ask` ("where did I leave my keys?"). Without them the glasses say memory search isn't set up.
 
 ## my-glasses-app
 

@@ -3,7 +3,6 @@
 import {
   ArrowLeft,
   BellPlus,
-  Camera,
   Eye,
   EyeOff,
   Mic,
@@ -64,11 +63,9 @@ type LogEntry = {
 type Pending = {
   request: string;
   started: number;
-  kind: "command" | "photo" | "frame" | "ping";
+  kind: "command" | "frame" | "ping";
 };
 
-// Long enough to see "Taking a photo…", like the shutter delay on the glasses.
-const CAPTURE_DELAY_MS = 400;
 const CAMERA_WARMUP_MS = 800;
 const subscribeToNothing = () => () => {};
 // How often the camera sends a frame while watching. The backend checks the newest and drops
@@ -110,23 +107,20 @@ const MAX_LOG = 600;
 
 /**
  * Stands in for the glasses and the Android app: webcam = camera, laptop mic = microphone,
- * speechSynthesis = speakers, C = capture button, T T = Neural Band double tap. The rest is in the
- * backend: commands, photos, watched frames and pushed warnings go over its WebSocket
- * (/api/glasses/ws, see channel.ts); the home screen and reminders over its HTTP routes.
+ * speechSynthesis = speakers, T T = Neural Band double tap. The rest is in the backend: commands,
+ * watched frames and pushed warnings go over its WebSocket (/api/glasses/ws, see channel.ts); the
+ * home screen and reminders over its HTTP routes.
  */
 type HarnessProps = {
   /** Inside another page (the Memory lab): no page header, one column. */
   embedded?: boolean;
   /** False while hidden behind another tab: Space no longer starts the microphone. */
   active?: boolean;
-  /** After a photo upload, which may have added an image memory. */
-  onPhotoStored?: () => void;
 };
 
 export function GlassesHarness({
   embedded = false,
   active = true,
-  onPhotoStored,
 }: HarnessProps = {}) {
   const [screen, setScreen] = useState<FlexBoxNode | null>(null);
   const [link, setLink] = useState<SocketState>({
@@ -172,7 +166,7 @@ export function GlassesHarness({
   const streamRef = useRef<MediaStream | null>(null);
   const recognitionRef = useRef<Recognition | null>(null);
   const finalRef = useRef("");
-  // After Ask: the next words, spoken or typed, are a question about the photos.
+  // After a double tap: the next words, spoken or typed, are the question the mic opened for.
   const questionRef = useRef(false);
   const nextId = useRef(1);
   const lastTapRef = useRef(0);
@@ -210,9 +204,6 @@ export function GlassesHarness({
       json: JSON.stringify(reply, null, 2),
     });
     if (reply.speech && speak) say(reply.speech);
-    if (reply.client_action === "capture_photo") {
-      setTimeout(() => void capturePhoto(), CAPTURE_DELAY_MS);
-    }
     questionRef.current = reply.client_action === "listen_question";
     if (questionRef.current) startListening("question");
   }
@@ -223,7 +214,7 @@ export function GlassesHarness({
 
   /**
    * Sends a message over the socket, remembers it until its answer comes and logs it. `jpeg`
-   * goes as a binary frame right after a photo's or frame's header. False when not sent.
+   * goes as a binary frame right after a frame's header. False when not sent.
    */
   function send(
     // The socket sends `auth` itself, on opening.
@@ -236,7 +227,7 @@ export function GlassesHarness({
     const id = "id" in message ? message.id : undefined;
     const sent =
       socket !== null &&
-      (jpeg && (kind === "photo" || kind === "frame")
+      (jpeg && kind === "frame"
         ? socket.sendJpeg({ type: kind, id: id ?? 0 }, jpeg.blob)
         : socket.send(message));
     const watch = kind === "frame" || kind === "ping" || kind === "watch";
@@ -323,7 +314,6 @@ export function GlassesHarness({
       void loadReminders();
     } else {
       apply(`↓ reply${label}`, message.reply, pending?.started);
-      if (pending?.kind === "photo") onPhotoStored?.();
     }
     // Frames the backend dropped for a newer one never get an answer.
     if (message.type === "watch_result" && message.id !== null)
@@ -422,17 +412,6 @@ export function GlassesHarness({
     );
     if (!blob) return { error: "Could not encode the frame as JPEG." };
     return { blob, width: canvas.width, height: canvas.height };
-  }
-
-  async function capturePhoto() {
-    const request = "capture photo (webcam)";
-    const frame = await grabFrame();
-    if ("error" in frame) {
-      fail(request, frame.error);
-      return;
-    }
-    // The backend describes and stores it, then answers with a reply.
-    send({ type: "photo", id: nextMessageId.current++ }, request, frame);
   }
 
   async function loadReminders() {
@@ -537,12 +516,7 @@ export function GlassesHarness({
       send({ type: "ping", id: nextMessageId.current++ }, "keepalive");
   }
 
-  /** The capture button on the glasses' frame: take a photo. */
-  function captureButton() {
-    void command({ action: "take_photo" }, "capture button");
-  }
-
-  /** The Neural Band's double index-finger tap: ask about the photos. */
+  /** The Neural Band's double index-finger tap: ask a question. */
   function doubleTap() {
     void command({ action: "double_tap" }, "double tap");
   }
@@ -708,11 +682,6 @@ export function GlassesHarness({
     if (!active || event.repeat) return;
     const target = event.target as HTMLElement;
     if (target.closest("input, textarea")) return;
-    // C: the glasses' capture button.
-    if (event.code === "KeyC" && event.type === "keydown") {
-      captureButton();
-      return;
-    }
     // Double-press T: the Neural Band's double index-finger tap.
     if (event.code === "KeyT" && event.type === "keydown") {
       const now = performance.now();
@@ -788,8 +757,7 @@ export function GlassesHarness({
           </Display>
           <div className="gh-stage-bar">
             <span>
-              600 × 600 · C = capture button · T T = double tap (ask) · hold
-              Space = talk
+              600 × 600 · T T = double tap (ask) · hold Space = talk
             </span>
             <span className="gh-stage-actions">
               <label className="gh-toggle">
@@ -816,17 +784,9 @@ export function GlassesHarness({
           <section className="gh-card" aria-labelledby={ids.inputs}>
             <h2 id={ids.inputs}>Glasses &amp; Neural Band</h2>
             <p className="gh-note">
-              The display has no buttons: the wearer uses the capture button on
-              the frame and the Neural Band.
+              The display has no buttons: the wearer uses the Neural Band.
             </p>
             <div className="gh-controls-row">
-              <button
-                type="button"
-                className="gh-primary"
-                onClick={() => captureButton()}
-              >
-                <Camera size={16} aria-hidden="true" /> Capture button · C
-              </button>
               <button
                 type="button"
                 className="gh-primary"
@@ -906,7 +866,7 @@ export function GlassesHarness({
             <p className="gh-heard" aria-live="polite">
               {heard
                 ? `“${heard}”`
-                : "Double tap, then say a question about your photos."}
+                : "Double tap, then ask about anything you’ve seen."}
             </p>
             {micError ? <p className="gh-error">{micError}</p> : null}
             <form className="gh-typed" onSubmit={submitTyped}>

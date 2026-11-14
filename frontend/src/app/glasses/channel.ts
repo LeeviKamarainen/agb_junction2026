@@ -9,7 +9,6 @@ export type ClientMessage =
   | ({ type: "command"; id: number } & (
       { action: string } | { question: string }
     ))
-  | { type: "photo"; id: number }
   | { type: "frame"; id: number }
   | { type: "watch"; on: boolean }
   | { type: "ping"; id: number }
@@ -83,11 +82,10 @@ export class GlassesSocket {
     return true;
   }
 
-  /** A photo or frame header, then its JPEG as a binary frame. False when not sent. */
-  sendJpeg(message: ClientMessage & { type: "photo" | "frame" }, jpeg: Blob) {
+  /** A frame's header, then its JPEG as a binary frame. False when not sent. */
+  sendJpeg(message: ClientMessage & { type: "frame" }, jpeg: Blob) {
     if (!this.socket || !this.open) return false;
-    if (message.type === "frame" && this.socket.bufferedAmount > MAX_BUFFERED)
-      return false;
+    if (this.socket.bufferedAmount > MAX_BUFFERED) return false;
     this.socket.send(JSON.stringify(message));
     this.socket.send(jpeg);
     return true;
