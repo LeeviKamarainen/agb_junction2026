@@ -11,7 +11,8 @@ Search is exact (brute force over every vector that passes the filters), which i
 hundreds of thousands of vectors: a 768-wide float32 vector is 3 KB.
 """
 
-from collections.abc import Mapping, Sequence
+import struct
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
@@ -42,9 +43,9 @@ class Hit:
 VECTOR_TABLES: dict[str, VectorTable] = {
     "note_embedding": VectorTable(768),
     # One row per Memory (app/models.py), same id. The width must be EMBED_MODEL's: if the model
-    # changes, change it here and the database rebuilds. kind is copied here so a search can
-    # filter on it.
-    "memory_embedding": VectorTable(768, {"kind": "TEXT"}),
+    # changes, change it here and the database rebuilds. kind and collection are copied here so a
+    # search can filter on them.
+    "memory_embedding": VectorTable(768, {"kind": "TEXT", "collection": "TEXT"}),
 }
 
 
@@ -150,7 +151,8 @@ def nearest(
     """The k closest rows, closest first, among those that pass the filters.
 
     `since` and `until` bound created_at (since inclusive, until exclusive, both timezone-aware);
-    `where` keeps only rows whose extra metadata columns equal the given values.
+    `where` keeps only rows whose extra metadata columns equal the given values. A list, tuple or
+    set as a value keeps rows equal to any of them (an empty one keeps none).
     """
     blob = _serialize(table, vector)
     extra_columns = list(_table(table).metadata)
@@ -162,8 +164,14 @@ def nearest(
         conditions.append("created_at < ?")
         params.append(_to_unix(until))
     for column, value in _extra(table, where).items():
-        conditions.append(f"{column} = ?")
-        params.append(value)
+        if isinstance(value, list | tuple | set | frozenset):
+            if not value:
+                return []
+            conditions.append(f"{column} IN ({', '.join('?' * len(value))})")
+            params.extend(value)
+        else:
+            conditions.append(f"{column} = ?")
+            params.append(value)
 
     columns = ", ".join(["id", "distance", "created_at", *extra_columns])
     rows = connection.exec_driver_sql(
@@ -179,3 +187,17 @@ def nearest(
         )
         for row in rows
     ]
+
+
+def stored(
+    connection: Connection, table: str, ids: Collection[int] | None = None
+) -> dict[int, list[float]]:
+    """The stored vectors by id: those of `ids`, or every row. A full scan, for maps and exports."""
+    _table(table)
+    wanted = None if ids is None else set(ids)
+    rows = connection.exec_driver_sql(f"SELECT id, embedding FROM {table}")
+    return {
+        id: list(struct.unpack(f"<{len(blob) // 4}f", blob))
+        for id, blob in rows
+        if wanted is None or id in wanted
+    }

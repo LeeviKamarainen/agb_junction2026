@@ -138,3 +138,21 @@ def test_wrong_width_and_unknown_table_are_rejected(db_path):
             vectors.upsert(connection, TABLE, 1, [1.0, 2.0])
         with pytest.raises(ValueError, match="Unknown vector table"):
             vectors.nearest(connection, "sqlite_master; DROP TABLE note", unit(0))
+
+
+def test_a_list_in_where_matches_any_of_its_values(db_path, monkeypatch):
+    monkeypatch.setitem(
+        vectors.VECTOR_TABLES, "frame_embedding", vectors.VectorTable(WIDTH, {"source": "TEXT"})
+    )
+    init_db()
+    with get_engine().begin() as connection:
+        for id, source in [(1, "a"), (2, "b"), (3, "c")]:
+            vectors.upsert(connection, "frame_embedding", id, unit(0), NOON, {"source": source})
+
+        some = vectors.nearest(connection, "frame_embedding", unit(0), where={"source": ["a", "c"]})
+        none = vectors.nearest(connection, "frame_embedding", unit(0), where={"source": []})
+        stored = vectors.stored(connection, "frame_embedding", {2, 3})
+
+    assert sorted(hit.id for hit in some) == [1, 3]
+    assert none == []
+    assert stored.keys() == {2, 3} and stored[2] == pytest.approx(unit(0))

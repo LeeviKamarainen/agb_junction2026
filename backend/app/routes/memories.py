@@ -1,20 +1,23 @@
+import base64
+import struct
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
-from sqlmodel import Session, col, select
+from sqlmodel import Session, col, func, select
 
 from app import agent, media, vectors
 from app.db import SessionDep, get_engine
 from app.llm import Chat, Embedder, UpstreamError, get_chat, get_embedder
-from app.models import Memory, MemoryPublic, TextMemoryCreate
+from app.models import CollectionCount, Memory, MemoryPublic, MemoryVector, TextMemoryCreate
 from app.search import (
     TABLE,
     SearchResult,
     VectorSearchArgs,
     add_memory,
+    clean_collection,
     public,
     vector_search,
     width_error,
@@ -26,12 +29,39 @@ ChatDep = Annotated[Chat, Depends(get_chat)]
 EmbedderDep = Annotated[Embedder, Depends(get_embedder)]
 
 MAX_UPLOAD = 25 * 1024 * 1024  # bytes per image, before it is shrunk
+MAX_VECTORS = 2000  # memories /memories/vectors sends at most, newest first
+
+CollectionsQuery = Annotated[
+    list[str], Query(description="Only these collections; leave out for every one")
+]
 
 
 def _aware(moment: datetime | None) -> datetime:
     if moment is None:
         return datetime.now(UTC)
     return moment if moment.tzinfo else moment.replace(tzinfo=UTC)
+
+
+def _collection(name: str | None) -> str:
+    try:
+        return clean_collection(name)
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
+
+
+def _stored_name(name: str) -> str:
+    """A collection name as stored, or as given when it is not allowed (it then matches none)."""
+    try:
+        return clean_collection(name)
+    except ValueError:
+        return name
+
+
+def _newest(collections: list[str]):
+    """Memories newest first, only in `collections` unless it is empty."""
+    query = select(Memory).order_by(col(Memory.created_at).desc(), col(Memory.id).desc())
+    names = [_stored_name(name) for name in collections if name.strip()]
+    return query.where(col(Memory.collection).in_(names)) if names else query
 
 
 def _embed_one(embed: Embedder, input: str) -> list[float]:
@@ -45,10 +75,37 @@ def _embed_one(embed: Embedder, input: str) -> list[float]:
 
 
 @router.get("/memories", response_model=list[MemoryPublic])
-def list_memories(session: SessionDep):
-    """Every memory, newest first."""
-    query = select(Memory).order_by(col(Memory.created_at).desc(), col(Memory.id).desc())
-    return [public(memory) for memory in session.exec(query.limit(500))]
+def list_memories(session: SessionDep, collection: CollectionsQuery = []):  # noqa: B006
+    """The newest 500 memories, newest first."""
+    return [public(memory) for memory in session.exec(_newest(collection).limit(500))]
+
+
+@router.get("/memories/collections", response_model=list[CollectionCount])
+def list_collections(session: SessionDep):
+    """Every collection that holds a memory, with how many, largest first."""
+    count = func.count(col(Memory.id))
+    query = select(Memory.collection, count).group_by(col(Memory.collection))
+    rows = session.exec(query.order_by(count.desc(), col(Memory.collection))).all()
+    return [CollectionCount(name=name, count=n) for name, n in rows]
+
+
+@router.get("/memories/vectors", response_model=list[MemoryVector])
+def memory_vectors(session: SessionDep, collection: CollectionsQuery = []):  # noqa: B006
+    """The stored embeddings with their memories, for drawing a map: the newest 2000.
+
+    Each embedding is base64 of its float32 numbers, little-endian: a third of the size of a
+    JSON list.
+    """
+    memories = session.exec(_newest(collection).limit(MAX_VECTORS)).all()
+    stored = vectors.stored(session.connection(), TABLE, {m.id for m in memories if m.id})
+    return [
+        MemoryVector(
+            **public(memory).model_dump(),
+            embedding=base64.b64encode(struct.pack(f"<{len(vector)}f", *vector)).decode(),
+        )
+        for memory in memories
+        if (vector := stored.get(memory.id or 0)) is not None
+    ]
 
 
 @router.post("/memories/image", response_model=MemoryPublic, status_code=201)
@@ -58,8 +115,13 @@ def add_image(
     file: UploadFile,
     text: Annotated[str, Form(max_length=2000)] = "",
     created_at: Annotated[datetime | None, Form()] = None,
+    collection: Annotated[str, Form(max_length=40)] = "manual",
 ):
-    """Store one image: shrink it, embed it with the image model, keep an optional caption."""
+    """Store one image: shrink it, embed it with the image model, keep an optional caption.
+
+    collection groups it, e.g. "glasses" for stills from the glasses (default "manual").
+    """
+    collection = _collection(collection)
     data = file.file.read(MAX_UPLOAD + 1)
     if len(data) > MAX_UPLOAD:
         raise HTTPException(413, "Images can be at most 25 MB")
@@ -69,7 +131,9 @@ def add_image(
         raise HTTPException(422, str(error)) from error
     try:
         vector = _embed_one(embed, media.data_url(name))
-        memory = add_memory(session, "image", vector, _aware(created_at), text.strip(), name)
+        memory = add_memory(
+            session, "image", vector, _aware(created_at), text.strip(), name, collection
+        )
         session.commit()
     except BaseException:
         media.delete(name)
@@ -80,8 +144,11 @@ def add_image(
 @router.post("/memories/text", response_model=MemoryPublic, status_code=201)
 def add_text(body: TextMemoryCreate, session: SessionDep, embed: EmbedderDep):
     """Store a text memory, embedded with the text model."""
+    collection = _collection(body.collection)
     vector = _embed_one(embed, body.text)
-    memory = add_memory(session, "text", vector, _aware(body.created_at), body.text)
+    memory = add_memory(
+        session, "text", vector, _aware(body.created_at), body.text, collection=collection
+    )
     session.commit()
     return public(memory)
 
@@ -119,7 +186,7 @@ def search(args: VectorSearchArgs, session: SessionDep, embed: EmbedderDep):
 def ask(body: agent.AskRequest, session: SessionDep, chat: ChatDep, embed: EmbedderDep):
     """Answer a question from the memories: the chat model searches them, then answers."""
     try:
-        return agent.answer(session, body.question, chat, embed)
+        return agent.answer(session, body.question, chat, embed, collections=body.collections)
     except UpstreamError as error:
         raise HTTPException(502, str(error)) from error
 
@@ -139,7 +206,9 @@ def ask_stream(body: agent.AskRequest, chat: ChatDep, embed: EmbedderDep):
         # Its own session: the request's would close before the stream ends.
         with Session(get_engine()) as session:
             try:
-                for step in agent.run(session, body.question, chat, embed):
+                for step in agent.run(
+                    session, body.question, chat, embed, collections=body.collections
+                ):
                     yield step.model_dump_json() + "\n"
             except UpstreamError as error:
                 yield agent.error_line(str(error))

@@ -10,6 +10,7 @@ VectorSearchArgs validates what it sends back. Add memories with add_memory.
 """
 
 import json
+import re
 from collections import defaultdict
 from collections.abc import Sequence
 from datetime import UTC, datetime
@@ -25,6 +26,8 @@ from app.models import Memory, MemoryPublic
 
 TABLE = "memory_embedding"
 MemoryKind = Literal["image", "text"]
+DEFAULT_COLLECTION = "manual"
+COLLECTION = re.compile(r"[a-z0-9][a-z0-9_-]{0,39}")
 RRF_K = 60  # the usual reciprocal rank fusion constant: damps the gap between rank 1 and rank 2
 CANDIDATES_PER_LIST = 4  # each list contributes up to limit * this candidates before fusion
 
@@ -48,12 +51,14 @@ class VectorSearchArgs(BaseModel):
     keywords: list[str] = Field(default_factory=list, max_length=10)
     timespan: Timespan | None = None
     kinds: list[MemoryKind] = Field(default_factory=list)  # empty: every kind
+    collections: list[str] = Field(default_factory=list, max_length=10)  # empty: every collection
     limit: int = Field(default=8, ge=1, le=20)
 
 
 class SearchResult(BaseModel):
     id: int
     kind: str
+    collection: str
     created_at: datetime
     text: str
     image_url: str | None  # for the browser; the chat model gets the file itself
@@ -107,6 +112,13 @@ VECTOR_SEARCH_TOOL: dict[str, Any] = {
                     "items": {"type": "string", "enum": ["image", "text"]},
                     "description": "Only these kinds of memory. Leave out for all.",
                 },
+                "collections": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Only memories in these collections, e.g. 'glasses' for what "
+                    "the glasses recorded or 'manual' for what the user added by hand. Leave out "
+                    "for all.",
+                },
                 "limit": {
                     "type": "integer",
                     "description": "How many results to return, 1 to 20. Default 8.",
@@ -116,6 +128,20 @@ VECTOR_SEARCH_TOOL: dict[str, Any] = {
         },
     },
 }
+
+
+def clean_collection(name: str | None) -> str:
+    """A collection name as stored: trimmed and lower case, `manual` when empty.
+
+    Raises ValueError unless it is 1 to 40 of a-z, 0-9, _ and -, starting with a letter or digit.
+    """
+    cleaned = (name or "").strip().lower() or DEFAULT_COLLECTION
+    if not COLLECTION.fullmatch(cleaned):
+        raise ValueError(
+            f"Collection {name!r} must be 1 to 40 of a-z, 0-9, _ and -, starting with a letter "
+            "or digit"
+        )
+    return cleaned
 
 
 def image_url(memory: Memory) -> str | None:
@@ -130,6 +156,7 @@ def public(memory: Memory) -> MemoryPublic:
         created_at=memory.created_at,
         text=memory.text,
         image_url=image_url(memory),
+        collection=memory.collection,
     )
 
 
@@ -140,22 +167,45 @@ def add_memory(
     created_at: datetime | None = None,
     text: str = "",
     image_file: str | None = None,
+    collection: str = DEFAULT_COLLECTION,
 ) -> Memory:
     """Store a memory and its embedding in the session's transaction; the caller commits.
 
-    created_at defaults to now and must be timezone-aware.
+    created_at defaults to now and must be timezone-aware. collection is cleaned with
+    clean_collection, so it raises ValueError for a name that is not allowed.
     """
+    collection = clean_collection(collection)
     if kind not in ("image", "text"):
         raise ValueError(f"Unknown memory kind {kind!r}")
     moment = created_at or datetime.now(UTC)
     if moment.tzinfo is None:
         raise ValueError("Timestamps must be timezone-aware, e.g. datetime.now(UTC)")
-    memory = Memory(kind=kind, created_at=moment, text=text, image_file=image_file)
+    memory = Memory(
+        kind=kind, created_at=moment, text=text, image_file=image_file, collection=collection
+    )
     session.add(memory)
     session.flush()  # assigns the id
     assert memory.id is not None
-    vectors.upsert(session.connection(), TABLE, memory.id, embedding, moment, {"kind": kind})
+    vectors.upsert(
+        session.connection(),
+        TABLE,
+        memory.id,
+        embedding,
+        moment,
+        {"kind": kind, "collection": collection},
+    )
     return memory
+
+
+def _collections(args: VectorSearchArgs) -> list[str]:
+    """The collections asked for, as stored. A name that is not allowed cannot match any."""
+    names = []
+    for name in args.collections:
+        try:
+            names.append(clean_collection(name))
+        except ValueError:
+            names.append(name)  # kept so the filter is not dropped: it matches nothing
+    return list(dict.fromkeys(names))
 
 
 def _keyword_ranking(
@@ -175,6 +225,8 @@ def _keyword_ranking(
     )
     if args.kinds:
         query = query.where(col(Memory.kind).in_(args.kinds))
+    if collections := _collections(args):
+        query = query.where(col(Memory.collection).in_(collections))
     if args.timespan and args.timespan.start:
         query = query.where(Memory.created_at >= args.timespan.start)
     if args.timespan and args.timespan.end:
@@ -208,10 +260,11 @@ def vector_search(session: Session, args: VectorSearchArgs, embed: Embedder) -> 
     queries = [q for q in queries if q]
     since = args.timespan.start if args.timespan else None
     until = args.timespan.end if args.timespan else None
-    # vec0 filters metadata by equality only, so search once per kind asked for.
-    filters: list[dict[str, Any] | None] = (
-        [{"kind": kind} for kind in dict.fromkeys(args.kinds)] if args.kinds else [None]
-    )
+    where: dict[str, Any] = {}
+    if args.kinds:
+        where["kind"] = list(dict.fromkeys(args.kinds))
+    if collections := _collections(args):
+        where["collection"] = collections
 
     rankings: list[list[int]] = []
     best_distance: dict[int, float] = {}
@@ -219,13 +272,8 @@ def vector_search(session: Session, args: VectorSearchArgs, embed: Embedder) -> 
     for vector in embed(queries) if queries else []:
         if problem := width_error(len(vector)):
             raise UpstreamError(problem)
-        hits = [
-            hit
-            for where in filters
-            for hit in vectors.nearest(connection, TABLE, vector, candidates, since, until, where)
-        ]
-        hits.sort(key=lambda hit: hit.distance)
-        rankings.append([hit.id for hit in hits[:candidates]])
+        hits = vectors.nearest(connection, TABLE, vector, candidates, since, until, where)
+        rankings.append([hit.id for hit in hits])
         for hit in hits:
             best_distance[hit.id] = min(hit.distance, best_distance.get(hit.id, hit.distance))
 
@@ -243,6 +291,7 @@ def vector_search(session: Session, args: VectorSearchArgs, embed: Embedder) -> 
         SearchResult(
             id=id,
             kind=memories[id].kind,
+            collection=memories[id].collection,
             created_at=memories[id].created_at,
             text=memories[id].text,
             image_url=image_url(memories[id]),
@@ -262,6 +311,7 @@ def for_model(results: list[SearchResult]) -> str:
             {
                 "id": result.id,
                 "kind": result.kind,
+                "collection": result.collection,
                 "seen_at": result.created_at.isoformat(timespec="seconds"),
                 "text": result.text,
                 "image_attached": result.image_url is not None,

@@ -33,6 +33,10 @@ class Memory(SQLModel, table=True):
     # by keyword too.
     text: str = ""
     image_file: str | None = None  # the JPEG's name in the media folder (app/media.py)
+    # A keyword grouping memories by where they came from, e.g. "manual" (added on the page) or
+    # "glasses". Searches can be limited to some collections; app.search.clean_collection says
+    # what a name may be.
+    collection: str = Field(default="manual", index=True)
 
 
 class MemoryPublic(SQLModel):
@@ -41,8 +45,19 @@ class MemoryPublic(SQLModel):
     created_at: datetime
     text: str
     image_url: str | None  # /api/memories/{id}/image, for the browser
+    collection: str
+
+
+class CollectionCount(SQLModel):
+    name: str
+    count: int
+
+
+class MemoryVector(MemoryPublic):
+    embedding: str  # base64 of the little-endian float32 vector, 768 numbers
 
 
 class TextMemoryCreate(SQLModel):
     text: str = Field(min_length=1, max_length=2000)
     created_at: datetime | None = None  # defaults to now; without an offset it is taken as UTC
+    collection: str = Field(default="manual", max_length=40)

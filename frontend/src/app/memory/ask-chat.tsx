@@ -14,7 +14,14 @@ import { type FormEvent, useEffect, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 
-import { errorText, formatTime, type SearchResult, type Step } from "./types";
+import { CollectionFilter } from "./collections";
+import {
+  type CollectionCount,
+  errorText,
+  formatTime,
+  type SearchResult,
+  type Step,
+} from "./types";
 
 type Exchange = {
   id: number;
@@ -29,8 +36,20 @@ const EXAMPLES = [
   "Who did I have coffee with?",
 ];
 
-export function AskChat() {
+export function AskChat({
+  collections = [],
+  onFound,
+}: {
+  collections?: CollectionCount[];
+  /** Every memory the latest question's searches returned so far, first seen first. */
+  onFound?: (ids: number[]) => void;
+} = {}) {
   const [exchanges, setExchanges] = useState<Exchange[]>([]);
+  const [searchIn, setSearchIn] = useState<string[]>([]);
+  // A collection whose last memory was deleted drops out of the filter.
+  const active = searchIn.filter((name) =>
+    collections.some((collection) => collection.name === name),
+  );
   const [question, setQuestion] = useState("");
   const [busy, setBusy] = useState(false);
   const bottom = useRef<HTMLDivElement>(null);
@@ -63,6 +82,8 @@ export function AskChat() {
     ]);
     setQuestion("");
     setBusy(true);
+    onFound?.([]);
+    const found: number[] = [];
     const fail = (content: string) =>
       addStep(id, { type: "error", round: 0, elapsed_ms: 0, content }, true);
 
@@ -70,7 +91,7 @@ export function AskChat() {
       const response = await fetch("/api/ask/stream", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question: trimmed }),
+        body: JSON.stringify({ question: trimmed, collections: active }),
       });
       if (!response.ok || !response.body) {
         const body = await response.json().catch(() => null);
@@ -91,6 +112,13 @@ export function AskChat() {
           if (!line.trim()) continue;
           const step = JSON.parse(line) as Step;
           finished ||= step.type === "answer" || step.type === "error";
+          const fresh = (step.results ?? [])
+            .map((result) => result.id)
+            .filter((resultId) => !found.includes(resultId));
+          if (fresh.length) {
+            found.push(...fresh);
+            onFound?.([...found]);
+          }
           addStep(id, step, finished);
         }
       }
@@ -161,10 +189,16 @@ export function AskChat() {
         <div ref={bottom} />
       </div>
 
-      <form
-        onSubmit={submit}
-        className="flex items-end gap-2 border-t border-border p-3"
-      >
+      <div className="border-t border-border px-3 pt-3">
+        <CollectionFilter
+          label="Search in"
+          collections={collections}
+          selected={active}
+          onChange={setSearchIn}
+          disabled={busy}
+        />
+      </div>
+      <form onSubmit={submit} className="flex items-end gap-2 p-3">
         <label htmlFor="question" className="sr-only">
           Your question
         </label>

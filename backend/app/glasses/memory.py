@@ -14,6 +14,8 @@ from app import agent, media, vectors
 from app.llm import Chat, Embedder, UpstreamError
 from app.search import TABLE, add_memory
 
+COLLECTION = "glasses"  # the collection photos from the glasses are stored in
+
 DESCRIBE = (
     "This photo was taken just now through the wearer's smart glasses. In one or two short "
     "sentences, say what is in front of them, naming the objects they might later look for."
@@ -42,14 +44,19 @@ def describe(chat: Chat, jpeg: bytes) -> str:
 
 
 def remember(session: Session, embed: Embedder, jpeg: bytes, caption: str) -> int:
-    """Stores a photo as an image memory and returns its id. Raises UpstreamError."""
+    """Stores a photo as an image memory in the glasses collection and returns its id.
+
+    Raises UpstreamError.
+    """
     name = media.save_image(jpeg)
     try:
         (vector,) = embed([media.data_url(name)])
         width = vectors.VECTOR_TABLES[TABLE].dimensions
         if len(vector) != width:
             raise UpstreamError(f"The embedding model gave {len(vector)} numbers, not {width}")
-        memory = add_memory(session, "image", vector, datetime.now(UTC), caption, name)
+        memory = add_memory(
+            session, "image", vector, datetime.now(UTC), caption, name, collection=COLLECTION
+        )
         session.commit()
     except BaseException:
         media.delete(name)

@@ -3,6 +3,8 @@ import type { components } from "@/lib/api/schema";
 export type Memory = components["schemas"]["MemoryPublic"];
 export type SearchResult = components["schemas"]["SearchResult"];
 export type Step = components["schemas"]["Step"];
+export type CollectionCount = components["schemas"]["CollectionCount"];
+export type MemoryVector = components["schemas"]["MemoryVector"];
 
 /** FastAPI errors carry `detail`: a string, or a list of validation problems. */
 export function errorText(body: unknown, fallback: string): string {
