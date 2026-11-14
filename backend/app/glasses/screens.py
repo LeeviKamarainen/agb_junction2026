@@ -9,7 +9,8 @@ the microphone records, the client draws its own red light in a corner.
 
 import re
 
-from app.glasses.layout import FlexBox, GlassesReply, Icon, Text
+from app.glasses.dejavu import Recall
+from app.glasses.layout import FlexBox, GlassesReply, Icon, Image, Text
 
 PAD = 32
 
@@ -56,6 +57,48 @@ def memory_answer(question: str, answer: str) -> GlassesReply:
         ),
         speech=said,
         dismiss_after_s=_seconds_to_read(question + " " + said),
+    )
+
+
+def recall(found: Recall) -> GlassesReply:
+    """Déjà vu: the earlier stills most like what the wearer is looking at, and whether the chat
+    model finds any of them the same thing. Three across fill the display's width."""
+    said = plain(found.say)
+    title = f"Seen {found.last_seen}" if found.last_seen else "Not seen before"
+    stills = [
+        FlexBox(
+            gap=4,
+            children=[
+                Image(
+                    src=f"/api/memories/{still.memory_id}/image",
+                    alt=f"Seen {still.ago}",
+                    width=168,
+                    height=95,
+                ),
+                Text(value=("Same, " if still.same else "") + still.ago, style="CAPTION"),
+            ],
+        )
+        for still in found.stills
+    ]
+    return GlassesReply(
+        intent="recall",
+        screen=_screen(
+            _title("check" if found.last_seen else "alert", title),
+            *([FlexBox(direction="row", gap=16, children=stills)] if stills else []),
+            Text(value=said, style="BODY" if len(said) <= 160 else "CAPTION"),
+        ),
+        speech=f"You last saw this {found.last_seen}. {said}" if found.last_seen else said,
+        dismiss_after_s=max(8.0, _seconds_to_read(said)),
+    )
+
+
+def recall_needs_still() -> GlassesReply:
+    text = "Send a photo of it first, then ask again."
+    return GlassesReply(
+        intent="recall",
+        screen=_screen(_title("camera", "I need to see it"), Text(value=text, style="CAPTION")),
+        speech=text,
+        dismiss_after_s=5,
     )
 
 

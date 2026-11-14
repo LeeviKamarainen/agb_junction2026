@@ -218,7 +218,7 @@ def test_ask_searches_then_answers_from_the_results(client, memories):
     assert [source["id"] for source in body["sources"]] == [memories[0]]
 
     messages, tools = gemma.calls[1]
-    assert tools == [VECTOR_SEARCH_TOOL]
+    assert tools == [VECTOR_SEARCH_TOOL, agent.START_WATCHING_TOOL]
     tool_message, images = messages[-2], messages[-1]
     assert tool_message["role"] == "tool" and tool_message["tool_call_id"] == "a"
     assert json.loads(tool_message["content"])[0]["id"] == memories[0]

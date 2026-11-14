@@ -10,7 +10,7 @@ import {
   SendHorizontal,
   Sparkles,
 } from "lucide-react";
-import { type FormEvent, useEffect, useRef, useState } from "react";
+import { type FormEvent, useEffect, useId, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 
@@ -45,6 +45,8 @@ export function AskChat({
   examples = EXAMPLES,
   intro = "Ask about your memories. Gemma decides what to search for; each tool call, its arguments and the results appear here as they happen.",
   className = "min-h-[70vh]",
+  special,
+  onDone,
 }: {
   compact?: boolean;
   beforeAsk?: () => Promise<void>;
@@ -57,6 +59,11 @@ export function AskChat({
   intro?: string;
   /** Sizes the panel. */
   className?: string;
+  /** A question the page answers itself instead of Gemma's question loop: its answer, or null
+   * for any other question. */
+  special?: (question: string) => Promise<string> | null;
+  /** An exchange ended, in an answer or an error. */
+  onDone?: () => void;
 } = {}) {
   const [exchanges, setExchanges] = useState<Exchange[]>([]);
   const [searchIn, setSearchIn] = useState<string[]>([]);
@@ -69,6 +76,7 @@ export function AskChat({
   const [question, setQuestion] = useState("");
   const [busy, setBusy] = useState(false);
   const bottom = useRef<HTMLDivElement>(null);
+  const ids = useId(); // the page may hold more than one chat
 
   useEffect(() => {
     if (exchanges.length) bottom.current?.scrollIntoView({ behavior: "smooth", block: "end" });
@@ -104,6 +112,14 @@ export function AskChat({
       addStep(id, { type: "error", round: 0, elapsed_ms: 0, content }, true);
 
     try {
+      const own = special?.(trimmed);
+      if (own) {
+        const started = performance.now();
+        const content = await own;
+        const elapsed_ms = Math.round(performance.now() - started);
+        addStep(id, { type: "answer", round: 0, elapsed_ms, content }, true);
+        return;
+      }
       await beforeAsk?.();
       const response = await fetch("/api/ask/stream", {
         method: "POST",
@@ -148,6 +164,7 @@ export function AskChat({
       );
     } finally {
       setBusy(false);
+      onDone?.();
     }
   }
 
@@ -158,11 +175,14 @@ export function AskChat({
 
   return (
     <section
-      aria-labelledby="chat-title"
+      aria-labelledby={`${ids}-title`}
       className={`flex flex-col rounded-md border border-border bg-card ${compact ? "home-ask" : ""} ${className}`}
     >
       {!compact && <div className="flex items-center justify-between gap-2 border-b border-border p-4">
-        <h2 id="chat-title" className="flex items-center gap-2 font-semibold">
+        <h2
+          id={`${ids}-title`}
+          className="flex items-center gap-2 font-semibold"
+        >
           <Bot size={18} aria-hidden="true" /> Ask Gemma
         </h2>
         {exchanges.length > 0 && (
@@ -218,11 +238,11 @@ export function AskChat({
         </div>
       )}
       <form onSubmit={submit} className="flex items-end gap-2 p-3">
-        <label htmlFor="question" className="sr-only">
+        <label htmlFor={`${ids}-question`} className="sr-only">
           Your question
         </label>
         <textarea
-          id="question"
+          id={`${ids}-question`}
           rows={2}
           maxLength={2000}
           value={question}

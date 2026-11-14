@@ -1,6 +1,6 @@
 "use client";
 
-import { LoaderCircle, Save, Sparkles, Trash2, Zap } from "lucide-react";
+import { Save, Trash2, Zap } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -22,13 +22,13 @@ const field =
 const EDITED: (keyof Draft)[] = ["name", "watch_for", "sigmas"];
 
 /**
- * What your glasses watch out for. You say what you want watched, that is a goal, and Gemma
- * writes its triggers; each stream frame is then scored against the triggers of your enabled
+ * What your glasses watch out for. You ask Gemma in the chat to watch for something, that is a
+ * goal, and it writes its triggers; each stream frame is then scored against the triggers of your enabled
  * goals, and one that reaches its level asks Gemma about the goal. A goal's triggers are switched
  * on and off and removed together. `lastMatches` (trigger id -> score and level on the latest
  * frame) shows how close each is. The list reloads on a new `firedCount`, so "last fired" and
  * the measured levels stay current, and each time it becomes `visible`, since Gemma may have
- * removed a goal in the chat meanwhile.
+ * added or removed a goal in the chat meanwhile.
  */
 export function TriggerEditor({
   lastMatches,
@@ -41,8 +41,6 @@ export function TriggerEditor({
 }) {
   const [goals, setGoals] = useState<Goal[] | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [text, setText] = useState("");
-  const [writing, setWriting] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -62,24 +60,6 @@ export function TriggerEditor({
     // eslint-disable-next-line react-hooks/set-state-in-effect
     if (visible) void load();
   }, [load, firedCount, visible]);
-
-  async function generate() {
-    setError(null);
-    setWriting(true);
-    try {
-      const { error: problem } = await api.POST("/api/glasses/goals", {
-        body: { text: text.trim() },
-      });
-      if (problem)
-        return setError(errorText(problem, "Gemma could not write triggers"));
-      setText("");
-      await load();
-    } catch {
-      setError("Could not reach the backend");
-    } finally {
-      setWriting(false);
-    }
-  }
 
   /** Runs one change, shows what went wrong, and reloads the goals. */
   async function change(
@@ -109,9 +89,9 @@ export function TriggerEditor({
           <Zap size={16} aria-hidden="true" /> What the glasses watch out for
         </h2>
         <p className="text-xs text-muted-foreground">
-          Say what the glasses should watch out for and Gemma writes the
-          triggers for that goal. They are yours alone. Each stream frame gets a
-          score per trigger: how much more it looks like the &ldquo;watch
+          Ask Gemma in the chat above to watch out for something and it writes
+          the triggers for that goal. They are yours alone. Each stream frame
+          gets a score per trigger: how much more it looks like the &ldquo;watch
           for&rdquo; text than the last 20 seconds did. When a score reaches its
           level, Gemma looks at the frame with your goal in mind: it writes the
           message for the glasses, or finds a false alarm, says nothing and
@@ -120,38 +100,6 @@ export function TriggerEditor({
           it here or ask Gemma to stop watching for it.
         </p>
       </div>
-      <form
-        className="flex flex-col gap-2 rounded-lg border border-dashed border-border p-3"
-        onSubmit={(event) => {
-          event.preventDefault();
-          void generate();
-        }}
-      >
-        <label
-          htmlFor="trigger-goal"
-          className="text-sm font-medium text-foreground"
-        >
-          What should the glasses watch out for?
-        </label>
-        <textarea
-          id="trigger-goal"
-          className={field}
-          rows={2}
-          value={text}
-          maxLength={500}
-          disabled={writing}
-          placeholder="e.g. I'm allergic to nuts, warn me when I pick up food that might have them."
-          onChange={(e) => setText(e.target.value)}
-        />
-        <Button type="submit" disabled={writing || !text.trim()}>
-          {writing ? (
-            <LoaderCircle className="animate-spin" aria-hidden="true" />
-          ) : (
-            <Sparkles aria-hidden="true" />
-          )}
-          {writing ? "Gemma is writing triggers…" : "Ask Gemma for triggers"}
-        </Button>
-      </form>
       {error && (
         <p className="text-sm text-destructive" role="alert">
           {error}
