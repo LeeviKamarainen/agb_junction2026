@@ -834,6 +834,10 @@ export interface components {
             action?: string | null;
             /** Question */
             question?: string | null;
+            /** Demo Clip Id */
+            demo_clip_id?: number | null;
+            /** Demo At S */
+            demo_at_s?: number | null;
         };
         /**
          * Credentials

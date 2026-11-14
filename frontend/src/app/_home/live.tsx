@@ -43,11 +43,10 @@ const ANSWER_MS = 15_000; // how long an answer stays on the view
 const MAX_SIDE = 896; // the glasses stream at 504x896: send about that much, not more
 
 const EXAMPLES = [
-  "What did I see today?",
+  "Where have I seen this one?",
   "Warn me when I see a bicycle",
   "Where did I leave my keys?",
 ];
-const CAMERA_EXAMPLES = ["Where have I seen this one?", ...EXAMPLES.slice(1)];
 
 /**
  * The home page: the live view of what the glasses see, the day chat and the triggers. The view
@@ -158,6 +157,7 @@ export function LiveHome() {
 
   async function chooseSource(next: Source) {
     if (next === source) return;
+    setRecalled(null); // it was about the picture being left
     // A new stream for the new picture: the triggers' baseline is measured per stream.
     streamId.current = crypto.randomUUID();
     if (next === "camera") {
@@ -168,7 +168,6 @@ export function LiveHome() {
       }
     } else {
       stopCamera();
-      setRecalled(null);
       setSource("demo");
     }
   }
@@ -291,11 +290,20 @@ export function LiveHome() {
     return () => clearTimeout(timer);
   }, [recalled]);
 
-  /** Déjà vu, as the glasses ask it: where the newest camera frame was seen before. */
+  /** Where the demo clip on the view is now, in seconds: what its frame is in memory. */
+  function clipPosition(): number {
+    if (clip?.kind === "video") return clipVideoRef.current?.currentTime ?? 0;
+    return (clip ? imageIndex % clip.assets.length : 0) * (clip?.image_seconds ?? 0);
+  }
+
+  /** Déjà vu, as the glasses ask it: where what is on the view was seen before. The newest
+   * camera frame; or the demo clip's frame where it is playing, since the clips are memories. */
   async function recall(question: string): Promise<string> {
     await ensureSession();
+    const demo =
+      source === "demo" && clip ? { demo_clip_id: clip.id, demo_at_s: clipPosition() } : {};
     const { data, error: problem } = await api.POST("/api/glasses/command", {
-      body: { question },
+      body: { question, ...demo },
     });
     if (problem || !data) throw new Error(errorText(problem, "Could not ask the glasses"));
     setRecalled(data);
@@ -514,11 +522,11 @@ export function LiveHome() {
           voice
           pinned={[]}
           beforeAsk={ensureSession}
-          examples={source === "camera" ? CAMERA_EXAMPLES : EXAMPLES}
+          examples={EXAMPLES}
           intro="Ask about the demo day, or what your camera has seen. Ask Gemma to warn you about something, then stream: every frame is checked for it."
           className="min-h-[24rem] lg:max-h-[70vh]"
           special={(question) =>
-            source === "camera" && RECALL.test(question) ? recall(question) : null
+            RECALL.test(question) ? recall(question) : null
           }
           onAnswer={(text, question) => {
             setAnswer({ question, text });

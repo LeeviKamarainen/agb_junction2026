@@ -579,3 +579,72 @@ def test_recall_only_looks_in_the_askers_memories(client, db, guest):
 
     assert images(reply["screen"]) == []
     assert "Not seen before" in texts(reply["screen"])
+
+
+def demo_clip(db, title: str, frames: list[tuple[float, float]]) -> tuple[int, list[int]]:
+    """A published demo clip stored as demo memories, as app/demo.py stores one: a frame per
+    (seconds into the clip, how far its vector turns from the current view). Its id and the
+    memories' ids."""
+    from app.models import Showcase
+
+    async def add(session):
+        clip = Showcase(title=title, published=True)
+        session.add(clip)
+        await session.flush()
+        end = datetime.now(UTC) - timedelta(hours=1)
+        ids = []
+        for at, turn in frames:
+            memory = await add_memory(
+                session,
+                "image",
+                [1.0, turn] + [0.0] * (WIDTH - 2),
+                end - timedelta(seconds=frames[-1][0] - at),
+                text=title,
+                image_file=media.save_image(JPEG),
+                collection="demo",
+                owner_id=0,
+            )
+            memory.source = f"clip:{clip.id}:abc"
+            session.add(memory)
+            ids.append(memory.id)
+        await session.commit()
+        return clip.id, ids
+
+    return db(add)
+
+
+def ask_demo(client, clip_id: int, at_s: float, **headers) -> dict:
+    body = {"question": "have I seen this one before", "demo_clip_id": clip_id, "demo_at_s": at_s}
+    reply = client.post("/api/glasses/command", json=body, **headers)
+    assert reply.status_code == 200, reply.text
+    return reply.json()
+
+
+def test_recall_on_a_demo_clip_looks_in_its_earlier_frames_and_the_other_clips(client, db, guest):
+    # At 0 s the thing in view now; at 100 s the current frame, with the look from 80 s on; a
+    # frame still to come at 150 s. They all look alike, and so does a frame of another clip.
+    clip, (early, _start, look_, now_, later) = demo_clip(
+        db, "Walk", [(0, 0.0), (10, 0.1), (80, 0.0), (100, 0.0), (150, 0.0)]
+    )
+    _other, (kitchen,) = demo_clip(db, "Kitchen", [(0, 0.05)])
+    use_models(chat=says('{"same": [1], "say": "The red mug, on the bench."}'))
+
+    reply = ask_demo(client, clip, 110, headers=guest("aino"))  # a guest sees the demo
+
+    shown = images(reply["screen"])
+    assert f"/api/memories/{early}/image" in shown
+    assert f"/api/memories/{kitchen}/image" in shown
+    for skipped in (look_, now_, later):
+        assert f"/api/memories/{skipped}/image" not in shown
+    said = texts(reply["screen"])
+    assert "Seen 1 minute ago" in said  # 100 s into the clip, against the frame at 0 s
+    assert "in the demo “Kitchen”" in said
+
+
+def test_recall_on_a_demo_clip_not_stored_yet_says_so(client, db):
+    use_models(chat=says('{"same": [], "say": "x"}'))
+
+    reply = ask_demo(client, 99, 5)
+
+    assert reply["intent"] == "recall"
+    assert "Not in memory yet" in texts(reply["screen"])

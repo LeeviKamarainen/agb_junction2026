@@ -66,10 +66,16 @@ async def worker(session_factory, embed: Embedder, retry_s: float) -> None:
         _wanted = None
 
 
+def clip_prefix(clip_id: int) -> str:
+    """How the `source` of every memory of a clip starts, whatever its media."""
+    return f"{_PREFIX}{clip_id}:"
+
+
 def source(clip: Showcase) -> str:
     """What a clip's memories carry: its id and a digest of its media, so new media is noticed."""
     digest = hashlib.sha1(clip.assets_json.encode()).hexdigest()[:12]
-    return f"{_PREFIX}{clip.id}:{digest}"
+    assert clip.id is not None
+    return f"{clip_prefix(clip.id)}{digest}"
 
 
 def video_frames(path: str, every_s: float = 1 / FPS, limit: int = MAX_FRAMES):
