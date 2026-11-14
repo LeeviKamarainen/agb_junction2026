@@ -63,15 +63,20 @@ export function TriggerEditor({
   async function generate() {
     setError(null);
     setWriting(true);
-    const { error: problem } = await api.POST(
-      "/api/glasses/triggers/generate",
-      { body: { goal: goal.trim() } },
-    );
-    setWriting(false);
-    if (problem)
-      return setError(errorText(problem, "Gemma could not write triggers"));
-    setGoal("");
-    await load();
+    try {
+      const { error: problem } = await api.POST(
+        "/api/glasses/triggers/generate",
+        { body: { goal: goal.trim() } },
+      );
+      if (problem)
+        return setError(errorText(problem, "Gemma could not write triggers"));
+      setGoal("");
+      await load();
+    } catch {
+      setError("Could not reach the backend");
+    } finally {
+      setWriting(false);
+    }
   }
 
   async function save(id: number, body: Draft) {

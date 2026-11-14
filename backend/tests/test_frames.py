@@ -177,7 +177,8 @@ def test_a_false_alarm_reaches_nobody_and_raises_the_level(client, scene, monkey
     monkeypatch.setattr(frames, "time", clock)
     add_trigger(client)
     warm_up(client, scene, clock=clock)
-    scene.say = None  # the chat model looks at the frame and does not find the keys
+    scene.image = toward_keys(0.70)  # something that looks a little like keys
+    scene.say = None  # the chat model looks at the frame and does not find them
 
     alarm = send(client, "stream", "s1").json()
     clock.now += scores.SKIP_S + 0.5
@@ -192,8 +193,11 @@ def test_a_false_alarm_reaches_nobody_and_raises_the_level(client, scene, monkey
     assert not same_again["matches"][0]["fired"] and scene.asked == 1
 
 
-@pytest.mark.parametrize("answer", ['```json\n{"say": null}\n```', '{"say": ""}', "null", ""])
-def test_every_way_of_saying_nothing_is_a_false_alarm(client, scene, answer):
+@pytest.mark.parametrize(
+    "answer",
+    ['```json\n{"say": null}\n```', '{"say": ""}', "null", "", "I do not see any keys here."],
+)
+def test_nothing_but_a_message_in_json_reaches_the_wearer(client, scene, answer):
     async def chat(messages, tools):
         return {"role": "assistant", "content": answer}
 
@@ -229,6 +233,52 @@ def test_without_a_working_chat_model_a_firing_says_nothing(client, scene, monke
     )
 
 
+def test_plain_words_are_not_taken_for_a_false_alarm(client, scene):
+    async def chat(messages, tools):
+        return {"role": "assistant", "content": "I do not see any keys here."}
+
+    app.dependency_overrides[optional_chat] = lambda: chat
+    add_trigger(client)
+    warm_up(client, scene)
+
+    body = send(client, "stream", "s1").json()
+
+    assert body["message"] is None and "did not answer with JSON" in body["note"]
+    # Nobody said it was a false alarm, so the level is the one measured.
+    assert client.get("/api/glasses/triggers").json()[0]["level"] == pytest.approx(
+        body["matches"][0]["level"], abs=1e-4
+    )
+
+
+def test_a_false_alarm_never_raises_the_level_out_of_reach(client, scene):
+    add_trigger(client)
+    warm_up(client, scene)
+    scene.say = None
+
+    alarm = send(client, "stream", "s1").json()  # the keys fill the view: a score near 0.4
+
+    assert alarm["matches"][0]["score"] > scores.MAX_LEVEL
+    assert client.get("/api/glasses/triggers").json()[0]["level"] == scores.MAX_LEVEL
+
+
+def test_a_trigger_deleted_while_the_chat_model_looks_is_no_error(client, scene):
+    trigger = add_trigger(client)
+    warm_up(client, scene)
+
+    async def chat(messages, tools):
+        gone = await anyio.to_thread.run_sync(
+            lambda: client.delete(f"/api/glasses/triggers/{trigger['id']}")
+        )
+        assert gone.status_code == 204
+        return {"role": "assistant", "content": '{"say": null}'}
+
+    app.dependency_overrides[optional_chat] = lambda: chat
+
+    reply = send(client, "stream", "s1")
+
+    assert reply.status_code == 200 and reply.json()["message"] is None
+
+
 def test_trigger_vectors_are_embedded_once(client, scene):
     add_trigger(client)
     send(client)
@@ -243,7 +293,7 @@ def test_the_chat_model_writes_the_message(client, scene):
 
     async def chat(messages, tools):
         seen.append(messages)
-        return {"role": "assistant", "content": "Your keys are on the hall table."}
+        return {"role": "assistant", "content": '{"say": "Your keys are on the hall table."}'}
 
     app.dependency_overrides[optional_chat] = lambda: chat
     add_trigger(client)
@@ -329,7 +379,7 @@ def test_the_trigger_is_committed_as_fired_before_the_message_is_written(client,
     async def chat(messages, tools):
         response = await anyio.to_thread.run_sync(lambda: client.get("/api/glasses/triggers"))
         fired_during_chat.append(response.json()[0]["last_fired_at"])
-        return {"role": "assistant", "content": "Keys!"}
+        return {"role": "assistant", "content": '{"say": "Keys!"}'}
 
     app.dependency_overrides[optional_chat] = lambda: chat
     add_trigger(client)

@@ -32,6 +32,9 @@ IDLE_S = 600.0  # a stream that sent nothing for this long is forgotten
 # After a trigger fires, nothing fires in the stream for this long: with two frames a second the
 # chat model is asked at most every 2.5 s, which gives it time to answer.
 SKIP_S = 2.0
+# The highest level worth having: on real footage a clear, close view scores 0.10 to 0.20, so a
+# trigger above this would hardly fire again.
+MAX_LEVEL = 0.15
 
 Vector = Sequence[float]
 
@@ -50,34 +53,40 @@ class Stream:
         self.series: dict[int, deque[tuple[float, float, float]]] = {}
         self.seen = 0.0
         self.quiet_until = 0.0  # no trigger fires before this, see SKIP_S
+        # `add` runs in a worker thread, `level` and `forget` on the event loop.
+        self._lock = threading.Lock()
 
     def add(self, now: float, vector: Vector, triggers: Mapping[int, Vector]) -> dict[int, float]:
         """Take in the frame seen at `now` (seconds on any steady clock) and give its score for
         each trigger. A trigger new to the stream is first scored on the frames kept, so it has
         a history at once."""
-        self.seen = now
-        oldest = now - NOISE_S - BASELINE_S
-        while self.frames and self.frames[0][0] < oldest:
-            self.frames.popleft()
-        for id in [id for id in self.series if id not in triggers]:
-            del self.series[id]
-        scores = {}
-        for id, wanted in triggers.items():
-            series = self.series.get(id)
-            if series is None:
-                series = self.series[id] = deque()
-                for when, kept in self.frames:
-                    _append(series, when, similarity(kept, wanted))
-            while series and series[0][0] < oldest:
-                series.popleft()
-            scores[id] = _append(series, now, similarity(vector, wanted))
-        self.frames.append((now, vector))
-        return scores
+        with self._lock:
+            self.seen = now
+            oldest = now - NOISE_S - BASELINE_S
+            while self.frames and self.frames[0][0] < oldest:
+                self.frames.popleft()
+            for id in [id for id in self.series if id not in triggers]:
+                del self.series[id]
+            scores = {}
+            for id, wanted in triggers.items():
+                series = self.series.get(id)
+                if series is None:
+                    series = self.series[id] = deque()
+                    for when, kept in self.frames:
+                        _append(series, when, similarity(kept, wanted))
+                while series and series[0][0] < oldest:
+                    series.popleft()
+                scores[id] = _append(series, now, similarity(vector, wanted))
+            self.frames.append((now, vector))
+            return scores
 
     def level(self, id: int, now: float, spreads: float) -> float | None:
         """The level for a trigger from its noise before `now`, or None while there are fewer
         than MIN_FRAMES frames to measure it on."""
-        past = [score for when, _, score in self.series.get(id, ()) if now - NOISE_S <= when < now]
+        with self._lock:
+            past = [
+                score for when, _, score in self.series.get(id, ()) if now - NOISE_S <= when < now
+            ]
         if len(past) < MIN_FRAMES:
             return None
         middle = median(past)
@@ -87,7 +96,8 @@ class Stream:
         return middle + spreads * max(spread, MIN_SPREAD)
 
     def forget(self, id: int) -> None:
-        self.series.pop(id, None)
+        with self._lock:
+            self.series.pop(id, None)
 
 
 def _append(series: deque[tuple[float, float, float]], when: float, value: float) -> float:

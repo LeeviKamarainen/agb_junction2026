@@ -9,7 +9,8 @@ Then a stream frame is scored against every enabled Trigger: how far its similar
 trigger's text is above what the stream has just been showing. The closest trigger whose score
 reaches its level fires: the chat model looks at the frame and writes the message the glasses
 show, or finds it a false alarm. Then nothing reaches the wearer, and the trigger's level is
-raised above that score. Without a chat model no trigger can say anything. After a firing the
+raised above that score (up to scores.MAX_LEVEL). Without a chat model, or when its answer cannot
+be read, no trigger says anything. After a firing the
 stream is quiet for scores.SKIP_S. The level is measured from the trigger's own noise in the
 stream (app/glasses/scores.py), so a trigger waits for a few seconds of frames before it can
 fire, and a single photo fires nothing. Most frames get an empty answer.
@@ -135,7 +136,8 @@ async def forget_trigger_vector(session: AsyncSession, trigger_id: int) -> None:
 
 async def _message(chat: Chat, trigger: Trigger, jpeg_name: str) -> str | None:
     """What to tell the wearer about the still that fired the trigger, or None when the chat
-    model finds it a false alarm. Raises UpstreamError when the model fails."""
+    model finds it a false alarm. Raises UpstreamError when the model fails and ValueError when
+    its answer cannot be read."""
     reply = await chat(
         [
             {"role": "system", "content": MESSAGE_SYSTEM},
@@ -161,10 +163,11 @@ async def _message(chat: Chat, trigger: Trigger, jpeg_name: str) -> str | None:
     try:
         # The JSON, with whatever the model wrapped around it (a code fence) cut off.
         say = json.loads(text[text.find("{") : text.rfind("}") + 1])["say"]
-    except (json.JSONDecodeError, KeyError, TypeError):
-        say = text  # a model that answered in plain words: those are the message
+    except (json.JSONDecodeError, KeyError, TypeError) as error:
+        # Plain words may be the model explaining that it sees nothing: not for the wearer.
+        raise ValueError(f"the chat model did not answer with JSON: {text[:80]!r}") from error
     say = say.strip() if isinstance(say, str) else ""
-    return None if say.lower() in ("", "null", "none") else say
+    return say or None
 
 
 async def receive(
@@ -274,16 +277,19 @@ async def receive(
                 return reply
             try:
                 text = await _message(chat, fired, name)
-            except UpstreamError as error:
+            except (UpstreamError, ValueError) as error:
                 reply.note = f"{fired.name} fired, but the chat model failed: {error}"
                 return reply
             if text is None:
-                fired.level = max(fired.level, fired_score + RAISE_BY)
-                session.add(fired)
-                await session.commit()
-                reply.note = (
-                    f"{fired.name} fired on a false alarm; its level is now {fired.level:.3f}"
-                )
+                reply.note = f"{fired.name} fired on a false alarm"
+                # Read again: the trigger may have been edited or deleted while the model looked.
+                current = await session.get(Trigger, fired.id, populate_existing=True)
+                if current is not None and current.level is not None:
+                    raised = max(current.level, fired_score + RAISE_BY)
+                    current.level = min(raised, max(current.level, scores.MAX_LEVEL))
+                    session.add(current)
+                    await session.commit()
+                    reply.note += f"; its level is now {current.level:.3f}"
             else:
                 reply.message = GlassesMessage(
                     type="trigger", title=fired.name, text=text, trigger_id=fired.id

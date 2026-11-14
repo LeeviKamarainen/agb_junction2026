@@ -37,7 +37,7 @@ export function MemoryLab() {
   const changed = useCallback(() => setVersion((n) => n + 1), []);
   const [matches, setMatches] = useState<Map<number, Match>>(new Map());
   const lastRefresh = useRef(0);
-  const [fired, setFired] = useState(0); // trigger messages received, to refresh "last fired"
+  const [fired, setFired] = useState(0); // triggers fired, to refresh "last fired" and levels
 
   return (
     <>
@@ -97,7 +97,8 @@ export function MemoryLab() {
                     ]),
                   ),
                 );
-                if (reply.message) setFired((n) => n + 1);
+                // A firing changes "last fired", and a false alarm the level too.
+                if (reply.matches?.some((m) => m.fired)) setFired((n) => n + 1);
                 const now = Date.now();
                 if (
                   reply.stored &&
