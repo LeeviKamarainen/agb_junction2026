@@ -5,7 +5,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from PIL import Image
 
-from app import media, vectors
+from app import agent, media, vectors
 from app.llm import UpstreamError, get_chat, get_embedder
 from app.main import app
 from app.search import (
@@ -13,6 +13,7 @@ from app.search import (
     VECTOR_SEARCH_TOOL,
     Timespan,
     VectorSearchArgs,
+    _keyword_ranking,
     add_memory,
     vector_search,
 )
@@ -118,8 +119,39 @@ def test_timespan_and_kinds_filter(memories, search):
     assert [result.id for result in texts] == [memories[2]]
 
 
-def test_naive_timespan_is_utc():
-    assert Timespan(start=datetime(2026, 11, 14, 9)).start == datetime(2026, 11, 14, 9, tzinfo=UTC)
+def test_naive_timespan_is_the_wearers_local_time():
+    # 09:00 in Helsinki in November is 07:00 UTC.
+    assert Timespan(start=datetime(2026, 11, 14, 9)).start == datetime(2026, 11, 14, 7, tzinfo=UTC)
+
+
+def test_a_local_timespan_selects_by_the_wearers_clock(memories, search, db):
+    # The memories are at 11:00, 12:00, 13:00 and 14:00 Helsinki time (09:00 to 12:00 UTC).
+    window = Timespan(start=datetime(2026, 11, 14, 12), end=datetime(2026, 11, 14, 14))
+    args = VectorSearchArgs(user_query="keys", keywords=["rex", "aino"], timespan=window)
+
+    # The vector table and the keyword search filter times apart, so check both.
+    keyword_ids, _ = db(lambda session: _keyword_ranking(session, args, 10, None))
+
+    assert {result.id for result in search(args)} == {memories[1], memories[2]}
+    assert set(keyword_ids) == {memories[1], memories[2]}
+
+
+def test_the_model_reads_and_writes_local_time(db, memories):
+    gemma = FakeGemma(
+        {"content": None, "tool_calls": [tool_call("a", user_query="keys", limit=1)]},
+        {"content": "On the table, at 11:00."},
+    )
+
+    async def ask(session):
+        steps = agent.run(session, "Where are my keys?", gemma, fake_embed, None, now=NOON)
+        return [step async for step in steps]
+
+    db(ask)
+    system = gemma.calls[0][0][0]["content"]
+    tool_message, images = gemma.calls[1][0][-2:]
+    assert "The current time is 2026-11-14T14:00:00+02:00" in system  # noon UTC
+    assert json.loads(tool_message["content"])[0]["seen_at"] == "2026-11-14T11:00:00+02:00"
+    assert images["content"][1]["text"].endswith("seen at 2026-11-14T11:00:00+02:00:")
 
 
 def test_add_memory_rejects_bad_input(db):

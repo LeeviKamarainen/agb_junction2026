@@ -15,6 +15,7 @@ from collections import defaultdict
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Any, Literal
+from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import or_
@@ -33,18 +34,30 @@ DEFAULT_COLLECTION = "manual"
 COLLECTION = re.compile(r"[a-z0-9][a-z0-9_-]{0,39}")
 RRF_K = 60  # the usual reciprocal rank fusion constant: damps the gap between rank 1 and rank 2
 CANDIDATES_PER_LIST = 4  # each list contributes up to limit * this candidates before fusion
+# The wearer's time zone (the event is in Espoo). Times the chat model reads and writes are local,
+# because "this morning" and "at ten" mean the wearer's clock; stored times stay UTC.
+LOCAL_TIMEZONE = ZoneInfo("Europe/Helsinki")
+
+
+def local(moment: datetime) -> str:
+    """A time as the chat model sees it: ISO 8601 in the wearer's time zone, with its offset."""
+    return moment.astimezone(LOCAL_TIMEZONE).isoformat(timespec="seconds")
 
 
 class Timespan(BaseModel):
-    start: datetime | None = Field(None, description="Inclusive. ISO 8601, e.g. 2026-11-14T09:00Z")
-    end: datetime | None = Field(None, description="Exclusive. ISO 8601, e.g. 2026-11-14T12:00Z")
+    start: datetime | None = Field(
+        None, description="Inclusive. ISO 8601, e.g. 2026-11-14T09:00+02:00"
+    )
+    end: datetime | None = Field(
+        None, description="Exclusive. ISO 8601, e.g. 2026-11-14T12:00+02:00"
+    )
 
     @field_validator("start", "end")
     @classmethod
     def _aware(cls, moment: datetime | None) -> datetime | None:
-        """A time without an offset is taken as UTC, which the system prompt asks for."""
+        """A time without an offset is the wearer's local time, as the system prompt's are."""
         if moment is not None and moment.tzinfo is None:
-            return moment.replace(tzinfo=UTC)
+            return moment.replace(tzinfo=LOCAL_TIMEZONE)
         return moment
 
 
@@ -104,7 +117,8 @@ VECTOR_SEARCH_TOOL: dict[str, Any] = {
                 "timespan": {
                     "type": "object",
                     "description": "Only memories recorded in this window. Leave out to search "
-                    "everything. Times are ISO 8601 with an offset, e.g. 2026-11-14T09:00:00Z.",
+                    "everything. Times are local, ISO 8601 with the offset, e.g. "
+                    "2026-11-14T09:00:00+02:00.",
                     "properties": {
                         "start": {"type": "string", "description": "Inclusive start."},
                         "end": {"type": "string", "description": "Exclusive end."},
@@ -338,7 +352,7 @@ def for_model(results: list[SearchResult]) -> str:
                 "id": result.id,
                 "kind": result.kind,
                 "collection": result.collection,
-                "seen_at": result.created_at.isoformat(timespec="seconds"),
+                "seen_at": local(result.created_at),
                 "text": result.text,
                 "image_attached": result.image_url is not None,
             }

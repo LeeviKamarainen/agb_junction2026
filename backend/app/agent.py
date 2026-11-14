@@ -24,7 +24,15 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from app import media
 from app.llm import Chat, Embedder
 from app.models import Memory
-from app.search import VECTOR_SEARCH_TOOL, SearchResult, VectorSearchArgs, for_model, vector_search
+from app.search import (
+    LOCAL_TIMEZONE,
+    VECTOR_SEARCH_TOOL,
+    SearchResult,
+    VectorSearchArgs,
+    for_model,
+    local,
+    vector_search,
+)
 
 MAX_ROUNDS = 4  # model calls per question, the last one without the tool
 MAX_IMAGES = 16  # stills shown to the model per question; each costs a few hundred tokens
@@ -41,7 +49,8 @@ question, search again with other wording or a wider timespan.
 Answer from the memories only, briefly, and say when you saw it. If nothing relevant was found, \
 say so instead of guessing.
 
-The current time is {now} (UTC). Write times in tool calls as ISO 8601 in UTC."""
+The current time is {now}, the user's local time ({zone}). Every time you read or write is \
+local time: write times in tool calls as ISO 8601 with the offset, like the current time."""
 
 
 class AskRequest(BaseModel):
@@ -113,7 +122,7 @@ async def run(
     started = time.monotonic()
     now = now or datetime.now(UTC)
     messages: list[dict[str, Any]] = [
-        {"role": "system", "content": SYSTEM.format(now=now.isoformat(timespec="seconds"))},
+        {"role": "system", "content": SYSTEM.format(now=local(now), zone=LOCAL_TIMEZONE.key)},
         {"role": "user", "content": question},
     ]
     shown: set[int] = set()
@@ -173,7 +182,7 @@ async def run(
                     continue
                 if owners is not None and memory.owner_id not in owners:
                     continue  # never happens through vector_search; checked again all the same
-                seen = result.created_at.isoformat(timespec="seconds")
+                seen = local(result.created_at)
                 parts.append({"type": "text", "text": f"Memory {result.id}, seen at {seen}:"})
                 url = await anyio.to_thread.run_sync(media.data_url, memory.image_file)
                 parts.append({"type": "image_url", "image_url": {"url": url}})
