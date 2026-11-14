@@ -4,6 +4,7 @@ import pytest
 from PIL import Image
 
 from app import vectors
+from app.glasses import remote_memory
 from app.glasses.intents import interpret
 from app.llm import UpstreamError
 from app.main import app
@@ -23,8 +24,9 @@ JPEG = make_jpeg()
 
 
 @pytest.fixture(autouse=True)
-def no_models():
-    """No chat or embedding model unless a test sets one, even when backend/.env has them."""
+def no_models(monkeypatch):
+    """No models or memory API unless a test sets them, even when backend/.env has them."""
+    monkeypatch.setattr(remote_memory, "configured", lambda: False)
     app.dependency_overrides[optional_chat] = lambda: None
     app.dependency_overrides[optional_embedder] = lambda: None
     yield
@@ -187,3 +189,66 @@ def test_unreachable_memory_is_spoken_not_raised(client):
 
     assert reply.status_code == 200
     assert "can’t reach" in reply.json()["speech"]
+
+
+def test_photo_falls_back_to_the_memory_api(client, monkeypatch):
+    use_models(chat=broken)
+    monkeypatch.setattr(remote_memory, "configured", lambda: True)
+    monkeypatch.setattr(remote_memory, "describe", lambda jpeg, name: "A watering can.")
+
+    reply = client.post("/api/glasses/photos", files={"photo": ("a.jpg", JPEG, "image/jpeg")})
+
+    assert reply.json()["intent"] == "photo_described"
+    assert reply.json()["speech"] == "A watering can."
+    assert "couldn’t" not in texts(reply.json()["screen"])
+
+
+def test_question_falls_back_to_the_memory_api(client, monkeypatch):
+    use_models(chat=broken, embed=fake_embed)
+    monkeypatch.setattr(remote_memory, "configured", lambda: True)
+    url = "/api/glasses/memory/20261114T120000000000/keyframes/a.jpg"
+    monkeypatch.setattr(remote_memory, "ask", lambda question: ("By the door.", [url]))
+
+    reply = client.post("/api/glasses/command", json={"text": "where is the can?"}).json()
+
+    assert reply["speech"] == "By the door."
+    assert url in str(reply["screen"])
+
+
+def test_memory_api_batch_holds_every_photo(client, monkeypatch):
+    posted = []
+
+    class FakeClient:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+        def post(self, path, **kwargs):
+            class Reply:
+                def raise_for_status(self):
+                    pass
+
+                def json(self):
+                    if path == "/batches":
+                        posted.append(len(kwargs["files"]))
+                        return {"batch": f"20261114T12000000000{len(posted)}", "summary": "x"}
+                    return {"answer": "On the table.", "keyframes": ["0.jpg"]}
+
+            return Reply()
+
+    monkeypatch.setattr(remote_memory, "configured", lambda: True)
+    monkeypatch.setattr(remote_memory, "_client", FakeClient)
+    for _ in range(2):
+        client.post("/api/glasses/photos", files={"photo": ("a.jpg", JPEG, "image/jpeg")})
+    posted.clear()  # the two one-photo batches that described them
+
+    assert remote_memory.ask("where?")[0] == "On the table."
+    assert remote_memory.ask("again?")[0] == "On the table."
+    assert posted == [2]  # one batch with both photos, reused for the second question
+
+
+@pytest.mark.parametrize("path", ["../x/keyframes/a.jpg", "20261114T120000000000/keyframes/a.png"])
+def test_bad_keyframe_paths_are_404(client, path):
+    assert client.get(f"/api/glasses/memory/{path}").status_code == 404

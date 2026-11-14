@@ -2,18 +2,19 @@
 
 Clients: the browser harness (frontend /glasses) and, later, glasses-android. Memory is the
 backend's own (app/routes/memories.py): photos become image memories, questions go through the
-same question loop as /api/ask. Without LLM_URL and EMBED_URL the glasses still take and show
-photos; they say memory search isn't set up.
+same question loop as /api/ask. When those models are not set or not reachable, the glasses fall
+back to the glass-memory API (MEMORY_API_URL, remote_memory.py), which runs Gemma itself. With
+neither, they still take and show photos and say memory search isn't set up.
 """
 
 from typing import Annotated, Self
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field, model_validator
 
 from app.db import SessionDep
-from app.glasses import memory, photos, screens
+from app.glasses import memory, photos, remote_memory, screens
 from app.glasses.intents import BUTTON_ACTIONS, interpret
 from app.glasses.layout import GlassesReply
 from app.llm import Chat, Embedder, UpstreamError, get_chat, get_embedder
@@ -78,16 +79,27 @@ def command(body: Command, session: SessionDep, chat: ChatDep, embed: EmbedderDe
     if name == "gallery":
         return screens.gallery()
     if name == "ask_memory":
-        if chat is None or embed is None:
-            return screens.memory_problem(text, "Memory search isn’t set up yet.")
-        try:
-            answer = memory.ask(session, text, chat, embed)
-        except UpstreamError:
-            return screens.memory_problem(text, "I can’t reach the memory right now.")
-        images = [source.image_url for source in answer.sources if source.image_url]
-        said = answer.answer or "I couldn’t find that in your memories."
-        return screens.memory_answer(text, said, images)
+        return _ask(session, text, chat, embed)
     return screens.unknown(text)
+
+
+def _ask(session, question: str, chat: Chat | None, embed: Embedder | None) -> GlassesReply:
+    if chat is not None and embed is not None:
+        try:
+            answer = memory.ask(session, question, chat, embed)
+            images = [source.image_url for source in answer.sources if source.image_url]
+            said = answer.answer or "I couldn’t find that in your memories."
+            return screens.memory_answer(question, said, images)
+        except UpstreamError:
+            if not remote_memory.configured():
+                return screens.memory_problem(question, "I can’t reach the memory right now.")
+    if remote_memory.configured():
+        try:
+            said, images = remote_memory.ask(question)
+        except remote_memory.Unavailable:
+            return screens.memory_problem(question, "I can’t reach the memory right now.")
+        return screens.memory_answer(question, said, images)
+    return screens.memory_problem(question, "Memory search isn’t set up yet.")
 
 
 @router.post(
@@ -117,7 +129,14 @@ def upload_photo(
         try:
             description = memory.describe(chat, data)
         except UpstreamError:
-            problems.append("couldn’t describe it")
+            pass
+    if not description and remote_memory.configured():
+        try:
+            description = remote_memory.describe(data, name)
+        except remote_memory.Unavailable:
+            pass
+    if not description and (chat is not None or remote_memory.configured()):
+        problems.append("couldn’t describe it")
     if embed is not None:
         try:
             memory.remember(session, embed, data, description)
@@ -141,3 +160,19 @@ def get_photo(name: str):
     if file is None:
         raise HTTPException(404, "no such photo")
     return FileResponse(file, media_type="image/jpeg")
+
+
+@router.get(
+    "/memory/{batch}/keyframes/{name}",
+    response_class=Response,
+    responses={200: {"content": {"image/jpeg": {}}}, 404: {}, 502: {}},
+)
+def get_memory_keyframe(batch: str, name: str):
+    """A still from the glass-memory API, fetched with the backend's token."""
+    try:
+        data = remote_memory.keyframe(batch, name)
+    except remote_memory.Unavailable:
+        raise HTTPException(502, "the memory API is unreachable") from None
+    if data is None:
+        raise HTTPException(404, "no such keyframe")
+    return Response(data, media_type="image/jpeg")
