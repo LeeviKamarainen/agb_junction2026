@@ -10,8 +10,14 @@ import java.net.URL
 import java.time.Instant
 import java.util.UUID
 
-/** A message the backend wants on the glasses screen, from a trigger that fired. */
-data class GlassesMessage(val title: String, val text: String)
+/** What a message is, so the glasses can draw them apart. Anything unknown is drawn as a reply. */
+enum class MessageType { TEXT_REPLY, TRIGGER }
+
+/**
+ * A message the backend wants on the glasses screen: [MessageType.TRIGGER] when the backend noticed
+ * something on its own, [MessageType.TEXT_REPLY] for an answer to the wearer.
+ */
+data class GlassesMessage(val type: MessageType, val title: String, val text: String)
 
 sealed interface FrameOutcome {
     /** [stored]: the frame became a memory. [message]: show it on the glasses (null for most frames). */
@@ -78,7 +84,11 @@ object FrameApi {
     private fun parse(text: String): FrameOutcome.Ok {
         val json = JSONObject(text)
         val message = json.optJSONObject("message")?.let {
-            GlassesMessage(title = it.optString("title"), text = it.optString("text"))
+            GlassesMessage(
+                type = if (it.optString("type") == "trigger") MessageType.TRIGGER else MessageType.TEXT_REPLY,
+                title = it.optString("title"),
+                text = it.optString("text"),
+            )
         }
         val note = if (json.isNull("note")) null else json.optString("note")
         return FrameOutcome.Ok(stored = json.optBoolean("stored"), note = note, message = message)

@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  Bell,
   Camera,
   Circle,
   LoaderCircle,
@@ -253,7 +254,16 @@ export function GlassesStream({
             className="absolute inset-x-4 bottom-4 flex flex-col gap-1 rounded-lg bg-black/75 p-3 text-white"
             role="status"
           >
-            <span className="text-sm font-semibold">{message.title}</span>
+            {/* As on the glasses: a trigger gets a bell and a heading, a reply a small label. */}
+            {message.type === "trigger" ? (
+              <span className="flex items-center gap-1.5 text-sm font-semibold">
+                <Bell size={14} aria-hidden="true" /> {message.title}
+              </span>
+            ) : (
+              message.title && (
+                <span className="text-xs text-white/70">{message.title}</span>
+              )
+            )}
             <span className="text-sm">{message.text}</span>
           </span>
         )}

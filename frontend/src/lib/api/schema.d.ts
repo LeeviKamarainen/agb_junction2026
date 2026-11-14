@@ -546,14 +546,23 @@ export interface components {
              */
             matches: components["schemas"]["TriggerMatch"][];
         };
-        /** GlassesMessage */
+        /**
+         * GlassesMessage
+         * @description What the glasses show. `type` lets them draw the two kinds apart: "trigger" is something the
+         *     backend noticed on its own (a trigger fired), "text_reply" an answer to the wearer.
+         */
         GlassesMessage: {
+            /**
+             * Type
+             * @enum {string}
+             */
+            type: "text_reply" | "trigger";
             /** Title */
             title: string;
             /** Text */
             text: string;
             /** Trigger Id */
-            trigger_id: number;
+            trigger_id?: number | null;
         };
         /**
          * GlassesReply

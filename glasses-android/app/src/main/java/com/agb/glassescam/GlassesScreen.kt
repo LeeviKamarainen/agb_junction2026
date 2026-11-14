@@ -331,7 +331,8 @@ private fun MemoryModeCard(
             ui.glassesMessage?.let { message ->
                 Card(modifier = Modifier.fillMaxWidth()) {
                     Column(modifier = Modifier.padding(12.dp)) {
-                        Text(message.title, style = MaterialTheme.typography.titleSmall)
+                        val kind = if (message.type == MessageType.TRIGGER) "Trigger" else "Reply"
+                        Text("$kind: ${message.title}", style = MaterialTheme.typography.titleSmall)
                         Text(message.text)
                         TextButton(onClick = onDismissMessage) { Text("Dismiss") }
                     }

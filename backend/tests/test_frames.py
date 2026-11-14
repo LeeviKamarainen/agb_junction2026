@@ -112,6 +112,7 @@ def test_a_matching_trigger_fires_once_per_cooldown(client, scene):
     second = send(client, "stream", "s1").json()
 
     assert first["message"] == {
+        "type": "trigger",
         "title": "Keys",
         "text": "Say where the keys are.",  # no chat model: the instruction itself
         "trigger_id": trigger["id"],

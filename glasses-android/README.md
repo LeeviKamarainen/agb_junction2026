@@ -50,8 +50,11 @@ vector database (the `glasses` collection) and checks it against the triggers se
 - **Single photo:** **Send one photo**, one tap, or one short press sends the next frame as a single photo (always
   stored, and saved to the gallery). Without a running stream the camera opens for about a second just for it.
 - **On the glasses:** a camera icon and "REC" top right while streaming, a paper plane while a photo is sent.
-- **Trigger messages:** most answers are empty. When a frame matches a trigger, the answer carries a message
-  (written by Gemma from the frame and the trigger's instruction), shown on the glasses and the phone for 10 s.
+- **Messages:** most answers are empty. When the backend has something to show, the answer carries
+  `message: {type, title, text}`, shown on the glasses and the phone for 10 s. The app only draws it; deciding
+  what to show is the backend's job. `type` is `"trigger"` (the backend noticed something on its own, e.g. a
+  trigger fired; drawn with a bell and the title as a heading) or `"text_reply"` (an answer to the wearer; the
+  text, with the title as a small label). An unknown type is drawn as a reply.
 
 Set `glasses.api` in `local.properties` to the backend's address without `/api` (see `local.properties.example`).
 The Neural Band only reports single taps, so a double tap is two taps within 450 ms; a single tap waits that long

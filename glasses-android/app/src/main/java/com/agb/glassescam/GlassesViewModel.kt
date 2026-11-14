@@ -531,8 +531,16 @@ class GlassesViewModel : ViewModel() {
                                     }
                                 }
                                 val message = ui.glassesMessage
-                                if (message != null) {
-                                    text(message.title, style = TextStyle.HEADING)
+                                if (message?.type == MessageType.TRIGGER) {
+                                    // Something the backend noticed: a bell and a heading make it stand out.
+                                    flexBox(direction = Direction.ROW, gap = 8, crossAlignment = Alignment.CENTER) {
+                                        icon(IconName.BELL)
+                                        text(message.title, style = TextStyle.HEADING)
+                                    }
+                                    text(message.text, style = TextStyle.BODY)
+                                } else if (message != null) {
+                                    // A reply: the text first, the title (if any) as a small label above it.
+                                    if (message.title.isNotBlank()) text(message.title, style = TextStyle.META)
                                     text(message.text, style = TextStyle.BODY)
                                 } else if (!ui.memoryStreaming && !ui.memorySending) {
                                     text("Double tap: record   Tap: photo", style = TextStyle.META)

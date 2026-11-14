@@ -46,9 +46,13 @@ class TriggerMatch(BaseModel):
 
 
 class GlassesMessage(BaseModel):
+    """What the glasses show. `type` lets them draw the two kinds apart: "trigger" is something the
+    backend noticed on its own (a trigger fired), "text_reply" an answer to the wearer."""
+
+    type: Literal["text_reply", "trigger"]
     title: str
     text: str
-    trigger_id: int
+    trigger_id: int | None = None  # set for "trigger"
 
 
 class FrameReply(BaseModel):
@@ -202,7 +206,10 @@ def receive(
                 fired.last_fired_at = moment
                 session.add(fired)
                 reply.message = GlassesMessage(
-                    title=fired.name, text=_message(chat, fired, name), trigger_id=fired.id
+                    type="trigger",
+                    title=fired.name,
+                    text=_message(chat, fired, name),
+                    trigger_id=fired.id,
                 )
         session.commit()
         return reply
