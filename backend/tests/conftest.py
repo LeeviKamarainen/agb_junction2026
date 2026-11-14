@@ -16,6 +16,8 @@ def db_path(tmp_path, monkeypatch):
     monkeypatch.setenv("DATABASE_PATH", str(path))
     monkeypatch.setenv("ADMIN_USERNAME", "admin")
     monkeypatch.setenv("ADMIN_PASSWORD", ADMIN_PASSWORD)
+    # No real models, whatever backend/.env says: the startup demo loader would call them.
+    monkeypatch.setenv("EMBED_URL", "")
     get_settings.cache_clear()
     get_engine.cache_clear()
     yield path

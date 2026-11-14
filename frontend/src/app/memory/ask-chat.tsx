@@ -39,17 +39,29 @@ const EXAMPLES = [
 export function AskChat({
   collections = [],
   onFound,
+  pinned,
+  examples = EXAMPLES,
+  intro = "Ask about your memories. Gemma decides what to search for; each tool call, its arguments and the results appear here as they happen.",
+  className = "min-h-[70vh]",
 }: {
   collections?: CollectionCount[];
   /** Every memory the latest question's searches returned so far, first seen first. */
   onFound?: (ids: number[]) => void;
+  /** Always search only these collections, with no filter to change it (the home page's demo). */
+  pinned?: string[];
+  examples?: string[];
+  intro?: string;
+  /** Sizes the panel. */
+  className?: string;
 } = {}) {
   const [exchanges, setExchanges] = useState<Exchange[]>([]);
   const [searchIn, setSearchIn] = useState<string[]>([]);
   // A collection whose last memory was deleted drops out of the filter.
-  const active = searchIn.filter((name) =>
-    collections.some((collection) => collection.name === name),
-  );
+  const active =
+    pinned ??
+    searchIn.filter((name) =>
+      collections.some((collection) => collection.name === name),
+    );
   const [question, setQuestion] = useState("");
   const [busy, setBusy] = useState(false);
   const bottom = useRef<HTMLDivElement>(null);
@@ -99,7 +111,9 @@ export function AskChat({
         return;
       }
       // Newline-delimited JSON: one Step per line, as the backend produces them.
-      const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
+      const reader = response.body
+        .pipeThrough(new TextDecoderStream())
+        .getReader();
       let buffer = "";
       let finished = false;
       for (;;) {
@@ -124,7 +138,9 @@ export function AskChat({
       }
       if (!finished) fail("The stream ended without an answer.");
     } catch (error) {
-      fail(error instanceof Error ? error.message : "Could not reach the backend");
+      fail(
+        error instanceof Error ? error.message : "Could not reach the backend",
+      );
     } finally {
       setBusy(false);
     }
@@ -138,7 +154,7 @@ export function AskChat({
   return (
     <section
       aria-labelledby="chat-title"
-      className="flex min-h-[70vh] flex-col rounded-xl border border-border bg-card"
+      className={`flex flex-col rounded-xl border border-border bg-card ${className}`}
     >
       <div className="flex items-center justify-between gap-2 border-b border-border p-4">
         <h2 id="chat-title" className="flex items-center gap-2 font-semibold">
@@ -163,13 +179,9 @@ export function AskChat({
         {exchanges.length === 0 && (
           <div className="m-auto flex max-w-sm flex-col items-center gap-3 text-center text-sm text-muted-foreground">
             <MessageSquareText size={28} aria-hidden="true" />
-            <p>
-              Ask about your memories. Gemma decides what to search for; each
-              tool call, its arguments and the results appear here as they
-              happen.
-            </p>
+            <p>{intro}</p>
             <div className="flex flex-wrap justify-center gap-2">
-              {EXAMPLES.map((example) => (
+              {examples.map((example) => (
                 <Button
                   key={example}
                   variant="outline"
@@ -189,15 +201,17 @@ export function AskChat({
         <div ref={bottom} />
       </div>
 
-      <div className="border-t border-border px-3 pt-3">
-        <CollectionFilter
-          label="Search in"
-          collections={collections}
-          selected={active}
-          onChange={setSearchIn}
-          disabled={busy}
-        />
-      </div>
+      {!pinned && (
+        <div className="border-t border-border px-3 pt-3">
+          <CollectionFilter
+            label="Search in"
+            collections={collections}
+            selected={active}
+            onChange={setSearchIn}
+            disabled={busy}
+          />
+        </div>
+      )}
       <form onSubmit={submit} className="flex items-end gap-2 p-3">
         <label htmlFor="question" className="sr-only">
           Your question
@@ -214,7 +228,7 @@ export function AskChat({
               void ask(question);
             }
           }}
-          placeholder="Where did I leave my keys?"
+          placeholder={examples[0] ?? "Ask a question"}
           className="flex-1 resize-none rounded-md border border-border bg-background px-3 py-2 text-sm outline-none focus-visible:border-primary"
           disabled={busy}
         />
@@ -250,7 +264,11 @@ function ExchangeView({ exchange }: { exchange: Exchange }) {
         ))}
         {!exchange.done && (
           <li className="flex items-center gap-2 text-xs text-muted-foreground">
-            <LoaderCircle size={14} className="animate-spin" aria-hidden="true" />
+            <LoaderCircle
+              size={14}
+              className="animate-spin"
+              aria-hidden="true"
+            />
             Working…
           </li>
         )}
@@ -309,7 +327,11 @@ function StepView({ step }: { step: Step }) {
           className="flex gap-2 rounded-md bg-destructive/10 p-2 text-xs text-destructive"
           role="alert"
         >
-          <AlertTriangle size={14} className="mt-0.5 shrink-0" aria-hidden="true" />
+          <AlertTriangle
+            size={14}
+            className="mt-0.5 shrink-0"
+            aria-hidden="true"
+          />
           <div className="min-w-0">
             <p className="font-medium">
               {step.type === "error"

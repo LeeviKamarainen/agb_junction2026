@@ -35,7 +35,8 @@ Minimal Android app that streams the camera from Meta glasses via the
 | `GlassesScreen.kt` | Compose UI |
 | `PhotoSink.kt` | Where captures go (HTTP POST of a JPEG). Replace with your backend call |
 | `GlassesChannel.kt` | Authenticated WebSocket, guest login, reconnects and bounded memory uploads |
-| `FrameApi.kt` | Memory result and pushed warning message parsing |
+| `FrameApi.kt` | Memory result, command reply and pushed warning message parsing |
+| `VoiceInput.kt` | Push-to-talk speech to text: Android's speech recognizer on the glasses' Bluetooth mic |
 
 ## Memory mode (frames to the backend)
 
@@ -56,6 +57,19 @@ vector database (the `glasses` collection) and checks it against the triggers se
   what to show is the backend's job. `type` is `"trigger"` (the backend noticed something on its own, e.g. a
   trigger fired; drawn with a bell and the title as a heading) or `"text_reply"` (an answer to the wearer; the
   text, with the title as a small label). An unknown type is drawn as a reply.
+- **Voice messages:** **hold** the capture button (or the phone's **Talk** button) to start talking; any press or
+  tap (or **Stop and send**) ends the message. Android's own speech recognizer turns it into text on the phone
+  (`VoiceInput.kt`), and only the text goes to the backend, as a `command` over the same WebSocket (the same as
+  `POST /api/glasses/command` with `{"text": ...}`); its reply shows like any other message. The microphone is the
+  glasses': they are a Bluetooth headset to the phone, so while listening the phone's communication device is set
+  to their hands-free (SCO) input, and the status line says which mic is used (the phone's if no headset is
+  connected). Pauses do not end the message, the button does; it ends by itself after 60 s. On the glasses: a
+  speech bubble and the words heard so far. When a reply asks for a question about the photos
+  (`client_action: "listen_question"`), listening starts again and that answer is sent as `{"question": ...}`.
+  Arming memory mode asks for the microphone permission first. Google's recognizer needs a network. Unverified on
+  hardware: whether **hold** is reported when the press starts or when it ends (if a short press is reported first,
+  more than 400 ms earlier, a photo is also taken), and whether the recognizer follows the Bluetooth route on
+  every phone.
 
 Set `glasses.api` in `local.properties` to the backend's HTTP(S) address without `/api` (see
 `local.properties.example`); HTTPS uses a secure WebSocket. Set optional `glasses.token` to the token returned by

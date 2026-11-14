@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input";
 import { api } from "@/lib/api/browser";
 import { nextPath } from "@/lib/session";
 
-/** Guests can start fresh or return by username. The admin form is only rendered on explicit entry. */
+/** Guests can start fresh or return by username on /login; with `admin`, the password form /admin shows. */
 export function AuthForm({ admin = false }: { admin?: boolean }) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -56,7 +56,10 @@ export function AuthForm({ admin = false }: { admin?: boolean }) {
         aria-labelledby={`${ids.user}-title`}
         aria-describedby={error ? ids.error : undefined}
       >
-        <h1 id={`${ids.user}-title`} className="text-xl font-semibold tracking-tight">
+        <h1
+          id={`${ids.user}-title`}
+          className="text-xl font-semibold tracking-tight"
+        >
           {admin ? "Admin login" : "Welcome back"}
         </h1>
         {!admin ? (
@@ -132,7 +135,8 @@ export function AuthForm({ admin = false }: { admin?: boolean }) {
             </p>
             <GuestButton />
             <p className="text-xs text-muted-foreground">
-              Keep your guest username private. It lets you return without a password.
+              Keep your guest username private. It lets you return without a
+              password.
             </p>
           </section>
         </>

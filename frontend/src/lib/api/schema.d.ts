@@ -141,6 +141,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/demo/timeline": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Timeline
+         * @description The demo dataset's moments, earliest first. No login needed.
+         */
+        get: operations["timeline_api_demo_timeline_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/notes": {
         parameters: {
             query?: never;
@@ -753,6 +773,29 @@ export interface components {
             username: string;
             /** Password */
             password: string;
+        };
+        /** DemoMoment */
+        DemoMoment: {
+            /** Index */
+            index: number;
+            /**
+             * Time
+             * Format: date-time
+             */
+            time: string;
+            /** Place */
+            place: string;
+            /** Text */
+            text: string;
+        };
+        /** DemoTimeline */
+        DemoTimeline: {
+            /** Collection */
+            collection: string;
+            /** Searchable */
+            searchable: boolean;
+            /** Moments */
+            moments: components["schemas"]["DemoMoment"][];
         };
         /** FlexBox */
         FlexBox: {
@@ -1368,6 +1411,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["UserPublic"] | null;
+                };
+            };
+        };
+    };
+    timeline_api_demo_timeline_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DemoTimeline"];
                 };
             };
         };
