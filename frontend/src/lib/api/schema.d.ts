@@ -21,7 +21,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/auth/register": {
+    "/api/auth/guest": {
         parameters: {
             query?: never;
             header?: never;
@@ -31,10 +31,11 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Register
-         * @description A new guest account, logged in. 409 when the username is taken.
+         * Guest
+         * @description A new temporary guest account, logged in: a generated name, no password. It and everything
+         *     it adds are deleted after 30 minutes (auth.GUEST_MINUTES).
          */
-        post: operations["register_api_auth_register_post"];
+        post: operations["guest_api_auth_guest_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -52,7 +53,8 @@ export interface paths {
         put?: never;
         /**
          * Login
-         * @description 401 for a wrong username or password, without saying which.
+         * @description The admin's login (guests have no password). 401 for a wrong username or password,
+         *     without saying which.
          */
         post: operations["login_api_auth_login_post"];
         delete?: never;
@@ -616,7 +618,10 @@ export interface components {
             /** Question */
             question?: string | null;
         };
-        /** Credentials */
+        /**
+         * Credentials
+         * @description The admin's login; guests have no password.
+         */
         Credentials: {
             /** Username */
             username: string;
@@ -721,6 +726,8 @@ export interface components {
             username: string;
             /** Role */
             role: string;
+            /** Expires At */
+            expires_at?: string | null;
             /** Token */
             token: string;
         };
@@ -910,6 +917,8 @@ export interface components {
             username: string;
             /** Role */
             role: string;
+            /** Expires At */
+            expires_at?: string | null;
         };
         /** ValidationError */
         ValidationError: {
@@ -985,18 +994,14 @@ export interface operations {
             };
         };
     };
-    register_api_auth_register_post: {
+    guest_api_auth_guest_post: {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["Credentials"];
-            };
-        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
             201: {
@@ -1005,15 +1010,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["LoginResult"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

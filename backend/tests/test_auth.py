@@ -1,12 +1,16 @@
 import io
 import json
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from PIL import Image
+from sqlmodel import select
 
-from app import vectors
+from app import media, vectors
+from app.glasses import photos
 from app.llm import get_chat, get_embedder
 from app.main import app
+from app.models import Memory, Reminder, User
 from app.routes.glasses import optional_chat, optional_embedder
 from app.search import TABLE
 
@@ -53,49 +57,101 @@ def texts(client, headers=None):
 # --- Accounts -------------------------------------------------------------------------------
 
 
-def test_register_logs_in_as_a_guest(anonymous):
-    reply = anonymous.post(
-        "/api/auth/register", json={"username": " Aino ", "password": "long enough"}
-    )
+def test_a_guest_session_needs_no_name_or_password(anonymous):
+    reply = anonymous.post("/api/auth/guest")
 
     assert reply.status_code == 201
-    assert reply.json()["username"] == "aino"
-    assert reply.json()["role"] == "guest"
-    me = anonymous.get("/api/auth/me").json()  # the cookie it set
-    assert me["username"] == "aino"
+    body = reply.json()
+    assert body["username"].startswith("guest-") and body["role"] == "guest"
+    left = datetime.fromisoformat(body["expires_at"]) - datetime.now(UTC)
+    assert timedelta(minutes=29) < left <= timedelta(minutes=30)
+    assert anonymous.get("/api/auth/me").json()["username"] == body["username"]  # the cookie
+    assert "Max-Age=1" in reply.headers["set-cookie"]  # ~1800 s, as long as the account
 
 
-def test_taken_username_and_bad_input_are_refused(anonymous):
-    body = {"username": "aino", "password": "long enough"}
-    assert anonymous.post("/api/auth/register", json=body).status_code == 201
-    assert anonymous.post("/api/auth/register", json=body).status_code == 409
-    short = {"username": "aino2", "password": "short"}
-    assert anonymous.post("/api/auth/register", json=short).status_code == 422
-    odd = {"username": "a b!", "password": "long enough"}
-    assert anonymous.post("/api/auth/register", json=odd).status_code == 422
+def test_every_guest_is_a_new_account(anonymous):
+    first = anonymous.post("/api/auth/guest").json()
+    second = anonymous.post("/api/auth/guest").json()
+
+    assert first["username"] != second["username"]
 
 
-def test_login_and_logout(anonymous):
-    body = {"username": "aino", "password": "long enough"}
-    anonymous.post("/api/auth/register", json=body)
+def test_there_is_no_register_and_guests_cannot_log_in_again(anonymous):
+    name = anonymous.post("/api/auth/guest").json()["username"]
+    body = {"username": "someone", "password": "long enough"}
+
+    assert anonymous.post("/api/auth/register", json=body).status_code in (404, 405)
+    for password in ["", "!", "anything"]:
+        attempt = {"username": name, "password": password}
+        assert anonymous.post("/api/auth/login", json=attempt).status_code in (401, 422)
+
+
+def test_logout(anonymous):
+    anonymous.post("/api/auth/guest")
     anonymous.post("/api/auth/logout")
+
     assert anonymous.get("/api/auth/me").status_code == 401
     assert anonymous.get("/api/auth/session").json() is None
 
-    wrong = {"username": "aino", "password": "not the password"}
-    assert anonymous.post("/api/auth/login", json=wrong).status_code == 401
-    assert anonymous.post("/api/auth/login", json=body).status_code == 200
-    assert anonymous.get("/api/auth/session").json()["username"] == "aino"
+
+def expire_guests(db):
+    async def expire(session):
+        for user in await session.exec(select(User).where(User.role == "guest")):
+            user.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+            session.add(user)
+        await session.commit()
+
+    db(expire)
+
+
+def test_an_expired_guest_is_logged_out_and_deleted_with_its_memories(client, guest, db):
+    aino = guest("aino")
+    image = add_image(client, "aino's photo", aino).json()
+    add_text(client, "aino: keys under the mat", aino)
+    files = {"photo": ("a.jpg", jpeg(), "image/jpeg")}
+    assert client.post("/api/glasses/photos", files=files, headers=aino).status_code == 201
+    client.post("/api/glasses/reminders", json={"text": "warn me about the stool"}, headers=aino)
+    stored = db(lambda session: session.get(Memory, image["id"]))
+    assert stored is not None and stored.image_file
+    image_file, owner = media.path(stored.image_file), stored.owner_id
+
+    expire_guests(db)
+
+    assert client.get("/api/auth/me", headers=aino).status_code == 401
+    assert texts(client) == set()  # the admin sees nothing left
+    assert not image_file.exists()
+    assert not (photos.photos_dir() / str(owner)).exists()
+
+    async def left(session):
+        guests = (await session.exec(select(User).where(User.role == "guest"))).first()
+        reminders = (await session.exec(select(Reminder))).first()
+        stored = await vectors.stored(await session.connection(), TABLE)
+        return guests, reminders, stored
+
+    assert db(left) == (None, None, {})
+
+
+def test_starting_a_guest_sweeps_the_expired_ones(anonymous, guest, db):
+    guest("old")
+    expire_guests(db)
+
+    anonymous.post("/api/auth/guest")
+
+    async def guests(session):
+        return (await session.exec(select(User).where(User.role == "guest"))).all()
+
+    assert len(db(guests)) == 1
 
 
 def test_the_admin_comes_from_the_settings(client):
-    assert client.get("/api/auth/me").json() == {"id": 1, "username": "admin", "role": "admin"}
+    me = client.get("/api/auth/me").json()
+    assert (me["username"], me["role"], me["expires_at"]) == ("admin", "admin", None)
 
 
 def test_bearer_token_works_without_cookies(anonymous, guest):
     headers = guest("aino")
 
-    assert anonymous.get("/api/auth/me", headers=headers).json()["username"] == "aino"
+    assert anonymous.get("/api/auth/me", headers=headers).json()["username"].startswith("guest-")
 
 
 @pytest.mark.parametrize(
@@ -143,7 +199,8 @@ def test_the_admin_sees_who_added_what(client, two_guests):
     owners = {m["text"]: (m["demo"], m["owner"]) for m in client.get("/api/memories").json()}
 
     assert owners["demo: keys on the hook"] == (True, None)
-    assert owners["aino: keys under the mat"] == (False, "aino")
+    demo, owner = owners["aino: keys under the mat"]
+    assert not demo and owner.startswith("guest-")
 
 
 def test_search_only_reaches_your_memories(client, two_guests):
