@@ -319,7 +319,12 @@ function StepView({ step }: { step: Step }) {
     case "tool_call":
       return <ToolCallView step={step} />;
     case "tool_result":
-      return <ResultsView results={step.results ?? []} />;
+      // vector_search answers with memories; stop_watching with what it removed.
+      return step.results ? (
+        <ResultsView results={step.results} />
+      ) : (
+        <p className="text-xs text-muted-foreground">{step.content}</p>
+      );
     case "tool_error":
     case "error":
       return (

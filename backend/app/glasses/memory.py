@@ -76,7 +76,13 @@ async def remember(
 
 
 async def ask(
-    session: AsyncSession, question: str, chat: Chat, embed: Embedder, owners: list[int] | None
+    session: AsyncSession,
+    question: str,
+    chat: Chat,
+    embed: Embedder,
+    owners: list[int] | None,
+    owner_id: int,
 ) -> agent.Answer:
-    """The question loop of /api/ask, over `owners`' memories. Raises UpstreamError."""
-    return await agent.answer(session, question, chat, embed, owners)
+    """The question loop of /api/ask, over `owners`' memories and `owner_id`'s goals. Raises
+    UpstreamError."""
+    return await agent.answer(session, question, chat, embed, owners, owner_id=owner_id)

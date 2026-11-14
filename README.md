@@ -5,7 +5,7 @@ Our project for [Junction 2026](https://2026.hackjunction.com/) (13–15 Novembe
 **We give smart glasses a memory.** What the Meta Ray-Ban Display glasses see is embedded into a vector database, so the wearer can ask about their own past, and the glasses can speak up on their own. It works in two ways:
 
 - **Reactive:** you ask, the glasses answer. Double-tap the Neural Band (or hold the capture button) and say "where did I leave my keys?". The question is embedded, the closest stills are retrieved, and a Gemma model answers from those stills and when they were seen. You can also take a photo on purpose, which is stored as a memory.
-- **Proactive:** the glasses speak first. While you wear them, frames stream to the backend (2 per second), and each is compared with things you asked to be warned about. Say "remind me to take my keys" or "warn me about the stool in the kitchen" and the glasses flash a warning when that object comes into view. You can also write *triggers* in the web app ("a bike without a helmet in view → remind them to put it on"); the closest frame within a distance fires one, and Gemma words the message for the display.
+- **Proactive:** the glasses speak first. While you wear them, frames stream to the backend (2 per second), and each is compared with things you asked to be warned about. Say "remind me to take my keys" or "warn me about the stool in the kitchen" and the glasses flash a warning when that object comes into view. You can also say what to watch out for in the web app ("tell me when my bus comes"): that is a *goal*, Gemma writes its *triggers*, and when a frame newly looks like one of them Gemma checks it and words the message for the display, or stays quiet on a false alarm. Goals are yours alone; ask Gemma to stop watching for one and it is removed.
 
 Everything runs on our own servers with open models (EmbeddingGemma 2 for the embeddings, Gemma for the answers), so the footage never goes to a third party.
 
@@ -65,7 +65,7 @@ Open http://localhost:3000 and start a **guest**: a generated name, no password,
 - **Ask tab:** ask Gemma a question and watch it search the memories step by step.
 - **Map:** every stored vector projected to 2D and 3D; the memories found by the last question are ringed.
 - **Glasses tab:** the glasses harness inside the lab, so photos it takes appear in the library.
-- **Stream tab:** the webcam acts as the glasses (frames go to the backend as the Android app sends them), next to the **triggers** editor where you write what to watch for, what to tell the wearer, the distance threshold and the cooldown.
+- **Stream tab:** the webcam acts as the glasses (frames go to the backend as the Android app sends them), next to the editor for what the glasses watch out for: you say a goal, Gemma writes its triggers, and each shows its score on the latest frame against its level.
 
 ### Glasses harness (`/glasses`)
 

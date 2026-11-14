@@ -42,6 +42,12 @@ def interpret(text: str) -> Intent:
     # First: "remind me to take my keys" is a reminder, not a photo.
     if is_reminder(spoken):
         return Intent("remind", spoken)
+    # Before home, which "stop" alone would not reach but "cancel" would: the chat model knows
+    # what the glasses watch out for and can remove one (app/agent.py).
+    if _has(
+        words, "stop watching", "stop looking", "stop reminding", "stop warning", "stop telling"
+    ):
+        return Intent("ask_memory", spoken)
     if _has(words, "help", "what can i say", "what can you do"):
         return Intent("help")
     if _has(words, "home", "menu", "go back", "cancel", "never mind", "nevermind"):

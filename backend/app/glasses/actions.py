@@ -45,9 +45,7 @@ async def memory_frame(
         raise HTTPException(413, "frame is larger than 10 MB")
     when = seen_at if seen_at is None or seen_at.tzinfo else seen_at.replace(tzinfo=UTC)
     try:
-        return await frames.receive(
-            session, data, embed, chat, source, stream_id, when, viewer.id, viewer.owners
-        )
+        return await frames.receive(session, data, embed, chat, source, stream_id, when, viewer.id)
     except ValueError as error:
         raise HTTPException(415, str(error)) from error
     except UpstreamError as error:
@@ -129,7 +127,7 @@ async def _ask(
 ) -> GlassesReply:
     if chat is not None and embed is not None:
         try:
-            answer = await memory.ask(session, question, chat, embed, viewer.owners)
+            answer = await memory.ask(session, question, chat, embed, viewer.owners, viewer.id)
             said = answer.answer or "I couldn’t find that in your memories."
             return screens.memory_answer(question, said)
         except UpstreamError as error:

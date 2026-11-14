@@ -30,7 +30,8 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app import media, vectors
 from app.db import SessionDep
-from app.models import AuthSession, Memory, Reminder, Trigger, User
+from app.glasses import triggers
+from app.models import AuthSession, Memory, Reminder, User
 from app.search import (
     DEMO_OWNER,  # memories every user sees; the admin adds them with demo=true
     TABLE,
@@ -194,9 +195,7 @@ async def purge_expired_guests(session: AsyncSession) -> int:
             if memory.image_file:
                 files.append(memory.image_file)
             await session.delete(memory)
-        for trigger in await session.exec(select(Trigger).where(Trigger.owner_id == user.id)):
-            await vectors.delete(connection, "trigger_embedding", trigger.id or 0)
-            await session.delete(trigger)
+        await triggers.remove_of(session, user.id)
         for reminder in await session.exec(select(Reminder).where(Reminder.owner_id == user.id)):
             await session.delete(reminder)
         logins = await session.exec(select(AuthSession).where(AuthSession.user_id == user.id))

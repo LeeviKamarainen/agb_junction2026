@@ -54,9 +54,6 @@ def scene(client, monkeypatch):
     fake = Scene()
     app.dependency_overrides[optional_embedder] = lambda: fake
     app.dependency_overrides[optional_chat] = lambda: fake.chat
-    # The seeded example trigger is in every fresh database; start from none.
-    for trigger in client.get("/api/glasses/triggers").json():
-        client.delete(f"/api/glasses/triggers/{trigger['id']}")
     yield fake
     app.dependency_overrides.clear()
 
@@ -99,16 +96,22 @@ def warm_up(client, scene, stream_id="s1", headers=None, clock=None):
     scene.image = unit(0)
 
 
-def add_trigger(client, **fields):
-    body = {
-        "name": "Keys",
-        "watch_for": "a set of keys",
-        "instruction": "Say where the keys are.",
-        **fields,
-    }
-    response = client.post("/api/glasses/triggers", json=body)
+def add_trigger(
+    client, headers=None, enabled=True, instruction="Say where the keys are.", **fields
+):
+    """A goal (its text is `instruction`) with one trigger, which is returned."""
+    trigger = {"name": "Keys", "watch_for": "a set of keys", **fields}
+    response = client.post(
+        "/api/glasses/goals", headers=headers, json={"text": instruction, "triggers": [trigger]}
+    )
     assert response.status_code == 201, response.text
-    return response.json()
+    goal = response.json()
+    if not enabled:
+        off = client.put(
+            f"/api/glasses/goals/{goal['id']}", headers=headers, json={"enabled": False}
+        )
+        assert off.status_code == 200, off.text
+    return goal["triggers"][0]
 
 
 def test_a_single_frame_becomes_a_glasses_memory_with_no_message(client, scene):
@@ -159,6 +162,7 @@ def test_a_message_is_shown_and_the_wearer_gets_five_seconds_to_read_it(client, 
         "title": "Keys",
         "text": "I see your keys.",
         "trigger_id": trigger["id"],
+        "goal_id": trigger["goal_id"],
     }
     assert [(m["name"], m["fired"]) for m in first["matches"]] == [("Keys", True), ("Dog", False)]
     assert first["matches"][0]["distance"] == pytest.approx(0.0, abs=1e-6)
@@ -350,13 +354,11 @@ def test_editing_watch_for_embeds_it_again(client, scene):
 
 def test_trigger_crud_errors(client, scene):
     assert (
-        client.put(
-            "/api/glasses/triggers/999", json={"name": "x", "watch_for": "x", "instruction": "x"}
-        ).status_code
+        client.put("/api/glasses/triggers/999", json={"name": "x", "watch_for": "x"}).status_code
         == 404
     )
     assert client.delete("/api/glasses/triggers/999").status_code == 404
-    assert client.post("/api/glasses/triggers", json={"name": ""}).status_code == 422
+    assert client.post("/api/glasses/triggers", json={"name": "x"}).status_code == 405
 
 
 def test_frames_need_an_image_and_an_embedding_model(client, scene):
@@ -369,11 +371,6 @@ def test_frames_need_an_image_and_an_embedding_model(client, scene):
     assert not_image.status_code == 415
     assert no_model.status_code == 503
     assert client.get("/api/memories").json() == []
-
-
-def test_the_seeded_example_trigger_exists(client):
-    names = [t["name"] for t in client.get("/api/glasses/triggers").json()]
-    assert names == ["Keys"]
 
 
 def test_a_chat_model_answering_oddly_disturbs_nobody(client, scene):
@@ -545,18 +542,14 @@ def test_socket_memory_frames_do_not_queue_and_ping_stays_responsive(client, sce
 
 def test_frames_and_triggers_belong_to_the_login_over_http_and_socket(client, guest, scene):
     aino, ville = guest("aino"), guest("ville")
-    trigger = client.post(
-        "/api/glasses/triggers",
-        headers=aino,
-        json={"name": "Private", "watch_for": "a set of keys", "instruction": "Private message"},
-    ).json()
+    trigger = add_trigger(client, headers=aino, name="Private")
     assert client.get("/api/glasses/triggers", headers=ville).json() == []
     assert client.delete(f"/api/glasses/triggers/{trigger['id']}", headers=ville).status_code == 404
     assert (
         client.put(
             f"/api/glasses/triggers/{trigger['id']}",
             headers=ville,
-            json={"name": "Stolen", "watch_for": "a dog", "instruction": "changed"},
+            json={"name": "Stolen", "watch_for": "a dog"},
         ).status_code
         == 404
     )
