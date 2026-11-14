@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 from fastapi import APIRouter, FastAPI
 
 from app.db import init_db
-from app.routes import notes
+from app.routes import memories, notes
 
 
 @asynccontextmanager
@@ -30,4 +30,5 @@ def health() -> dict[str, str]:
 
 
 api.include_router(notes.router)
+api.include_router(memories.router)
 app.include_router(api)
