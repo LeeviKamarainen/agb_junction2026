@@ -141,26 +141,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/demo/timeline": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Timeline
-         * @description The demo dataset's moments, earliest first. No login needed.
-         */
-        get: operations["timeline_api_demo_timeline_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/demo/clips": {
         parameters: {
             query?: never;
@@ -260,24 +240,6 @@ export interface paths {
         put?: never;
         /** Reorder */
         post: operations["reorder_api_demo_order_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/notes": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** List Notes */
-        get: operations["list_notes_api_notes_get"];
-        put?: never;
-        /** Create Note */
-        post: operations["create_note_api_notes_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -403,6 +365,9 @@ export interface paths {
         /**
          * Memory Image
          * @description 404, not 403, for someone else's image: nobody learns which ids exist.
+         *
+         *     With `v` (as `image_url` gives it) matching the image, the browser may keep it for good, since
+         *     a different image gets a different `v`; without it, it has to ask again every time.
          */
         get: operations["memory_image_api_memories__id__image_get"];
         put?: never;
@@ -854,29 +819,6 @@ export interface components {
             /** Password */
             password: string;
         };
-        /** DemoMoment */
-        DemoMoment: {
-            /** Index */
-            index: number;
-            /**
-             * Time
-             * Format: date-time
-             */
-            time: string;
-            /** Place */
-            place: string;
-            /** Text */
-            text: string;
-        };
-        /** DemoTimeline */
-        DemoTimeline: {
-            /** Collection */
-            collection: string;
-            /** Searchable */
-            searchable: boolean;
-            /** Moments */
-            moments: components["schemas"]["DemoMoment"][];
-        };
         /** FlexBox */
         FlexBox: {
             /**
@@ -1096,18 +1038,6 @@ export interface components {
             owner?: string | null;
             /** Embedding */
             embedding: string;
-        };
-        /** NoteCreate */
-        NoteCreate: {
-            /** Text */
-            text: string;
-        };
-        /** NotePublic */
-        NotePublic: {
-            /** Text */
-            text: string;
-            /** Id */
-            id: number;
         };
         /** ReminderCreate */
         ReminderCreate: {
@@ -1603,26 +1533,6 @@ export interface operations {
             };
         };
     };
-    timeline_api_demo_timeline_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["DemoTimeline"];
-                };
-            };
-        };
-    };
     list_public_api_demo_clips_get: {
         parameters: {
             query?: never;
@@ -1892,59 +1802,6 @@ export interface operations {
             };
         };
     };
-    list_notes_api_notes_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["NotePublic"][];
-                };
-            };
-        };
-    };
-    create_note_api_notes_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["NoteCreate"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["NotePublic"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     list_memories_api_memories_get: {
         parameters: {
             query?: {
@@ -2097,7 +1954,9 @@ export interface operations {
     };
     memory_image_api_memories__id__image_get: {
         parameters: {
-            query?: never;
+            query?: {
+                v?: string | null;
+            };
             header?: never;
             path: {
                 id: number;
