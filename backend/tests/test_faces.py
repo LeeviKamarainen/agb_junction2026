@@ -1,14 +1,22 @@
-"""The face anonymiser (app/faces.py) on its own: the faces it finds, what it fills, what it
-refuses, and its copy in the memory API."""
+"""The face anonymiser (app/faces.py) on its own, and on the way in: every image the backend
+receives, over HTTP or the glasses' WebSocket, has its faces filled before it is stored, embedded
+or shown to the chat model."""
 
+import base64
 import io
+import json
 from pathlib import Path
 
 import numpy as np
 import pytest
 from PIL import Image
 
-from app import faces
+from app import faces, vectors
+from app.glasses import frames, scores
+from app.llm import get_embedder
+from app.main import app
+from app.routes.glasses import optional_chat, optional_embedder
+from app.search import TABLE
 
 REPO = Path(__file__).resolve().parents[2]
 # NASA's portrait of the astronaut Eileen Collins (public domain, from scikit-image's sample
@@ -110,6 +118,179 @@ def test_anonymise_refuses_an_image_too_large_to_decode_safely(monkeypatch):
 def test_anonymise_refuses_what_is_not_an_image():
     with pytest.raises(ValueError):
         faces.anonymise(b"\xff\xd8\xff and then no picture")
+
+
+WIDTH = vectors.VECTOR_TABLES[TABLE].dimensions
+WATCHED = "a person"  # what the tests' trigger watches for
+
+
+def unit(axis: int) -> list[float]:
+    return [1.0 if i == axis else 0.0 for i in range(WIDTH)]
+
+
+def toward_watched(amount: float) -> list[float]:
+    """An image whose similarity to WATCHED is `amount`."""
+    vector = unit(2)
+    vector[0], vector[2] = amount, (1 - amount**2) ** 0.5
+    return vector
+
+
+def decoded(data_url: str) -> Image.Image:
+    return picture(base64.b64decode(data_url.partition(",")[2]))
+
+
+class Models:
+    """Fake embedding and chat models that keep every image they are given. Every image embeds
+    as `image`; WATCHED points the same way as unit(0), so a test brings it into view by setting
+    `image` to unit(0)."""
+
+    def __init__(self):
+        self.embedded: list[Image.Image] = []
+        self.shown: list[Image.Image] = []
+        self.image = unit(0)
+        self.answer = json.dumps({"say": "Someone is at the door."})
+
+    async def embed(self, inputs, input_type="query"):
+        self.embedded += [decoded(i) for i in inputs if i.startswith("data:image/")]
+        return [
+            self.image if i.startswith("data:image/") else unit(0 if i == WATCHED else WIDTH - 1)
+            for i in inputs
+        ]
+
+    async def chat(self, messages, _tools):
+        self.shown += [
+            decoded(part["image_url"]["url"])
+            for message in messages
+            if isinstance(message["content"], list)
+            for part in message["content"]
+            if part["type"] == "image_url"
+        ]
+        return {"role": "assistant", "content": self.answer}
+
+    def all_filled(self) -> bool:
+        """Whether the models were given images, and every one had its face filled."""
+        images = self.embedded + self.shown
+        return bool(images) and all(map(face_filled, images))
+
+
+@pytest.fixture
+def models(client):
+    frames.reset_streams()
+    fake = Models()
+    app.dependency_overrides[optional_embedder] = lambda: fake.embed
+    app.dependency_overrides[get_embedder] = lambda: fake.embed
+    app.dependency_overrides[optional_chat] = lambda: fake.chat
+    # The seeded example trigger is in every fresh database; only the tests' own may fire.
+    for trigger in client.get("/api/glasses/triggers").json():
+        client.delete(f"/api/glasses/triggers/{trigger['id']}")
+    yield fake
+    for dependency in (optional_embedder, get_embedder, optional_chat):
+        app.dependency_overrides.pop(dependency, None)
+
+
+def send_frame(client, source="single"):
+    files = {"frame": ("f.jpg", PORTRAIT, "image/jpeg")}
+    data = {"source": source, "stream_id": "s1" if source == "stream" else ""}
+    reply = client.post("/api/glasses/frames", files=files, data=data)
+    assert reply.status_code == 200, reply.text
+    return reply.json()
+
+
+def stored_image(client, memory_id: int) -> Image.Image:
+    return picture(client.get(f"/api/memories/{memory_id}/image").content)
+
+
+def test_a_frame_is_stored_embedded_and_shown_with_its_face_filled(client, models):
+    """The chat model sees a frame when a trigger fires on it, so the portrait is streamed until
+    the trigger's level is measured (as in test_frames.py), then brought into view."""
+    instruction = "Say who is there."
+    trigger = {"name": "Anyone", "watch_for": WATCHED, "instruction": instruction}
+    assert client.post("/api/glasses/triggers", json=trigger).status_code == 201
+    for i in range(scores.MIN_FRAMES):
+        models.image = toward_watched(0.60 + 0.01 * (i % 3))
+        send_frame(client, "stream")
+    models.image = unit(0)
+
+    fired = send_frame(client, "stream")
+
+    assert fired["message"] is not None and fired["stored"]
+    assert face_filled(stored_image(client, fired["memory_id"]))
+    assert models.shown and models.all_filled()
+
+
+def test_a_frame_over_the_socket_is_stored_and_embedded_with_its_face_filled(client, models):
+    with client.websocket_connect("/api/glasses/ws") as ws:
+        ws.send_json({"type": "memory_frame", "id": 1, "source": "single"})
+        ws.send_bytes(PORTRAIT)
+        result = ws.receive_json()
+
+    assert result["type"] == "memory_result" and result["result"]["stored"], result
+    assert face_filled(stored_image(client, result["result"]["memory_id"]))
+    assert models.all_filled()
+
+
+def test_a_watched_frame_is_shown_with_its_face_filled(client, models):
+    client.post("/api/glasses/reminders", json={"text": "warn me about the stool"})
+    models.answer = "1"  # the chat model sees item 1, the stool
+
+    reply = client.post("/api/glasses/watch", files={"photo": ("w.jpg", PORTRAIT, "image/jpeg")})
+
+    assert reply.status_code == 200 and reply.json()["seen"] == ["stool"]
+    assert models.all_filled()
+
+
+def test_a_watched_frame_over_the_socket_is_shown_with_its_face_filled(client, models):
+    client.post("/api/glasses/reminders", json={"text": "warn me about the stool"})
+    models.answer = "1"
+    with client.websocket_connect("/api/glasses/ws") as ws:
+        ws.send_json({"type": "watch", "on": True})
+        ws.send_json({"type": "frame", "id": 1})
+        ws.send_bytes(PORTRAIT)
+        result = ws.receive_json()
+
+    assert result["type"] == "watch_result" and result["result"]["seen"] == ["stool"], result
+    assert models.all_filled()
+
+
+def test_an_uploaded_image_memory_has_its_face_filled(client, models):
+    reply = client.post("/api/memories/image", files={"file": ("p.jpg", PORTRAIT, "image/jpeg")})
+
+    assert reply.status_code == 201
+    assert face_filled(stored_image(client, reply.json()["id"]))
+    assert models.all_filled()
+
+
+@pytest.mark.parametrize("how", ["http", "socket"])
+def test_a_watched_frame_that_is_not_an_image_is_refused(client, models, how):
+    """It starts like a JPEG, so only the anonymiser finds out that it is not one."""
+    client.post("/api/glasses/reminders", json={"text": "warn me about the stool"})
+    broken = b"\xff\xd8\xff and then no picture"
+    if how == "http":
+        files = {"photo": ("w.jpg", broken, "image/jpeg")}
+        status = client.post("/api/glasses/watch", files=files).status_code
+    else:
+        with client.websocket_connect("/api/glasses/ws") as ws:
+            ws.send_json({"type": "watch", "on": True})
+            ws.send_json({"type": "frame", "id": 1})
+            ws.send_bytes(broken)
+            status = ws.receive_json()["status"]
+
+    assert status == 415
+    assert not models.shown
+
+
+def test_every_upload_route_is_one_of_those_tested_here():
+    """A new multipart upload route fails this until it fills faces first and has its test here.
+    It cannot see an image sent another way: the WebSocket's frames are tested above by hand, and
+    so must be any new message or base64 image in JSON."""
+    uploads = {
+        path
+        for path, operations in app.openapi()["paths"].items()
+        for operation in operations.values()
+        if "multipart/form-data" in operation.get("requestBody", {}).get("content", {})
+    }
+
+    assert uploads == {"/api/glasses/frames", "/api/glasses/watch", "/api/memories/image"}
 
 
 @pytest.mark.parametrize(

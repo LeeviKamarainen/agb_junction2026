@@ -254,7 +254,8 @@ export interface paths {
         put?: never;
         /**
          * Add Image
-         * @description Store one image: shrink it, embed it with the image model, keep an optional caption.
+         * @description Store one image: fill every face in it, shrink it, embed it with the image model, keep an
+         *     optional caption.
          *
          *     collection groups it, e.g. "glasses" for stills from the glasses (default "manual"). It is
          *     yours; with demo=true (admin only) every user sees it.
@@ -498,7 +499,7 @@ export interface paths {
         put?: never;
         /**
          * Watch
-         * @description One frame from the camera while the glasses watch for reminders. Not stored. A target in view gives a warning, at most once a minute per reminder.
+         * @description One frame from the camera while the glasses watch for reminders, with every face in it filled before the chat model sees it. Not stored. A target in view gives a warning, at most once a minute per reminder.
          */
         post: operations["watch_api_glasses_watch_post"];
         delete?: never;
@@ -518,8 +519,8 @@ export interface paths {
         put?: never;
         /**
          * Upload Frame
-         * @description One frame from the glasses: embedded, stored as a memory in the glasses collection, and
-         *     checked against the triggers.
+         * @description One frame from the glasses, with every face in it filled first: embedded, stored as a
+         *     memory in the glasses collection, and checked against the triggers.
          *
          *     `source` is "stream" for frames of a running stream (twice a second; a frame much like the
          *     last one stored from the same `stream_id` is not stored again) or "single" for a photo the

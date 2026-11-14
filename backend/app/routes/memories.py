@@ -10,7 +10,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from sqlmodel import col, func, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from app import agent, media, vectors
+from app import agent, faces, media, vectors
 from app.auth import DEMO_OWNER, Viewer, ViewerDep
 from app.db import SessionDep, new_session
 from app.llm import Chat, Embedder, InputType, UpstreamError, get_chat, get_embedder
@@ -160,7 +160,8 @@ async def add_image(
     collection: Annotated[str, Form(max_length=40)] = "manual",
     demo: Annotated[bool, Form()] = False,
 ):
-    """Store one image: shrink it, embed it with the image model, keep an optional caption.
+    """Store one image: fill every face in it, shrink it, embed it with the image model, keep an
+    optional caption.
 
     collection groups it, e.g. "glasses" for stills from the glasses (default "manual"). It is
     yours; with demo=true (admin only) every user sees it.
@@ -171,8 +172,10 @@ async def add_image(
     if len(data) > MAX_UPLOAD:
         raise HTTPException(413, "Images can be at most 25 MB")
     try:
-        # Decoding and shrinking is CPU work: off the event loop.
-        name = await anyio.to_thread.run_sync(media.save_image, data)
+        # Filling faces, decoding and shrinking are CPU work: off the event loop. The fill comes
+        # first, so nothing below sees a face.
+        filled = await anyio.to_thread.run_sync(faces.anonymise, data)
+        name = await anyio.to_thread.run_sync(media.save_image, filled)
     except ValueError as error:
         raise HTTPException(422, str(error)) from error
     try:

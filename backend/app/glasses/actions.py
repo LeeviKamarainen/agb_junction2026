@@ -10,11 +10,12 @@ import logging
 from datetime import UTC, datetime
 from typing import Self
 
+import anyio
 from fastapi import HTTPException
 from pydantic import BaseModel, Field, model_validator
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from app import agent
+from app import agent, faces
 from app.auth import Viewer
 from app.glasses import frames, reminders, screens
 from app.glasses.layout import GlassesReply
@@ -36,13 +37,15 @@ async def memory_frame(
     stream_id: str = "",
     seen_at: datetime | None = None,
 ) -> frames.FrameReply:
-    """The memory-mode upload, shared by HTTP and the Android socket."""
+    """The memory-mode upload, shared by HTTP and the Android socket. Every face in the frame is
+    filled first, so nothing stores, embeds or shows one."""
     if embed is None:
         raise HTTPException(503, "No embedding model configured: set EMBED_URL")
     if len(data) > MAX_FRAME:
         raise HTTPException(413, "frame is larger than 10 MB")
     when = seen_at if seen_at is None or seen_at.tzinfo else seen_at.replace(tzinfo=UTC)
     try:
+        data = await anyio.to_thread.run_sync(faces.anonymise, data)
         return await frames.receive(
             session, data, embed, chat, source, stream_id, when, viewer.id, viewer.owners
         )
@@ -132,8 +135,13 @@ def check_jpeg(data: bytes, what: str) -> None:
 async def watch(
     session: AsyncSession, viewer: Viewer, data: bytes, chat: Chat | None
 ) -> WatchResult:
-    """Checks one frame for every reminder's object; never raises for a model's failure."""
+    """Checks one frame for every reminder's object; never raises for a model's failure. Every
+    face in the frame is filled before the chat model sees it."""
     check_jpeg(data, "frame")
+    try:
+        data = await anyio.to_thread.run_sync(faces.anonymise, data)
+    except ValueError as error:
+        raise HTTPException(415, str(error)) from error
     watched = await reminders.active(session, viewer.id)  # your own, even for the admin
     try:
         found, note = await reminders.detect(data, [r.target for r in watched], chat)
