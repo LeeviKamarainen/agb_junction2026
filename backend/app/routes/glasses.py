@@ -5,18 +5,27 @@ Clients: the browser harness (frontend /glasses) and, later, glasses-android. Th
 /ws (app/glasses/channel.py); both call the same code in app/glasses/actions.py.
 """
 
+from datetime import UTC, datetime
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, WebSocket
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, WebSocket
 from fastapi.responses import FileResponse, Response
+from sqlmodel import col, select
 
 from app.auth import ViewerDep
 from app.db import SessionDep
-from app.glasses import actions, channel, photos, reminders, remote_memory, screens
+from app.glasses import actions, channel, frames, photos, reminders, remote_memory, screens
 from app.glasses.actions import Command, WatchResult
 from app.glasses.layout import GlassesReply
-from app.llm import Chat, Embedder, get_chat, get_embedder
-from app.models import Reminder, ReminderCreate, ReminderPublic
+from app.llm import Chat, Embedder, UpstreamError, get_chat, get_embedder
+from app.models import (
+    Reminder,
+    ReminderCreate,
+    ReminderPublic,
+    Trigger,
+    TriggerCreate,
+    TriggerPublic,
+)
 
 router = APIRouter(prefix="/glasses", tags=["glasses"])
 
@@ -162,3 +171,82 @@ def watch(
     chat: ChatDep,
 ):
     return actions.watch(session, viewer, photo.file.read(photos.MAX_BYTES + 1), chat)
+
+
+MAX_FRAME = 10 * 1024 * 1024  # bytes
+
+
+@router.post("/frames", response_model=frames.FrameReply)
+def upload_frame(
+    frame: Annotated[UploadFile, File(description="One image, usually a JPEG")],
+    session: SessionDep,
+    viewer: ViewerDep,
+    chat: ChatDep,
+    embed: EmbedderDep,
+    source: Annotated[frames.Source, Form()] = "single",
+    stream_id: Annotated[str, Form(max_length=100)] = "",
+    seen_at: Annotated[datetime | None, Form()] = None,
+):
+    """One frame from the glasses: embedded, stored as a memory in the glasses collection, and
+    checked against the triggers.
+
+    `source` is "stream" for frames of a running stream (twice a second; a frame much like the
+    last one stored from the same `stream_id` is not stored again) or "single" for a photo the
+    wearer took (always stored). Most answers carry no `message`; when a trigger fires,
+    `message` is what to show on the glasses.
+    """
+    if embed is None:
+        raise HTTPException(503, "No embedding model configured: set EMBED_URL")
+    data = frame.file.read(MAX_FRAME + 1)
+    if len(data) > MAX_FRAME:
+        raise HTTPException(413, "frame is larger than 10 MB")
+    when = seen_at if seen_at is None or seen_at.tzinfo else seen_at.replace(tzinfo=UTC)
+    try:
+        return frames.receive(
+            session, data, embed, chat, source, stream_id, when, viewer.id, viewer.owners
+        )
+    except ValueError as error:
+        raise HTTPException(415, str(error)) from error
+    except UpstreamError as error:
+        raise HTTPException(502, str(error)) from error
+
+
+@router.get("/triggers", response_model=list[TriggerPublic])
+def list_triggers(session: SessionDep, viewer: ViewerDep):
+    query = select(Trigger).order_by(col(Trigger.id))
+    if viewer.owners is not None:
+        query = query.where(col(Trigger.owner_id).in_(viewer.owners))
+    return session.exec(query).all()
+
+
+@router.post("/triggers", response_model=TriggerPublic, status_code=201)
+def create_trigger(body: TriggerCreate, session: SessionDep, viewer: ViewerDep):
+    trigger = Trigger.model_validate(body, update={"owner_id": viewer.id})
+    session.add(trigger)
+    session.commit()
+    session.refresh(trigger)
+    return trigger
+
+
+@router.put("/triggers/{id}", response_model=TriggerPublic)
+def update_trigger(id: int, body: TriggerCreate, session: SessionDep, viewer: ViewerDep):
+    trigger = session.get(Trigger, id)
+    if trigger is None or not viewer.can_change(trigger.owner_id):
+        raise HTTPException(404, "No such trigger")
+    if body.watch_for != trigger.watch_for:
+        frames.forget_trigger_vector(session, id)
+    trigger.sqlmodel_update(body.model_dump())
+    session.add(trigger)
+    session.commit()
+    session.refresh(trigger)
+    return trigger
+
+
+@router.delete("/triggers/{id}", status_code=204)
+def delete_trigger(id: int, session: SessionDep, viewer: ViewerDep):
+    trigger = session.get(Trigger, id)
+    if trigger is None or not viewer.can_change(trigger.owner_id):
+        raise HTTPException(404, "No such trigger")
+    frames.forget_trigger_vector(session, id)
+    session.delete(trigger)
+    session.commit()

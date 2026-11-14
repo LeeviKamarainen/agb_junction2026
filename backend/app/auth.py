@@ -28,7 +28,7 @@ from sqlmodel import Session, col, select
 
 from app import media, vectors
 from app.db import SessionDep
-from app.models import AuthSession, Memory, Reminder, User
+from app.models import AuthSession, Memory, Reminder, Trigger, User
 from app.search import (
     DEMO_OWNER,  # memories every user sees; the admin adds them with demo=true
     TABLE,
@@ -167,6 +167,9 @@ def purge_expired_guests(session: Session) -> int:
             if memory.image_file:
                 files.append(memory.image_file)
             session.delete(memory)
+        for trigger in session.exec(select(Trigger).where(Trigger.owner_id == user.id)):
+            vectors.delete(session.connection(), "trigger_embedding", trigger.id or 0)
+            session.delete(trigger)
         for reminder in session.exec(select(Reminder).where(Reminder.owner_id == user.id)):
             session.delete(reminder)
         for login in session.exec(select(AuthSession).where(AuthSession.user_id == user.id)):

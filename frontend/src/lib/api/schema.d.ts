@@ -526,6 +526,68 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/glasses/frames": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Upload Frame
+         * @description One frame from the glasses: embedded, stored as a memory in the glasses collection, and
+         *     checked against the triggers.
+         *
+         *     `source` is "stream" for frames of a running stream (twice a second; a frame much like the
+         *     last one stored from the same `stream_id` is not stored again) or "single" for a photo the
+         *     wearer took (always stored). Most answers carry no `message`; when a trigger fires,
+         *     `message` is what to show on the glasses.
+         */
+        post: operations["upload_frame_api_glasses_frames_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/glasses/triggers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Triggers */
+        get: operations["list_triggers_api_glasses_triggers_get"];
+        put?: never;
+        /** Create Trigger */
+        post: operations["create_trigger_api_glasses_triggers_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/glasses/triggers/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Update Trigger */
+        put: operations["update_trigger_api_glasses_triggers__id__put"];
+        post?: never;
+        /** Delete Trigger */
+        delete: operations["delete_trigger_api_glasses_triggers__id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -569,6 +631,27 @@ export interface components {
              * @default false
              */
             demo: boolean;
+        };
+        /** Body_upload_frame_api_glasses_frames_post */
+        Body_upload_frame_api_glasses_frames_post: {
+            /**
+             * Frame
+             * @description One image, usually a JPEG
+             */
+            frame: string;
+            /**
+             * Source
+             * @default single
+             * @enum {string}
+             */
+            source: "stream" | "single";
+            /**
+             * Stream Id
+             * @default
+             */
+            stream_id: string;
+            /** Seen At */
+            seen_at?: string | null;
         };
         /** Body_upload_photo_api_glasses_photos_post */
         Body_upload_photo_api_glasses_photos_post: {
@@ -668,6 +751,39 @@ export interface components {
              * @default []
              */
             children: (components["schemas"]["FlexBox"] | components["schemas"]["Text"] | components["schemas"]["Icon"] | components["schemas"]["Image"] | components["schemas"]["Button"])[];
+        };
+        /** FrameReply */
+        FrameReply: {
+            /** Stored */
+            stored: boolean;
+            /** Memory Id */
+            memory_id?: number | null;
+            /** Note */
+            note?: string | null;
+            message?: components["schemas"]["GlassesMessage"] | null;
+            /**
+             * Matches
+             * @default []
+             */
+            matches: components["schemas"]["TriggerMatch"][];
+        };
+        /**
+         * GlassesMessage
+         * @description What the glasses show. `type` lets them draw the two kinds apart: "trigger" is something the
+         *     backend noticed on its own (a trigger fired), "text_reply" an answer to the wearer.
+         */
+        GlassesMessage: {
+            /**
+             * Type
+             * @enum {string}
+             */
+            type: "text_reply" | "trigger";
+            /** Title */
+            title: string;
+            /** Text */
+            text: string;
+            /** Trigger Id */
+            trigger_id?: number | null;
         };
         /**
          * GlassesReply
@@ -908,6 +1024,69 @@ export interface components {
              * @description Exclusive. ISO 8601, e.g. 2026-11-14T12:00Z
              */
             end?: string | null;
+        };
+        /** TriggerCreate */
+        TriggerCreate: {
+            /** Name */
+            name: string;
+            /** Watch For */
+            watch_for: string;
+            /** Instruction */
+            instruction: string;
+            /**
+             * Max Distance
+             * @default 0.75
+             */
+            max_distance: number;
+            /**
+             * Cooldown S
+             * @default 120
+             */
+            cooldown_s: number;
+            /**
+             * Enabled
+             * @default true
+             */
+            enabled: boolean;
+        };
+        /** TriggerMatch */
+        TriggerMatch: {
+            /** Trigger Id */
+            trigger_id: number;
+            /** Name */
+            name: string;
+            /** Distance */
+            distance: number;
+            /** Fired */
+            fired: boolean;
+        };
+        /** TriggerPublic */
+        TriggerPublic: {
+            /** Name */
+            name: string;
+            /** Watch For */
+            watch_for: string;
+            /** Instruction */
+            instruction: string;
+            /**
+             * Max Distance
+             * @default 0.75
+             */
+            max_distance: number;
+            /**
+             * Cooldown S
+             * @default 120
+             */
+            cooldown_s: number;
+            /**
+             * Enabled
+             * @default true
+             */
+            enabled: boolean;
+            /** Id */
+            id: number;
+            /** Last Fired At */
+            last_fired_at: string | null;
         };
         /** UserPublic */
         UserPublic: {
@@ -1769,6 +1948,156 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["WatchResult"];
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    upload_frame_api_glasses_frames_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_upload_frame_api_glasses_frames_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FrameReply"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_triggers_api_glasses_triggers_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TriggerPublic"][];
+                };
+            };
+        };
+    };
+    create_trigger_api_glasses_triggers_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TriggerCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TriggerPublic"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_trigger_api_glasses_triggers__id__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TriggerCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TriggerPublic"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_trigger_api_glasses_triggers__id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {
