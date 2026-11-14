@@ -59,3 +59,19 @@ export function nextPath(): string {
     ? next
     : "/";
 }
+
+/**
+ * Makes sure someone is logged in before a call that needs it: when nobody is, starts a temporary
+ * guest (60 minutes, seeing the demo memories and its own) and tells the page. Throws with a
+ * message to show when that fails.
+ */
+export async function ensureSession(): Promise<void> {
+  const session = await api.GET("/api/auth/session");
+  if (!session.response.ok)
+    throw new Error("Could not check your login. Please try again.");
+  if (session.data) return;
+  const created = await api.POST("/api/auth/guest");
+  if (!created.data)
+    throw new Error("Could not start a guest session. Please try again.");
+  window.dispatchEvent(new Event("session-changed"));
+}

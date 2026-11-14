@@ -6,6 +6,11 @@ looked up in embedding space, and the chat model is shown all of them and says w
 show the same thing. The nearest stills are only the most alike, not the same (measured in
 memory/notebooks/RECALL-1: a place never visited still scores 0.7 to 0.9), so the model is told
 to be strict, and the wearer hears a plain no when none is.
+
+On the home page the view can play a demo clip instead of a camera (`DemoView`). Its frames are
+demo memories already (app/demo.py), so what is in front of the wearer is the clip's memory at the
+point it is playing, and "before" is the clip's own earlier frames, outside the current look, and
+everything else they may see: the other clips and their own memories.
 """
 
 import json
@@ -17,11 +22,11 @@ import anyio
 from sqlmodel import col, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from app import media, vectors
+from app import demo, media, vectors
 from app.auth import Viewer
 from app.llm import Chat
-from app.models import Memory
-from app.search import NEAR_COPY_S, TABLE
+from app.models import Memory, Showcase
+from app.search import DEMO_OWNER, NEAR_COPY_S, TABLE
 
 FRESH_S = 30.0  # the newest still counts as what the wearer is looking at for this long
 # "Before" ends GAP_S ahead of the current look at the thing, so the look does not find itself.
@@ -57,6 +62,14 @@ SYSTEM = (
 
 
 @dataclass(frozen=True)
+class DemoView:
+    """The wearer watches a demo clip: which, and how far into it, in seconds."""
+
+    clip_id: int
+    at_s: float
+
+
+@dataclass(frozen=True)
 class Still:
     memory_id: int
     ago: str  # "2 hours ago"
@@ -86,76 +99,138 @@ def _aware(moment: datetime) -> datetime:
     return moment if moment.tzinfo else moment.replace(tzinfo=UTC)
 
 
-async def recall(session: AsyncSession, chat: Chat, viewer: Viewer) -> Recall | None:
-    """Where the wearer has seen what their newest still shows, or None when they have no still
-    from the last FRESH_S. Raises UpstreamError when the chat model fails and ValueError when
-    its answer cannot be read."""
-    now = datetime.now(UTC)
-    current = (
+async def _clip(session: AsyncSession, clip_id: int) -> list[tuple[float, Memory]]:
+    """A demo clip's memories with their time into the clip, in order. The first frame of a clip
+    is always stored, so the earliest memory is the clip's start."""
+    rows = list(
         await session.exec(
             select(Memory)
-            .where(Memory.owner_id == viewer.id, Memory.kind == "image")
-            .where(col(Memory.image_file).is_not(None))
-            .order_by(col(Memory.created_at).desc())
-            .limit(1)
+            .where(Memory.owner_id == DEMO_OWNER)
+            .where(col(Memory.source).startswith(demo.clip_prefix(clip_id)))
+            .order_by(col(Memory.created_at), col(Memory.id))
         )
-    ).first()
-    if current is None or current.id is None or current.image_file is None:
-        return None
-    seen = _aware(current.created_at)
-    if (now - seen).total_seconds() > FRESH_S or not media.path(current.image_file).exists():
-        return None
-
-    connection = await session.connection()
-    vector = (await vectors.stored(connection, TABLE, [current.id])).get(current.id)
-    if not vector:
-        return None
-    # When the current look began: the wearer's own newest stills, while they show the same view.
-    recent = await vectors.nearest(
-        connection,
-        TABLE,
-        vector,
-        1000,
-        since=seen - timedelta(seconds=LOOK_BACK_S),
-        where={"kind": "image", "owner": viewer.id},
     )
-    began = seen
-    for hit in sorted(recent, key=lambda hit: hit.created_at, reverse=True):
-        if hit.distance > SAME_VIEW:
-            break
-        began = min(began, hit.created_at)
+    if not rows:
+        return []
+    start = _aware(rows[0].created_at)
+    return [((_aware(m.created_at) - start).total_seconds(), m) for m in rows]
+
+
+def _clip_id(memory: Memory) -> int | None:
+    if not memory.source.startswith("clip:"):
+        return None
+    return int(memory.source.split(":")[1])
+
+
+async def recall(
+    session: AsyncSession, chat: Chat, viewer: Viewer, view: DemoView | None = None
+) -> Recall | None:
+    """Where the wearer has seen what their newest still shows, or what the demo clip they are
+    watching shows now (`view`). None when there is no such still: none from the last FRESH_S,
+    or the clip is not stored as demo memories (yet). Raises UpstreamError when the chat model
+    fails and ValueError when its answer cannot be read."""
+    now = datetime.now(UTC)
+    connection = await session.connection()
+    titles: dict[int, str] = {}
+
+    async def label(memory: Memory, moment: datetime) -> str:
+        """When it was seen, as the wearer hears it."""
+        clip = _clip_id(memory)
+        if view is not None and clip == view.clip_id:
+            return ago(max(0.0, (current_seen - moment).total_seconds()))
+        if clip is not None:
+            if clip not in titles:
+                showcase = await session.get(Showcase, clip)
+                titles[clip] = showcase.title if showcase else "another demo"
+            return f"in the demo “{titles[clip]}”"
+        return ago((now - moment).total_seconds())
+
+    if view is None:
+        current = (
+            await session.exec(
+                select(Memory)
+                .where(Memory.owner_id == viewer.id, Memory.kind == "image")
+                .where(col(Memory.image_file).is_not(None))
+                .order_by(col(Memory.created_at).desc())
+                .limit(1)
+            )
+        ).first()
+        if current is None or current.id is None or current.image_file is None:
+            return None
+        current_seen = _aware(current.created_at)
+        if (now - current_seen).total_seconds() > FRESH_S:
+            return None
+        if not media.path(current.image_file).exists():
+            return None
+        vector = (await vectors.stored(connection, TABLE, [current.id])).get(current.id)
+        if not vector:
+            return None
+        # When the current look began: the wearer's own newest stills, while they show the same
+        # view.
+        recent = await vectors.nearest(
+            connection,
+            TABLE,
+            vector,
+            1000,
+            since=current_seen - timedelta(seconds=LOOK_BACK_S),
+            where={"kind": "image", "owner": viewer.id},
+        )
+        began = current_seen
+        for hit in sorted(recent, key=lambda hit: hit.created_at, reverse=True):
+            if hit.distance > SAME_VIEW:
+                break
+            began = min(began, hit.created_at)
+        until: datetime | None = began - timedelta(seconds=GAP_S)
+        not_before: set[int] = set()
+        wanted = SHOWN * 5
+    else:
+        clip = await _clip(session, view.clip_id)
+        # The frame on the view: the clip's last memory up to where it is playing (a frame much
+        # like the one before it was not stored, so the one before stands for it).
+        shown = [(at, memory) for at, memory in clip if at <= view.at_s + 0.25]
+        if not shown or shown[-1][1].image_file is None:
+            return None
+        current_at, current = shown[-1]
+        current_seen = _aware(current.created_at)
+        vector = (await vectors.stored(connection, TABLE, [current.id or 0])).get(current.id or 0)
+        if not vector or not media.path(current.image_file or "").exists():
+            return None
+        # Not "before": the clip's frames from the current look on, and those still to come.
+        not_before = {m.id for at, m in clip if at > current_at - GAP_S and m.id is not None}
+        until = None
+        wanted = SHOWN * 5 + len(not_before)
+
     where: dict = {"kind": "image"}
     if viewer.owners is not None:
         where["owner"] = viewer.owners
-    hits = await vectors.nearest(
-        connection, TABLE, vector, SHOWN * 5, until=began - timedelta(seconds=GAP_S), where=where
-    )
-    earlier = []  # (memory id, file, when it was seen), closest first, one per glance
+    hits = await vectors.nearest(connection, TABLE, vector, wanted, until=until, where=where)
+    earlier = []  # (memory id, file, when it was seen, label), closest first, one per glance
     for hit in hits:
+        if hit.id == current.id or hit.id in not_before or len(earlier) >= SHOWN:
+            continue
         memory = await session.get(Memory, hit.id)
         if (
-            hit.id != current.id
-            and len(earlier) < SHOWN
-            and memory is not None
+            memory is not None
             and memory.image_file
             and media.path(memory.image_file).exists()
             # A stream stores several stills of one glance: show the closest of them only.
-            and all(abs((hit.created_at - at).total_seconds()) > NEAR_COPY_S for *_, at in earlier)
+            and all(
+                abs((hit.created_at - at).total_seconds()) > NEAR_COPY_S for _, _, at, _ in earlier
+            )
         ):
-            earlier.append((hit.id, memory.image_file, hit.created_at))
+            label_ = await label(memory, hit.created_at)
+            earlier.append((hit.id, memory.image_file, hit.created_at, label_))
     if not earlier:
         return Recall([], "I have nothing from before to compare this with.", None)
-
-    def when(moment: datetime) -> str:
-        return ago((now - moment).total_seconds())
 
     async def image(name: str) -> dict:
         url = await anyio.to_thread.run_sync(media.data_url, name)
         return {"type": "image_url", "image_url": {"url": url}}
 
+    assert current.image_file is not None
     content = [{"type": "text", "text": "The current still:"}, await image(current.image_file)]
-    for number, (_, name, moment) in enumerate(earlier, 1):
-        content += [{"type": "text", "text": f"Earlier still {number}, seen {when(moment)}:"}]
+    for number, (_, name, _, when) in enumerate(earlier, 1):
+        content += [{"type": "text", "text": f"Earlier still {number}, seen {when}:"}]
         content += [await image(name)]
     reply = await chat(
         [{"role": "system", "content": SYSTEM}, {"role": "user", "content": content}], None
@@ -168,9 +243,10 @@ async def recall(session: AsyncSession, chat: Chat, viewer: Viewer) -> Recall | 
         say = str(answer.get("say") or "").strip()
     except (json.JSONDecodeError, KeyError, TypeError, AttributeError) as error:
         raise ValueError(f"the chat model did not answer with JSON: {text[:80]!r}") from error
-    last = max((earlier[n - 1][2] for n in same), default=None)
+    # The most recent of the stills found the same.
+    last = max((earlier[n - 1] for n in same), key=lambda still: still[2], default=None)
     return Recall(
-        [Still(id, when(moment), n in same) for n, (id, _, moment) in enumerate(earlier, 1)],
+        [Still(id, when, n in same) for n, (id, _, _, when) in enumerate(earlier, 1)],
         say or ("" if same else "I haven’t seen this before."),
-        when(last) if last else None,
+        last[3] if last else None,
     )

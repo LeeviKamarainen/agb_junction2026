@@ -102,6 +102,16 @@ def recall_needs_still() -> GlassesReply:
     )
 
 
+def recall_demo_not_ready() -> GlassesReply:
+    text = "This demo isn’t in my memory yet. Try again in a minute."
+    return GlassesReply(
+        intent="recall",
+        screen=_screen(_title("alert", "Not in memory yet"), Text(value=text, style="CAPTION")),
+        speech=text,
+        dismiss_after_s=5,
+    )
+
+
 def plain(text: str) -> str:
     """Markdown emphasis and bullets turned into one plain sentence: "a: * b * c" -> "a: b, c"."""
     text = re.sub(r"(^|\n|\s)[-*•]\s+", "\n", text)  # every bullet starts a line
