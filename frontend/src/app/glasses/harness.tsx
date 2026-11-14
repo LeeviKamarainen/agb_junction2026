@@ -31,6 +31,13 @@ import Link from "next/link";
 
 import { api } from "@/lib/api/browser";
 
+import {
+  type ClientMessage,
+  GlassesSocket,
+  type ServerMessage,
+  type SocketState,
+  socketUrl,
+} from "./channel";
 import { Display } from "./display";
 import {
   type Recognition,
@@ -38,9 +45,7 @@ import {
   say,
   transcripts,
 } from "./speech";
-import type { FlexBoxNode, GlassesReply, Reminder, WatchResult } from "./types";
-
-type Status = "connecting" | "online" | "offline";
+import type { FlexBoxNode, GlassesReply, Reminder } from "./types";
 
 type LogEntry = {
   id: number;
@@ -51,17 +56,28 @@ type LogEntry = {
   ms?: number;
   error?: string;
   json?: string;
-  /** A watched frame: these come every few seconds and can be hidden. */
+  /** A watched frame or a ping: these come every second and can be hidden. */
   watch?: boolean;
+};
+
+/** A message sent over the socket, waiting for its answer. */
+type Pending = {
+  request: string;
+  started: number;
+  kind: "command" | "photo" | "frame" | "ping";
 };
 
 // Long enough to see "Taking a photo…", like the shutter delay on the glasses.
 const CAPTURE_DELAY_MS = 400;
 const CAMERA_WARMUP_MS = 800;
 const subscribeToNothing = () => () => {};
-// How often the camera checks for reminders while watching, start to start. A check that takes
-// longer delays the next one: never two at once.
+// How often the camera sends a frame while watching. The backend checks the newest and drops
+// any that arrive while it is busy, so a slow vision model never builds a queue.
 const WATCH_EVERY_MS = 1000;
+// An idle socket is pinged this often, so a dead connection shows in the status line.
+const PING_EVERY_MS = 20_000;
+// A frame's answer that never came stops counting as pending after this long.
+const PENDING_FRAME_MS = 120_000;
 // Two taps of the key within this time are a double tap.
 const DOUBLE_TAP_MS = 400;
 
@@ -97,7 +113,8 @@ const MAX_LOG = 600;
 /**
  * Stands in for the glasses and the Android app: webcam = camera, laptop mic = microphone,
  * speechSynthesis = speakers, C = capture button, T T = Neural Band double tap. The rest is in the
- * backend's /api/glasses endpoints, the same ones the Android app calls.
+ * backend: commands, photos, watched frames and pushed warnings go over its WebSocket
+ * (/api/glasses/ws, see channel.ts); the home screen and reminders over its HTTP routes.
  */
 type HarnessProps = {
   /** Inside another page (the Memory lab): no page header, one column. */
@@ -114,7 +131,10 @@ export function GlassesHarness({
   onPhotoStored,
 }: HarnessProps = {}) {
   const [screen, setScreen] = useState<FlexBoxNode | null>(null);
-  const [status, setStatus] = useState<Status>("connecting");
+  const [link, setLink] = useState<SocketState>({
+    state: "connecting",
+    attempt: 1,
+  });
   const [log, setLog] = useState<LogEntry[]>([]);
   const [camera, setCamera] = useState<MediaStream | null>(null);
   const [cameraError, setCameraError] = useState<string | null>(null);
@@ -158,6 +178,9 @@ export function GlassesHarness({
   const questionRef = useRef(false);
   const nextId = useRef(1);
   const lastTapRef = useRef(0);
+  const socketRef = useRef<GlassesSocket | null>(null);
+  const pendingRef = useRef(new Map<number, Pending>());
+  const nextMessageId = useRef(1);
   const dismissRef = useRef<ReturnType<typeof setTimeout> | undefined>(
     undefined,
   );
@@ -168,17 +191,7 @@ export function GlassesHarness({
     setLog((current) => [{ id, time, ...entry }, ...current].slice(0, MAX_LOG));
   }
 
-  function showWarning(reply: GlassesReply) {
-    apply("", reply, undefined, false);
-  }
-
-  function apply(
-    request: string,
-    reply: GlassesReply,
-    started?: number,
-    log = true,
-  ) {
-    setStatus("online");
+  function apply(request: string, reply: GlassesReply, started?: number) {
     if (reply.intent === "remind") void loadReminders();
     // A shown screen clears itself: back to the empty display.
     clearTimeout(dismissRef.current);
@@ -188,17 +201,16 @@ export function GlassesHarness({
         reply.dismiss_after_s * 1000,
       );
     setScreen(reply.screen);
-    if (log)
-      addLog({
-        request,
-        ms:
-          started === undefined
-            ? undefined
-            : Math.round(performance.now() - started),
-        intent: reply.intent,
-        speech: reply.speech,
-        json: JSON.stringify(reply, null, 2),
-      });
+    addLog({
+      request,
+      ms:
+        started === undefined
+          ? undefined
+          : Math.round(performance.now() - started),
+      intent: reply.intent,
+      speech: reply.speech,
+      json: JSON.stringify(reply, null, 2),
+    });
     if (reply.speech && speak) say(reply.speech);
     if (reply.client_action === "capture_photo") {
       setTimeout(() => void capturePhoto(), CAPTURE_DELAY_MS);
@@ -207,25 +219,132 @@ export function GlassesHarness({
     if (questionRef.current) startListening("question");
   }
 
-  function fail(request: string, error: string) {
-    setStatus("offline");
-    addLog({ request, error });
+  function fail(request: string, error: string, watch = false) {
+    addLog({ request, error, watch });
   }
 
-  async function command(
+  /**
+   * Sends a message over the socket, remembers it until its answer comes and logs it. `jpeg`
+   * goes as a binary frame right after a photo's or frame's header. False when not sent.
+   */
+  function send(
+    message: ClientMessage,
+    request: string,
+    jpeg?: { blob: Blob; width: number; height: number },
+  ): boolean {
+    const socket = socketRef.current;
+    const kind = message.type;
+    const id = "id" in message ? message.id : undefined;
+    const sent =
+      socket !== null &&
+      (jpeg && (kind === "photo" || kind === "frame")
+        ? socket.sendJpeg({ type: kind, id: id ?? 0 }, jpeg.blob)
+        : socket.send(message));
+    const watch = kind === "frame" || kind === "ping" || kind === "watch";
+    const what = jpeg
+      ? ` + JPEG ${jpeg.width}×${jpeg.height}, ${Math.round(jpeg.blob.size / 1024)} kB`
+      : "";
+    if (!sent) {
+      fail(
+        `↑ ${kind} · ${request}`,
+        socket?.open
+          ? "Not sent: the previous frames are still going out."
+          : "Not sent: the backend socket is not connected yet.",
+        watch,
+      );
+      return false;
+    }
+    if (id !== undefined && kind !== "watch")
+      pendingRef.current.set(id, { request, started: performance.now(), kind });
+    addLog({
+      request: `↑ ${kind}${id !== undefined ? ` #${id}` : ""} · ${request}`,
+      intent: `sent${what}`,
+      json: JSON.stringify(message, null, 2),
+      watch,
+    });
+    return true;
+  }
+
+  function command(
     body: { text: string } | { action: string } | { question: string },
     request: string,
   ) {
-    const started = performance.now();
-    try {
-      const { data, error, response } = await api.POST("/api/glasses/command", {
-        body,
-        signal: AbortSignal.timeout(70000),
+    send({ type: "command", id: nextMessageId.current++, ...body }, request);
+  }
+
+  /** What the backend sent over the socket. */
+  function received(message: ServerMessage) {
+    const pending =
+      message.id === null ? undefined : pendingRef.current.get(message.id);
+    if (message.id !== null) pendingRef.current.delete(message.id);
+    const label = `${message.id === null ? "" : ` #${message.id}`}${
+      pending ? ` · ${pending.request}` : ""
+    }`;
+    const ms = pending
+      ? Math.round(performance.now() - pending.started)
+      : undefined;
+    if (message.type === "pong") {
+      addLog({
+        request: `↓ pong${label}`,
+        ms,
+        intent: "connection alive",
+        json: JSON.stringify(message, null, 2),
+        watch: true,
       });
-      if (data) apply(request, data, started);
-      else fail(request, `HTTP ${response.status}: ${JSON.stringify(error)}`);
-    } catch (error) {
-      fail(request, String(error));
+    } else if (message.type === "error") {
+      fail(
+        `↓ error${label}`,
+        `${message.status}: ${message.detail}`,
+        pending?.kind === "frame",
+      );
+      if (pending?.kind === "frame") setLastWatch(`Error: ${message.detail}`);
+    } else if (message.type === "watch_result") {
+      const { result } = message;
+      const outcome = result.warning
+        ? `warning: ${result.seen.join(", ")} in view`
+        : result.seen.length
+          ? `sees ${result.seen.join(", ")}, already warned in the last minute`
+          : "nothing to warn about";
+      const dropped = message.dropped
+        ? ` · ${message.dropped} newer frame${message.dropped === 1 ? "" : "s"} skipped while checking`
+        : "";
+      setLastWatch(
+        `${new Date().toLocaleTimeString()} · ${outcome} · ${result.note} · checked in ${message.ms} ms${dropped}`,
+      );
+      addLog({
+        request: `↓ watch_result${label}`,
+        ms,
+        intent: `${outcome} · ${result.note}${dropped}`,
+        json: JSON.stringify(message, null, 2),
+        watch: true,
+      });
+    } else if (message.id === null) {
+      // Pushed: a warning from a watched frame.
+      apply(`↓ reply, pushed: warning`, message.reply);
+      void loadReminders();
+    } else {
+      apply(`↓ reply${label}`, message.reply, pending?.started);
+      if (pending?.kind === "photo") onPhotoStored?.();
+    }
+    // Frames dropped by the backend never get an answer; don't keep them forever.
+    const now = performance.now();
+    for (const [id, waiting] of pendingRef.current)
+      if (waiting.kind === "frame" && now - waiting.started > PENDING_FRAME_MS)
+        pendingRef.current.delete(id);
+  }
+
+  function socketChanged(next: SocketState) {
+    setLink(next);
+    if (next.state === "open" && watching)
+      send({ type: "watch", on: true }, "watching again after reconnecting");
+    if (next.state === "closed") {
+      for (const [id, waiting] of pendingRef.current)
+        if (waiting.kind !== "frame" && waiting.kind !== "ping")
+          fail(
+            `#${id} · ${waiting.request}`,
+            "The socket closed before the answer came.",
+          );
+      pendingRef.current.clear();
     }
   }
 
@@ -313,30 +432,8 @@ export function GlassesHarness({
       fail(request, frame.error);
       return;
     }
-    const form = new FormData();
-    form.append("photo", frame.blob, "capture.jpg");
-    try {
-      // openapi-fetch sends JSON; multipart goes through fetch directly.
-      // The backend waits for the memory API to store and describe the photo.
-      const started = performance.now();
-      const response = await fetch("/api/glasses/photos", {
-        method: "POST",
-        body: form,
-        signal: AbortSignal.timeout(90000),
-      });
-      if (!response.ok) {
-        fail(request, `HTTP ${response.status}: ${await response.text()}`);
-        return;
-      }
-      apply(
-        `${request}, ${frame.width}×${frame.height}`,
-        (await response.json()) as GlassesReply,
-        started,
-      );
-      onPhotoStored?.();
-    } catch (error) {
-      fail(request, String(error));
-    }
+    // The backend describes and stores it, then answers with a reply.
+    send({ type: "photo", id: nextMessageId.current++ }, request, frame);
   }
 
   async function loadReminders() {
@@ -422,58 +519,23 @@ export function GlassesHarness({
     else fail(request, `HTTP ${response.status}`);
   }
 
-  /** One watched frame: the backend checks it for every reminder's object. */
-  async function watchOnce() {
+  /** One watched frame: the backend checks the newest for every reminder's object. */
+  async function watchOnce(stopped: () => boolean) {
     const frame = await grabFrame();
+    // Stopped while the frame was being grabbed: the backend no longer expects it.
+    if (stopped()) return;
     if ("error" in frame) {
       setLastWatch(`Stopped watching: ${frame.error}`);
       setWatching(false);
-      addLog({ request: "watch frame", error: frame.error, watch: true });
+      fail("watch frame", frame.error, true);
       return;
     }
-    const request = `watch frame ${frame.width}×${frame.height} · POST /api/glasses/watch`;
-    const form = new FormData();
-    form.append("photo", frame.blob, "watch.jpg");
-    try {
-      const started = performance.now();
-      const response = await fetch("/api/glasses/watch", {
-        method: "POST",
-        body: form,
-        signal: AbortSignal.timeout(90000),
-      });
-      if (!response.ok) {
-        const error = `HTTP ${response.status}: ${await response.text()}`;
-        setLastWatch(error);
-        addLog({ request, error, watch: true });
-        return;
-      }
-      const result = (await response.json()) as WatchResult;
-      const ms = Math.round(performance.now() - started);
-      const outcome = result.warning
-        ? `warning: ${result.seen.join(", ")} in view`
-        : result.seen.length
-          ? `sees ${result.seen.join(", ")}, already warned in the last minute`
-          : "nothing to warn about";
-      setLastWatch(
-        `${new Date().toLocaleTimeString()} · ${outcome} · ${result.note} · ${ms} ms`,
-      );
-      addLog({
-        request,
-        ms,
-        intent: `${outcome} · ${result.note}`,
-        speech: result.warning?.speech,
-        json: JSON.stringify(result, null, 2),
-        watch: true,
-      });
-      if (result.warning) {
-        // Drawn and spoken like any reply; the line above already logged it.
-        showWarning(result.warning);
-        void loadReminders();
-      }
-    } catch (error) {
-      setLastWatch(String(error));
-      addLog({ request, error: String(error), watch: true });
-    }
+    send({ type: "frame", id: nextMessageId.current++ }, "watch frame", frame);
+  }
+
+  function ping() {
+    if (socketRef.current?.open)
+      send({ type: "ping", id: nextMessageId.current++ }, "keepalive");
   }
 
   /** The capture button on the glasses' frame: take a photo. */
@@ -562,6 +624,26 @@ export function GlassesHarness({
     } else void command({ text }, `said “${text}” (typed)`);
   }
 
+  // One socket per harness, reconnecting with backoff. ?token= in the page address is passed on,
+  // for a backend with GLASSES_TOKEN set.
+  const onSocketMessage = useEffectEvent(received);
+  const onSocketState = useEffectEvent(socketChanged);
+  const onPing = useEffectEvent(ping);
+  useEffect(() => {
+    const token = new URLSearchParams(window.location.search).get("token");
+    const socket = new GlassesSocket(socketUrl(token), {
+      onState: (state) => onSocketState(state),
+      onMessage: (message) => onSocketMessage(message),
+    });
+    socketRef.current = socket;
+    const pinger = setInterval(() => onPing(), PING_EVERY_MS);
+    return () => {
+      clearInterval(pinger);
+      socket.close();
+      socketRef.current = null;
+    };
+  }, []);
+
   // Open the app once on load.
   const onFirstHome = useEffectEvent(showHome);
   const onFirstReminders = useEffectEvent(() => loadReminders());
@@ -570,15 +652,21 @@ export function GlassesHarness({
     void onFirstReminders();
   }, []);
 
-  // While watching, check a frame, wait, check the next: never two at once.
-  const onWatchTick = useEffectEvent(() => watchOnce());
+  // While watching, send a frame a second; the backend checks the newest one it has.
+  const onWatchTick = useEffectEvent((stopped: () => boolean) =>
+    watchOnce(stopped),
+  );
+  const onWatching = useEffectEvent((on: boolean) =>
+    send({ type: "watch", on }, on ? "start watching" : "stop watching"),
+  );
   useEffect(() => {
     if (!watching) return;
+    onWatching(true);
     let stopped = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const tick = async () => {
       const started = performance.now();
-      await onWatchTick();
+      await onWatchTick(() => stopped);
       const left = WATCH_EVERY_MS - (performance.now() - started);
       if (!stopped) timer = setTimeout(tick, Math.max(0, left));
     };
@@ -586,6 +674,7 @@ export function GlassesHarness({
     return () => {
       stopped = true;
       clearTimeout(timer);
+      onWatching(false);
     };
   }, [watching]);
 
@@ -651,7 +740,7 @@ export function GlassesHarness({
   return (
     <div className={`gh-root ${embedded ? "gh-embedded" : "gh-page"}`}>
       {embedded ? (
-        <StatusLine status={status} />
+        <StatusLine link={link} />
       ) : (
         <header className="gh-header">
           <div>
@@ -665,7 +754,7 @@ export function GlassesHarness({
                 <ArrowLeft size={14} aria-hidden="true" /> Home
               </Link>
             </nav>
-            <StatusLine status={status} />
+            <StatusLine link={link} />
           </div>
         </header>
       )}
@@ -855,8 +944,8 @@ export function GlassesHarness({
             </div>
             <p className="gh-note">
               Say or type “remind me not to trip over the stool”. While
-              watching, the webcam sends a frame every second and the glasses
-              warn when the thing is in view.
+              watching, the webcam sends a frame every second over the socket
+              and the backend pushes a warning when the thing is in view.
             </p>
             {lastWatch ? (
               <p className="gh-heard" aria-live="polite">
@@ -905,7 +994,7 @@ export function GlassesHarness({
                     checked={showWatchLog}
                     onChange={(event) => setShowWatchLog(event.target.checked)}
                   />
-                  Watch frames
+                  Frames &amp; pings
                 </label>
                 <button
                   type="button"
@@ -991,15 +1080,23 @@ function ReminderList({
   );
 }
 
-function StatusLine({ status }: { status: Status }) {
+function StatusLine({ link }: { link: SocketState }) {
+  const status =
+    link.state === "open"
+      ? "online"
+      : link.state === "closed"
+        ? "offline"
+        : "connecting";
   return (
     <p className={`gh-status gh-status-${status}`} role="status">
       <span aria-hidden="true" />
-      {status === "online"
-        ? "Backend connected"
-        : status === "offline"
-          ? "Backend unreachable"
-          : "Connecting…"}
+      {link.state === "open"
+        ? "Backend connected (WebSocket)"
+        : link.state === "closed"
+          ? `Backend ${link.reason}${link.retryInMs === null ? "" : `; retrying in ${Math.ceil(link.retryInMs / 1000)} s`}`
+          : link.attempt > 1
+            ? `Reconnecting… (attempt ${link.attempt})`
+            : "Connecting…"}
     </p>
   );
 }

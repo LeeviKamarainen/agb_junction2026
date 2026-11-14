@@ -31,6 +31,10 @@ class Settings(BaseSettings):
     memory_api_url: str | None = None
     memory_api_token: str | None = None
 
+    # The token glasses clients give when opening the WebSocket (/api/glasses/ws, as ?token= or
+    # a bearer header). Optional: without it the socket is open, as the other glasses routes are.
+    glasses_token: str | None = None
+
 
 @lru_cache
 def get_settings() -> Settings:

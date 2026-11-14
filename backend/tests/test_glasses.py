@@ -1,6 +1,8 @@
 import io
+import threading
 
 import pytest
+from fastapi import WebSocketDisconnect
 from PIL import Image
 
 from app import vectors
@@ -10,6 +12,7 @@ from app.llm import UpstreamError
 from app.main import app
 from app.routes.glasses import optional_chat, optional_embedder
 from app.search import TABLE
+from app.settings import get_settings
 
 WIDTH = vectors.VECTOR_TABLES[TABLE].dimensions
 
@@ -413,3 +416,143 @@ def test_watch_reports_an_unexpected_failure_instead_of_500(client, monkeypatch)
 
     assert result.status_code == 200
     assert "check failed: KeyError" in result.json()["note"]
+
+
+# --- The WebSocket (/api/glasses/ws) ---------------------------------------------------------
+
+
+def send_jpeg(ws, kind: str, id: int, data: bytes = JPEG):
+    ws.send_json({"type": kind, "id": id})
+    ws.send_bytes(data)
+
+
+def test_socket_answers_ping_and_commands(client):
+    with client.websocket_connect("/api/glasses/ws") as ws:
+        ws.send_json({"type": "ping", "id": 1})
+        assert ws.receive_json() == {"type": "pong", "id": 1}
+
+        ws.send_json({"type": "command", "id": 2, "action": "double_tap"})
+        message = ws.receive_json()
+        assert message["type"] == "reply" and message["id"] == 2
+        assert message["reply"]["client_action"] == "listen_question"
+
+        ws.send_json({"type": "command", "id": 3, "text": "remind me not to trip over the stool"})
+        assert ws.receive_json()["reply"]["intent"] == "remind"
+    assert [r["target"] for r in client.get("/api/glasses/reminders").json()] == ["stool"]
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        {"type": "command", "id": 4, "action": "self_destruct"},
+        {"type": "command", "id": 4, "text": "hi", "action": "home"},
+        {"type": "nonsense", "id": 4},
+    ],
+)
+def test_socket_reports_bad_messages_and_stays_open(client, message):
+    with client.websocket_connect("/api/glasses/ws") as ws:
+        ws.send_json(message)
+        error = ws.receive_json()
+        assert error["type"] == "error" and error["id"] == 4 and error["status"] == 422
+        ws.send_json({"type": "ping"})
+        assert ws.receive_json()["type"] == "pong"
+
+
+def test_socket_takes_photos_as_binary_frames(client):
+    with client.websocket_connect("/api/glasses/ws") as ws:
+        send_jpeg(ws, "photo", 5)
+        message = ws.receive_json()
+        assert message["type"] == "reply" and message["id"] == 5
+        assert "Photo saved" in texts(message["reply"]["screen"])
+
+        send_jpeg(ws, "photo", 6, b"not a jpeg")
+        assert ws.receive_json() == {
+            "type": "error",
+            "id": 6,
+            "status": 415,
+            "detail": "photo must be a JPEG",
+        }
+        ws.send_json({"type": "command", "id": 7, "text": "show my photos"})
+        assert "Latest 1 photos" in texts(ws.receive_json()["reply"]["screen"])
+
+
+def test_socket_checks_frames_only_while_watching(client):
+    with client.websocket_connect("/api/glasses/ws") as ws:
+        send_jpeg(ws, "frame", 1)
+        assert ws.receive_json()["status"] == 409
+
+
+def test_socket_pushes_a_warning_when_the_object_is_in_view(client):
+    client.post("/api/glasses/reminders", json={"text": "warn me about the stool"})
+    use_models(chat=says("1"))
+    with client.websocket_connect("/api/glasses/ws") as ws:
+        ws.send_json({"type": "watch", "on": True})
+        send_jpeg(ws, "frame", 1)
+
+        result = ws.receive_json()
+        assert result["type"] == "watch_result" and result["id"] == 1
+        assert result["result"]["seen"] == ["stool"] and result["dropped"] == 0
+        warning = ws.receive_json()
+        assert warning["type"] == "reply" and warning["id"] is None
+        assert warning["reply"]["speech"] == "Careful: stool ahead."
+
+        send_jpeg(ws, "frame", 2)
+        again = ws.receive_json()
+        assert again["result"]["warning"] is None  # warned less than a minute ago
+        ws.send_json({"type": "ping"})
+        assert ws.receive_json()["type"] == "pong"  # and no second warning before it
+
+
+def test_socket_checks_only_the_latest_frame(client):
+    client.post("/api/glasses/reminders", json={"text": "warn me about the stool"})
+    checking, release, checks = threading.Event(), threading.Event(), []
+
+    def slow_model(_messages, _tools):
+        checks.append(1)
+        checking.set()
+        assert release.wait(5)
+        return {"role": "assistant", "content": "none"}
+
+    use_models(chat=slow_model)
+    with client.websocket_connect("/api/glasses/ws") as ws:
+        ws.send_json({"type": "watch", "on": True})
+        send_jpeg(ws, "frame", 1)
+        assert checking.wait(5)
+        for id in (2, 3, 4):  # arrive while frame 1 is being checked
+            send_jpeg(ws, "frame", id)
+        ws.send_json({"type": "ping"})
+        assert ws.receive_json()["type"] == "pong"  # the socket kept reading meanwhile
+        release.set()
+
+        first, latest = ws.receive_json(), ws.receive_json()
+        assert (first["id"], first["dropped"]) == (1, 0)
+        assert (latest["id"], latest["dropped"]) == (4, 2)  # 2 and 3 were never checked
+    assert len(checks) == 2
+
+
+@pytest.fixture
+def token(monkeypatch):
+    monkeypatch.setenv("GLASSES_TOKEN", "s3cret")
+    get_settings.cache_clear()
+    yield "s3cret"
+    get_settings.cache_clear()
+
+
+@pytest.mark.parametrize("url", ["/api/glasses/ws", "/api/glasses/ws?token=wrong"])
+def test_socket_refuses_a_missing_or_wrong_token(client, token, url):
+    with pytest.raises(WebSocketDisconnect) as refused:
+        with client.websocket_connect(url) as ws:
+            ws.receive_json()
+    assert refused.value.code == 1008
+
+
+@pytest.mark.parametrize("how", ["query", "header"])
+def test_socket_accepts_the_token(client, token, how):
+    url, headers = "/api/glasses/ws", {}
+    if how == "query":
+        url += f"?token={token}"
+    else:
+        headers["Authorization"] = f"Bearer {token}"
+    with client.websocket_connect(url, headers=headers) as ws:
+        ws.send_json({"type": "ping"})
+        assert ws.receive_json()["type"] == "pong"
