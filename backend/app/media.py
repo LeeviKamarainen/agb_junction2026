@@ -44,6 +44,11 @@ def path(name: str) -> Path:
     return media_dir() / Path(name).name  # .name: never leave the folder
 
 
+def version(name: str) -> str:
+    """The part of an image's file name that changes whenever the image does."""
+    return Path(name).stem
+
+
 def data_url(name: str) -> str:
     """The image as a data: URL, which the chat and embedding servers read without fetching."""
     return "data:image/jpeg;base64," + base64.b64encode(path(name).read_bytes()).decode()

@@ -247,7 +247,11 @@ def test_gemma_removes_a_goal_when_its_owner_asks_in_the_chat(client):
     messages, tools = gemma.calls[0]
     assert f"goal {bus['goal_id']}: “Tell me when my bus comes”" in messages[0]["content"]
     assert f"goal {keys['goal_id']}: “Say where the keys are.”" in messages[0]["content"]
-    assert [tool["function"]["name"] for tool in tools] == ["vector_search", "stop_watching"]
+    assert [tool["function"]["name"] for tool in tools] == [
+        "vector_search",
+        "start_watching",
+        "stop_watching",
+    ]
     result = next(step for step in body["steps"] if step["type"] == "tool_result")
     assert result["content"] == "Stopped watching: Tell me when my bus comes"
     assert json.loads(gemma.calls[1][0][-1]["content"]) == {
@@ -290,15 +294,61 @@ def test_gemma_cannot_remove_another_accounts_goal(client, guest):
     assert f"goal {hers['goal_id']}:" not in gemma.calls[0][0][0]["content"]
 
 
-def test_without_goals_the_chat_has_only_its_search_tool(client):
+def test_without_goals_the_chat_cannot_stop_watching(client):
     gemma = FakeGemma({"content": "Nothing to stop."})
     talking(client, gemma)
 
     client.post("/api/ask", json={"question": "Stop watching for my bus"})
 
     messages, tools = gemma.calls[0]
-    assert [tool["function"]["name"] for tool in tools] == ["vector_search"]
+    assert [tool["function"]["name"] for tool in tools] == ["vector_search", "start_watching"]
     assert "watching out for" not in messages[0]["content"]
+
+
+def start_call(goal, id="w"):
+    return {
+        "id": id,
+        "type": "function",
+        "function": {"name": "start_watching", "arguments": json.dumps({"goal": goal})},
+    }
+
+
+def test_gemma_starts_watching_when_asked_in_the_chat(client):
+    asked = "Tell me when my bus comes"
+    gemma = FakeGemma(
+        {"content": None, "tool_calls": [start_call(asked), start_call(asked, "again")]},
+        {"content": json.dumps({"triggers": [{"name": "Bus", "watch_for": "a city bus"}]})},
+        {"content": "I'll tell you when your bus comes."},
+    )
+    talking(client, gemma)
+
+    body = client.post("/api/ask", json={"question": asked}).json()
+
+    assert body["answer"] == "I'll tell you when your bus comes."
+    (goal,) = client.get("/api/glasses/goals").json()  # the second call added nothing
+    assert goal["text"] == asked and goal["enabled"]
+    assert [t["watch_for"] for t in goal["triggers"]] == ["a city bus"]
+    results = [step["content"] for step in body["steps"] if step["type"] == "tool_result"]
+    assert results == [f"Now watching: {asked} (Bus)", "Already watching"]
+    assert json.loads(gemma.calls[2][0][-2]["content"]) == {
+        "now_watching": asked,
+        "triggers": ["Bus"],
+    }
+
+
+def test_gemma_is_told_when_no_trigger_could_be_written(client):
+    gemma = FakeGemma(
+        {"content": None, "tool_calls": [start_call("Tell me when my bus comes")]},
+        {"content": "I would rather not."},  # not the triggers asked for
+        {"content": "Sorry, I could not set that up."},
+    )
+    talking(client, gemma)
+
+    body = client.post("/api/ask", json={"question": "Tell me when my bus comes"}).json()
+
+    assert body["answer"] == "Sorry, I could not set that up."
+    assert [step["type"] for step in body["steps"]].count("tool_error") == 1
+    assert client.get("/api/glasses/goals").json() == []
 
 
 def test_stopping_the_same_goal_twice_in_one_answer_is_not_an_error(client):

@@ -22,7 +22,7 @@ Meta glasses ──► Android app ──WebSocket──► backend (FastAPI + S
 | Folder | What it is |
 |---|---|
 | `backend/` | FastAPI backend (SQLModel on SQLite, vector search with sqlite-vec). Stores memories, runs the ask loop, checks frames against triggers and reminders, decides what the glasses display. All routes are under `/api`. |
-| `frontend/` | Next.js web app: the **Memory lab** (`/memory`), the **glasses harness** (`/glasses`) and the login pages. |
+| `frontend/` | Next.js web app: **Ask your day** (`/`), **Demos** (`/demos`), the **Memory lab** (`/memory`), the **glasses harness** (`/glasses`) and the login pages. |
 | `glasses-android/` | The real glasses client: an Android app that streams the Meta glasses' camera and sends frames, photos and voice to the backend; see [its README](glasses-android/README.md). |
 | `memory/` | The visual memory service that runs on the Gemma server: embeds frames, serves the embeddings and chat, and draws the memory map; see [its README](memory/README.md). Its own uv project (about 6 GB with torch). |
 | `my-glasses-app/` | A small web app for the glasses' display (React, Meta's UI toolkit), see below. |
@@ -55,11 +55,21 @@ ADMIN_PASSWORD=...   # optional: otherwise a random admin password is printed in
 
 ### Log in
 
-Open http://localhost:3000 and start a **guest**: a generated name, no password, valid for 60 minutes, which sees the demo memories and the ones it adds. The admin sees every memory and logs in at `/login?admin=1` with `ADMIN_PASSWORD`. See [AGENTS.md](AGENTS.md) for how accounts and scoping work.
+Open http://localhost:3000 and start a **guest**: a generated name, no password, valid for 60 minutes, which sees the demo memories and the ones it adds. The admin sees every memory and logs in at `/admin` with `ADMIN_PASSWORD`, reached through the small settings icon on the login form. See [AGENTS.md](AGENTS.md) for how accounts and scoping work.
+
+### Ask your day and curated demos
+
+The homepage keeps the question box in focus. A visitor's first question starts a 60-minute guest session; answers search the demo memories and that guest's own memories. Logged-in guests and the admin can open the phone camera from the navigation.
+
+Watch `/demos` without logging in. Published videos and ordered image sequences share one timeline, with chapter navigation, seeking, pause and mute controls.
+
+At `/admin`, add a draft, upload one MP4/WebM video (up to 200 MB) or a batch of images (up to 100, 15 MB each, 200 MB per upload), then publish. Adjust image dwell time, reorder images and move demos earlier or later. Video length is detected in the browser and can be adjusted. Published media is public; drafts are visible only to the admin. Playback uploads are separate from searchable memories: add those in the Memory lab when a demo should also answer questions.
+
+Media files live in `showcase-media/` beside the database. Schema or seed changes rebuild the disposable database and remove demo configurations; old files are not reassigned to new demos. The seed contains an unpublished starter draft, so upload and publish your media after a rebuild.
 
 ### Memory lab (`/memory`)
 
-- **Library:** add memories by uploading images, taking a webcam picture, or writing a note; group them into collections.
+- **Library:** add memories by uploading images, taking a webcam picture, or writing a note; group them into collections. Browse stable thumbnails in pages of 24, search captions/collections, and tap a memory to inspect the full image.
 - **Ask tab:** ask Gemma a question and watch it search the memories step by step.
 - **Map:** every stored vector projected to 2D and 3D; the memories found by the last question are ringed.
 - **Glasses tab:** the glasses harness inside the lab: what the wearer sees and hears.
@@ -71,7 +81,16 @@ Stands in for the glasses and the Android app, so the glasses UI can be built an
 
 It calls the same `/api/glasses/*` endpoints and WebSocket the Android app uses. The backend decides what to show, as layouts made of the glasses SDK's display components in `backend/app/glasses/screens.py`, and the harness draws them on a 600×600 display. "See-through" blends the display over the webcam the way the real display adds light to the world.
 
+On a phone, open the HTTPS site at `/glasses`, rotate to landscape, and tap **Start camera**. The
+feed comes from that phone, preferring the rear camera; **Switch camera** requests the other lens.
+If the device has only one camera, the browser uses it. The feed appears behind the display by
+default, and memory and reminder frames use the same stream. In landscape the POV fills the first viewport; scroll down for controls and account navigation.
+Tap **Fullscreen** to hide browser chrome where supported, and **Controls** to jump below the POV. Portrait and desktop layouts are supported too. Use **Turn off** to
+release the camera, or **Cancel camera** if the permission request is still waiting. Camera access
+on a real phone requires HTTPS; an ordinary HTTP LAN address will not work.
+
 Things to try: ask "where did I leave my keys?", say "remind me about the stool" and point the webcam at one.
+
 
 ### The real glasses
 

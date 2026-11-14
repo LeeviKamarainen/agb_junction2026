@@ -4,6 +4,7 @@ import {
   Bell,
   Camera,
   Circle,
+  History,
   LoaderCircle,
   Send,
   Square,
@@ -21,8 +22,10 @@ import {
 import { Button } from "@/components/ui/button";
 import type { components } from "@/lib/api/schema";
 
+import type { LayoutNode } from "../glasses/types";
 import { errorText } from "./types";
 
+export type GlassesReply = components["schemas"]["GlassesReply"];
 type FrameReply = components["schemas"]["FrameReply"];
 type Message = components["schemas"]["GlassesMessage"];
 
@@ -30,17 +33,77 @@ const FPS = 2;
 const MESSAGE_MS = 8_000; // how long a trigger's message stays on the glasses
 const DOUBLE_TAP_MS = 450; // two taps closer than this are a double tap
 
+/** The glasses' déjà vu screen in the glasses view: its stills with their captions, and its text. */
+function Recalled({ screen }: { screen: LayoutNode }) {
+  const stills: { src: string; alt: string; caption: string }[] = [];
+  const lines: { value: string; heading: boolean }[] = [];
+  (function walk(node: LayoutNode) {
+    if (node.type === "text")
+      lines.push({ value: node.value, heading: node.style === "HEADING" });
+    if (node.type !== "flexbox") return;
+    const [image, caption] = node.children;
+    // A still is a box of an image and the caption under it.
+    if (image?.type === "image" && caption?.type === "text")
+      stills.push({ src: image.src, alt: image.alt, caption: caption.value });
+    else node.children.forEach(walk);
+  })(screen);
+  return (
+    <span
+      role="status"
+      className="absolute inset-x-4 bottom-4 flex flex-col gap-2 rounded-lg bg-black/75 p-3 text-sm text-white"
+    >
+      {lines
+        .filter((line) => line.heading)
+        .map((line) => (
+          <span
+            key={line.value}
+            className="flex items-center gap-1.5 font-semibold"
+          >
+            <History size={14} aria-hidden="true" /> {line.value}
+          </span>
+        ))}
+      {stills.length > 0 && (
+        <span className="grid grid-cols-3 gap-2">
+          {stills.map((still) => (
+            <span key={still.src} className="flex flex-col gap-1">
+              {/* A plain <img>: the backend serves the still as it is. */}
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={still.src}
+                alt={still.alt}
+                className={`aspect-video w-full rounded-md object-cover ${
+                  still.caption.startsWith("Same") ? "ring-2 ring-white" : ""
+                }`}
+              />
+              <span className="text-xs text-white/70">{still.caption}</span>
+            </span>
+          ))}
+        </span>
+      )}
+      {lines
+        .filter((line) => !line.heading)
+        .map((line) => (
+          <span key={line.value}>{line.value}</span>
+        ))}
+    </span>
+  );
+}
+
 /**
  * A stand-in for the glasses and the phone: the webcam is the glasses' camera. A double click on
  * the glasses view (the Neural Band's double tap) starts or stops a 2 fps stream to
  * /api/glasses/frames; a single click takes one photo. The view shows what the glasses display
- * would: a small icon top right while recording or sending, and a trigger's message.
+ * would: a small icon top right while recording or sending, a trigger's message, and the
+ * reply to a déjà vu question (`recalled`), which takes the message's place.
  */
 export function GlassesStream({
   onReply,
+  recalled,
 }: {
   /** Every reply, e.g. to show each trigger's score and level. */
   onReply: (reply: FrameReply) => void;
+  /** The glasses' reply to "where have I seen this one?", while it is on the display. */
+  recalled?: GlassesReply | null;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const cameraRef = useRef<MediaStream | null>(null);
@@ -268,7 +331,8 @@ export function GlassesStream({
             )}
           </span>
         )}
-        {message && (
+        {recalled && <Recalled screen={recalled.screen} />}
+        {message && !recalled && (
           <span
             className="absolute inset-x-4 bottom-4 flex flex-col gap-1 rounded-lg bg-black/75 p-3 text-white"
             role="status"

@@ -1,17 +1,18 @@
 import io
 import threading
+from datetime import UTC, datetime, timedelta
 
 import anyio
 import pytest
 from fastapi import WebSocketDisconnect
 from PIL import Image
 
-from app import vectors
+from app import media, vectors
 from app.glasses import reminders
 from app.llm import UpstreamError
 from app.main import app
 from app.routes.glasses import optional_chat, optional_embedder
-from app.search import TABLE
+from app.search import TABLE, add_memory
 
 WIDTH = vectors.VECTOR_TABLES[TABLE].dimensions
 
@@ -443,3 +444,138 @@ def test_socket_survives_a_refused_client_leaving_first(anonymous, guest):
     with anonymous.websocket_connect("/api/glasses/ws", headers=bearer) as ws:
         ws.send_json({"type": "ping"})
         assert ws.receive_json()["type"] == "pong"
+
+
+# --- Déjà vu: "where do I know this from?" ---------------------------------------------------
+
+
+def seen_before(db, hours: list[int], owner: int = 0) -> None:
+    """One earlier still per entry, seen that many hours ago; the first is the most like the
+    photo `fake_embed` gives, the next a little less, and so on."""
+
+    async def add(session):
+        for place, ago in enumerate(hours, 1):
+            await add_memory(
+                session,
+                "image",
+                [1.0, 0.1 * place] + [0.0] * (WIDTH - 2),
+                datetime.now(UTC) - timedelta(hours=ago),
+                image_file=media.save_image(JPEG),
+                collection="glasses",
+                owner_id=owner,
+            )
+        await session.commit()
+
+    db(add)
+
+
+def look(client, **headers) -> None:
+    """Send the photo that the question is about."""
+    use_models(embed=fake_embed)
+    files = {"frame": ("a.jpg", JPEG, "image/jpeg")}
+    assert client.post("/api/glasses/frames", files=files, **headers).json()["stored"]
+
+
+def images(node: dict) -> list[str]:
+    if node["type"] == "image":
+        return [node["src"]]
+    return [src for child in node.get("children", []) for src in images(child)]
+
+
+def test_recall_shows_the_three_closest_stills_and_when_it_was_last_seen(client, db):
+    seen_before(db, [5, 2, 3, 1])
+    look(client)
+    use_models(chat=says('```json\n{"same": [1, 2], "say": "Your mug, on the desk."}\n```'))
+
+    reply = client.post("/api/glasses/command", json={"question": "Where do I know this from?"})
+
+    reply = reply.json()
+    assert reply["intent"] == "recall"
+    assert images(reply["screen"]) == [f"/api/memories/{id}/image" for id in (1, 2, 3)]
+    shown = texts(reply["screen"])
+    assert "Seen 2 hours ago" in shown  # the newer of the two stills found the same
+    assert "Same, 5 hours ago" in shown and "Same, 2 hours ago" in shown
+    assert "Same, 3 hours ago" not in shown
+    assert reply["speech"] == "You last saw this 2 hours ago. Your mug, on the desk."
+
+
+def test_recall_says_no_when_the_model_finds_none_the_same(client, db):
+    seen_before(db, [5, 2])
+    look(client)
+    use_models(chat=says('{"same": [], "say": "I haven’t seen this before; that was a vase."}'))
+
+    reply = client.post("/api/glasses/command", json={"question": "have I seen this before"}).json()
+
+    assert len(images(reply["screen"])) == 2
+    assert "Not seen before" in texts(reply["screen"])
+    assert "Same" not in texts(reply["screen"])
+    assert reply["speech"] == "I haven’t seen this before; that was a vase."
+
+
+@pytest.mark.parametrize(
+    "asked", ["What did I see this morning?", "remember this is where I parked", "see this sign"]
+)
+def test_recall_leaves_other_questions_to_the_memory(client, asked):
+    reply = client.post("/api/glasses/command", json={"question": asked}).json()
+
+    assert reply["intent"] == "ask_memory"
+
+
+def test_recall_skips_the_look_the_wearer_is_still_having(client, db):
+    """Stills of the same view, stored one after the other up to now, are not "before"."""
+
+    async def add(session):
+        for seconds in (50, 40):  # the stream's stills of this look, older than GAP_S
+            await add_memory(
+                session,
+                "image",
+                [1.0] + [0.0] * (WIDTH - 1),
+                datetime.now(UTC) - timedelta(seconds=seconds),
+                image_file=media.save_image(JPEG),
+                collection="glasses",
+                owner_id=1,  # the admin, who asks
+            )
+        await session.commit()
+
+    db(add)
+    look(client)
+    use_models(chat=says('{"same": [1], "say": "x"}'))
+
+    reply = client.post("/api/glasses/command", json={"question": "have I seen this before"})
+
+    assert images(reply.json()["screen"]) == []
+    assert "Not seen before" in texts(reply.json()["screen"])
+
+
+def test_recall_needs_a_still_from_just_now(client, db):
+    seen_before(db, [5])
+    use_models(chat=says('{"same": [1], "say": "x"}'))
+
+    reply = client.post("/api/glasses/command", json={"question": "where do I know this one"})
+
+    assert reply.json()["intent"] == "recall"
+    assert "I need to see it" in texts(reply.json()["screen"])
+
+
+def test_recall_does_not_take_words_for_an_answer(client, db):
+    seen_before(db, [5])
+    look(client)
+    use_models(chat=says("Yes, that looks like the same mug."))
+
+    reply = client.post("/api/glasses/command", json={"question": "do I know this from somewhere"})
+
+    assert "I can’t reach the memory right now." in texts(reply.json()["screen"])
+
+
+def test_recall_only_looks_in_the_askers_memories(client, db, guest):
+    bearer = guest("aino")
+    seen_before(db, [5], owner=1)  # the admin's own, not a demo memory
+    look(client, headers=bearer)
+    use_models(chat=says('{"same": [1], "say": "x"}'))
+
+    reply = client.post(
+        "/api/glasses/command", json={"question": "where do I know this from"}, headers=bearer
+    ).json()
+
+    assert images(reply["screen"]) == []
+    assert "Not seen before" in texts(reply["screen"])

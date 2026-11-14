@@ -214,8 +214,14 @@ async def add_text(
 
 
 @router.get("/memories/{id}/image", response_class=FileResponse)
-async def memory_image(id: int, session: SessionDep, viewer: ViewerDep):
-    """404, not 403, for someone else's image: nobody learns which ids exist."""
+async def memory_image(
+    id: int, session: SessionDep, viewer: ViewerDep, v: str | None = None
+) -> FileResponse:
+    """404, not 403, for someone else's image: nobody learns which ids exist.
+
+    With `v` (as `image_url` gives it) matching the image, the browser may keep it for good, since
+    a different image gets a different `v`; without it, it has to ask again every time.
+    """
     memory = await session.get(Memory, id)
     if (
         memory is None
@@ -224,7 +230,16 @@ async def memory_image(id: int, session: SessionDep, viewer: ViewerDep):
         or not media.path(memory.image_file).exists()
     ):
         raise HTTPException(404, "No image for this memory")
-    return FileResponse(media.path(memory.image_file), media_type="image/jpeg")
+    cache = (
+        "private, max-age=31536000, immutable"
+        if v == media.version(memory.image_file)
+        else "private, no-cache"
+    )
+    return FileResponse(
+        media.path(memory.image_file),
+        media_type="image/jpeg",
+        headers={"Cache-Control": cache},
+    )
 
 
 @router.delete("/memories/{id}", status_code=204)

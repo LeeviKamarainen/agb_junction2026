@@ -10,7 +10,7 @@ import {
   SendHorizontal,
   Sparkles,
 } from "lucide-react";
-import { type FormEvent, useEffect, useRef, useState } from "react";
+import { type FormEvent, useEffect, useId, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 
@@ -37,13 +37,19 @@ const EXAMPLES = [
 ];
 
 export function AskChat({
+  compact = false,
+  beforeAsk,
   collections = [],
   onFound,
   pinned,
   examples = EXAMPLES,
   intro = "Ask about your memories. Gemma decides what to search for; each tool call, its arguments and the results appear here as they happen.",
   className = "min-h-[70vh]",
+  special,
+  onDone,
 }: {
+  compact?: boolean;
+  beforeAsk?: () => Promise<void>;
   collections?: CollectionCount[];
   /** Every memory the latest question's searches returned so far, first seen first. */
   onFound?: (ids: number[]) => void;
@@ -53,6 +59,11 @@ export function AskChat({
   intro?: string;
   /** Sizes the panel. */
   className?: string;
+  /** A question the page answers itself instead of Gemma's question loop: its answer, or null
+   * for any other question. */
+  special?: (question: string) => Promise<string> | null;
+  /** An exchange ended, in an answer or an error. */
+  onDone?: () => void;
 } = {}) {
   const [exchanges, setExchanges] = useState<Exchange[]>([]);
   const [searchIn, setSearchIn] = useState<string[]>([]);
@@ -65,9 +76,10 @@ export function AskChat({
   const [question, setQuestion] = useState("");
   const [busy, setBusy] = useState(false);
   const bottom = useRef<HTMLDivElement>(null);
+  const ids = useId(); // the page may hold more than one chat
 
   useEffect(() => {
-    bottom.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+    if (exchanges.length) bottom.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [exchanges]);
 
   function addStep(id: number, step: Step, done = false) {
@@ -100,6 +112,15 @@ export function AskChat({
       addStep(id, { type: "error", round: 0, elapsed_ms: 0, content }, true);
 
     try {
+      const own = special?.(trimmed);
+      if (own) {
+        const started = performance.now();
+        const content = await own;
+        const elapsed_ms = Math.round(performance.now() - started);
+        addStep(id, { type: "answer", round: 0, elapsed_ms, content }, true);
+        return;
+      }
+      await beforeAsk?.();
       const response = await fetch("/api/ask/stream", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -143,6 +164,7 @@ export function AskChat({
       );
     } finally {
       setBusy(false);
+      onDone?.();
     }
   }
 
@@ -153,11 +175,14 @@ export function AskChat({
 
   return (
     <section
-      aria-labelledby="chat-title"
-      className={`flex flex-col rounded-xl border border-border bg-card ${className}`}
+      aria-labelledby={`${ids}-title`}
+      className={`flex flex-col rounded-md border border-border bg-card ${compact ? "home-ask" : ""} ${className}`}
     >
-      <div className="flex items-center justify-between gap-2 border-b border-border p-4">
-        <h2 id="chat-title" className="flex items-center gap-2 font-semibold">
+      {!compact && <div className="flex items-center justify-between gap-2 border-b border-border p-4">
+        <h2
+          id={`${ids}-title`}
+          className="flex items-center gap-2 font-semibold"
+        >
           <Bot size={18} aria-hidden="true" /> Ask Gemma
         </h2>
         {exchanges.length > 0 && (
@@ -170,7 +195,7 @@ export function AskChat({
             Clear
           </Button>
         )}
-      </div>
+      </div>}
 
       <div
         className="flex flex-1 flex-col gap-6 overflow-y-auto p-4"
@@ -178,8 +203,8 @@ export function AskChat({
       >
         {exchanges.length === 0 && (
           <div className="m-auto flex max-w-sm flex-col items-center gap-3 text-center text-sm text-muted-foreground">
-            <MessageSquareText size={28} aria-hidden="true" />
-            <p>{intro}</p>
+            {!compact && <MessageSquareText size={28} aria-hidden="true" />}
+            {intro && <p>{intro}</p>}
             <div className="flex flex-wrap justify-center gap-2">
               {examples.map((example) => (
                 <Button
@@ -213,11 +238,11 @@ export function AskChat({
         </div>
       )}
       <form onSubmit={submit} className="flex items-end gap-2 p-3">
-        <label htmlFor="question" className="sr-only">
+        <label htmlFor={`${ids}-question`} className="sr-only">
           Your question
         </label>
         <textarea
-          id="question"
+          id={`${ids}-question`}
           rows={2}
           maxLength={2000}
           value={question}
@@ -228,7 +253,7 @@ export function AskChat({
               void ask(question);
             }
           }}
-          placeholder={examples[0] ?? "Ask a question"}
+          placeholder={compact ? "Ask a question about your day…" : examples[0] ?? "Ask a question"}
           className="flex-1 resize-none rounded-md border border-border bg-background px-3 py-2 text-sm outline-none focus-visible:border-primary"
           disabled={busy}
         />

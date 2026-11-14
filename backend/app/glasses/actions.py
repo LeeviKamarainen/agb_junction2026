@@ -17,7 +17,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app import agent, faces
 from app.auth import Viewer
-from app.glasses import frames, reminders, screens
+from app.glasses import dejavu, frames, reminders, screens
 from app.glasses.layout import GlassesReply
 from app.llm import Chat, Embedder, UpstreamError
 
@@ -96,6 +96,8 @@ async def command(
         return screens.home()
     if reminders.is_reminder(question):
         return await _remind(session, question, chat, viewer)
+    if dejavu.is_recall(question):
+        return await _recall(session, question, chat, viewer)
     return await _ask(session, question, chat, embed, viewer)
 
 
@@ -106,6 +108,22 @@ async def _remind(
     if reminder is None:
         return screens.reminder_unclear(text)
     return screens.reminder_added(reminder.target, reminder.text)
+
+
+async def _recall(
+    session: AsyncSession, question: str, chat: Chat | None, viewer: Viewer
+) -> GlassesReply:
+    """Déjà vu (dejavu.py): where the wearer has seen what is in front of them."""
+    if chat is None:
+        return screens.memory_problem(question, "Memory search isn’t set up yet.")
+    try:
+        found = await dejavu.recall(session, chat, viewer)
+    except (UpstreamError, ValueError) as error:
+        log.warning("Déjà vu failed: %s", error)
+        return screens.memory_problem(question, "I can’t reach the memory right now.")
+    if found is None:
+        return screens.recall_needs_still()
+    return screens.recall(found)
 
 
 async def _ask(
