@@ -14,12 +14,8 @@ import { type ChangeEvent, useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api/browser";
 
-import {
-  errorText,
-  formatTime,
-  type Memory,
-  toLocalInput,
-} from "./types";
+import { errorText, formatTime, type Memory, toLocalInput } from "./types";
+import { WebcamCapture } from "./webcam-capture";
 
 type Pending = {
   key: string;
@@ -34,7 +30,12 @@ type Pending = {
 const field =
   "w-full rounded-md border border-border bg-background px-2 py-1.5 text-sm outline-none focus-visible:border-primary disabled:opacity-60";
 
-export function MemoryLibrary() {
+type LibraryProps = {
+  /** Changing it reloads the list, e.g. after the glasses stored a photo. */
+  refreshKey?: number;
+};
+
+export function MemoryLibrary({ refreshKey = 0 }: LibraryProps = {}) {
   const [memories, setMemories] = useState<Memory[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [pending, setPending] = useState<Pending[]>([]);
@@ -65,11 +66,15 @@ export function MemoryLibrary() {
     // Loading on mount is the point of this effect: the list lives in the database.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     void load();
-  }, [load]);
+  }, [load, refreshKey]);
 
   function choose(event: ChangeEvent<HTMLInputElement>) {
     const files = Array.from(event.target.files ?? []);
     event.target.value = ""; // so choosing the same file again still fires
+    addFiles(files);
+  }
+
+  function addFiles(files: File[]) {
     setPending((current) => [
       ...current,
       ...files.map((file) => ({
@@ -211,6 +216,10 @@ export function MemoryLibrary() {
             disabled={uploading}
           />
         </label>
+        <WebcamCapture
+          onCapture={(file) => addFiles([file])}
+          disabled={uploading}
+        />
 
         {pending.length > 0 && (
           <>
@@ -415,7 +424,9 @@ function StatusBadge({ item }: { item: Pending }) {
       : item.status === "uploading"
         ? "text-primary"
         : "text-muted-foreground";
-  return <span className={`shrink-0 text-xs ${colour}`}>{labels[item.status]}</span>;
+  return (
+    <span className={`shrink-0 text-xs ${colour}`}>{labels[item.status]}</span>
+  );
 }
 
 function sortNewestFirst(memories: Memory[]): Memory[] {

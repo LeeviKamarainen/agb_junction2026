@@ -17,10 +17,18 @@ To get SSH access to the server, add an SSH key to your GitHub account (Settings
 
 ## What's in this repo
 
-- `backend/` and `frontend/`: the web app and its API, run with `make dev`.
+- `backend/` and `frontend/`: the web app and its API, run with `make dev`. The glasses harness lives here too: http://localhost:3000/glasses (see below).
 - `my-glasses-app/`: a web app for Meta Ray-Ban Display glasses (see below).
 - `glasses-android/`: an Android app that streams the Meta glasses camera; see [its README](glasses-android/README.md).
 - `memory/`: the visual memory for the glasses; see [its README](memory/README.md).
+
+## Glasses harness
+
+http://localhost:3000/glasses (after `make dev`) stands in for the glasses and the Android app, so the glasses UI can be built without them: the webcam is the camera, the laptop mic is the microphone (hold Space or the talk button; Chrome only, and Chrome sends the audio to Google to transcribe), the speakers read replies aloud, and the arrow keys and Enter stand in for the Neural Band. You can also type what the wearer says.
+
+It calls the same `/api/glasses/*` endpoints the Android app will. The backend decides what to show, as layouts made of the SDK's display components (FlexBox, Text, Image, Icon, Button) in `backend/app/glasses/screens.py`, and the harness draws them on a 600×600 display. "See-through" blends the display over the webcam the way the glasses' display adds light to the world.
+
+With `LLM_URL` set, a photo is described by the chat model ("what am I looking at?" takes one); with `EMBED_URL` too, it becomes an image memory captioned with that description, so it shows in the Memory lab and questions such as "where did I leave my keys?" find it through the same loop as `/api/ask`. Without them the harness still takes and shows photos.
 
 ## my-glasses-app
 

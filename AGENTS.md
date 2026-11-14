@@ -30,7 +30,7 @@ Vector search lives in the same file, through the sqlite-vec extension (`backend
 
 ## Frontend
 
-Read `frontend/AGENTS.md` before writing frontend code.
+Read `frontend/AGENTS.md` before writing frontend code. Every new page gets a link from the site: in the home page's navigation (`frontend/src/app/page.tsx`), and from related pages where it fits.
 
 ## Deploying
 
@@ -67,7 +67,13 @@ curl -H "$AUTH" -H "Content-Type: application/json" -d '{"question": "where are 
 curl -H "$AUTH" -H "Content-Type: application/json" -d '{"model": "google/embeddinggemma-2", "input": ["keys"]}' $URL/v1/embeddings
 ```
 
+`/v1/chat/completions` passes OpenAI-style chat, tool calls included, to vLLM on the same server (`GEMMA_URL`, `GEMMA_API_KEY`), so the backend reaches Gemma with this API's token: `LLM_URL` is the memory API's address and `LLM_API_KEY` its `GLASS_API_TOKEN`. It needs a `make memory-deploy` to go live.
+
 `/v1/embeddings` serves EmbeddingGemma 2 (`google/embeddinggemma-2`), 768 numbers per input, in the same space as the stored stills; an input that starts with `data:image/` (a base64 data URL) is embedded as an image, any other as text. It replaced CLIP (`ViT-B-32`, 512 numbers) on 2026-11-14: that name now gets a 400, and vectors made with it cannot be compared with new ones.
+
+## Glasses
+
+`/glasses` in the frontend is a harness standing in for the glasses (webcam, mic, speakers, a 600×600 display); `glasses-android` is the real client. Both call `/api/glasses/*` (`backend/app/routes/glasses.py`) and draw the `GlassesReply` they get: the screens live in `backend/app/glasses/screens.py`, built only from the SDK's display components in `layout.py`, so a screen that works in the harness can be sent to the glasses. Voice arrives as text and `intents.py` interprets it with keyword rules. Photos are kept in `glasses-photos/` beside the database; with the chat and embedding models set (`LLM_URL`, `EMBED_URL`) each is also described and stored as an image memory (`glasses/memory.py`), and questions use `agent.answer`, as `/api/ask` does. Tests replace `optional_chat` and `optional_embedder` through `app.dependency_overrides`.
 
 ## Agent skills
 

@@ -23,6 +23,7 @@ PROTECTED = [
     ("GET", f"/batches/{BATCH}/keyframes/00000.jpg"),
     ("POST", f"/batches/{BATCH}/ask"),
     ("POST", "/v1/embeddings"),
+    ("POST", "/v1/chat/completions"),
 ]
 
 EMBED_IMAGES = embed.embed_images
@@ -356,3 +357,82 @@ def test_an_image_input_that_is_no_image_is_refused(client, monkeypatch):
 
     response = client.post("/v1/embeddings", json={"input": not_an_image}, headers=AUTH)
     assert response.status_code == 400
+
+
+CHAT = {
+    "messages": [{"role": "user", "content": "Where are my keys?"}],
+    "tools": [{"type": "function", "function": {"name": "vector_search", "parameters": {}}}],
+    "tool_choice": "auto",
+}
+
+
+def test_chat_is_passed_to_vllm_as_it_is(client, monkeypatch):
+    sent = []
+    reply = {"choices": [{"message": {"role": "assistant", "content": None, "tool_calls": []}}]}
+    monkeypatch.setattr(ask, "forward_chat", lambda body: sent.append(body) or (200, reply))
+
+    answer = client.post("/v1/chat/completions", json=CHAT, headers=AUTH)
+
+    assert answer.status_code == 200
+    assert answer.json() == reply
+    assert sent == [{**CHAT, "model": ask.model_name()}]
+
+
+def test_vllm_errors_come_back_unchanged(client, monkeypatch):
+    monkeypatch.setattr(ask, "forward_chat", lambda body: (400, {"error": "tool choice"}))
+
+    answer = client.post("/v1/chat/completions", json=CHAT, headers=AUTH)
+
+    assert (answer.status_code, answer.json()) == (400, {"error": "tool choice"})
+
+
+def test_chat_without_vllm_is_503(client):
+    answer = client.post("/v1/chat/completions", json=CHAT, headers=AUTH)
+
+    assert answer.status_code == 503
+    assert "GEMMA_URL" in answer.json()["detail"]
+
+
+def test_streamed_chat_is_refused(client):
+    answer = client.post("/v1/chat/completions", json={**CHAT, "stream": True}, headers=AUTH)
+
+    assert answer.status_code == 400
+
+
+def test_forward_chat_posts_to_gemma_url(monkeypatch):
+    seen = {}
+
+    class Response:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+        def read(self):
+            return b'{"choices": []}'
+
+    def urlopen(request, timeout):
+        seen.update(url=request.full_url, auth=request.get_header("Authorization"))
+        return Response()
+
+    monkeypatch.setenv("GEMMA_URL", "http://localhost:8000")
+    monkeypatch.setenv("GEMMA_API_KEY", "k")
+    monkeypatch.setattr(ask.urllib.request, "urlopen", urlopen)
+
+    assert ask.forward_chat({"messages": []}) == (200, {"choices": []})
+    assert seen == {"url": "http://localhost:8000/v1/chat/completions", "auth": "Bearer k"}
+
+
+def test_forward_chat_reports_a_silent_vllm(monkeypatch):
+    def urlopen(request, timeout):
+        raise ask.urllib.error.URLError("connection refused")
+
+    monkeypatch.setenv("GEMMA_URL", "http://localhost:8000")
+    monkeypatch.setattr(ask.urllib.request, "urlopen", urlopen)
+
+    with pytest.raises(ask.ChatUnavailable) as raised:
+        ask.forward_chat({"messages": []})
+    assert raised.value.status == 502

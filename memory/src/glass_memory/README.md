@@ -81,6 +81,12 @@ Gemma is loaded when the app starts, before it serves a request, unless `GEMMA_U
   An input that starts with `data:image/` is a base64 data URL of an image and gets its
   `embed.embed_images` vector; every other input gets its `embed.embed_text` vector. 400 for
   another `model` or an image that cannot be read, 422 for no input.
+- `POST /v1/chat/completions`, an OpenAI-style chat request, tools and all: passed as it is to
+  vLLM at `GEMMA_URL` with `GEMMA_API_KEY` (`ask.forward_chat`), so services that cannot reach
+  port 8000 use the shared Gemma with this API's token. vLLM's status and JSON come back
+  unchanged, errors included; `model` defaults to `GEMMA_MODEL`. 400 for `"stream": true`, 503
+  without `GEMMA_URL`, 502 when vLLM does not answer. Tool calling needs vLLM's own flags
+  (`docs/backend-requirements.md`).
 - Client: `scripts/send_batch.py FRAMES [--every S]` posts a folder's `.jpg` files, in file name
   order, as one batch and prints the response. It reads `GLASS_API_URL` and `GLASS_API_TOKEN`
   from the environment.

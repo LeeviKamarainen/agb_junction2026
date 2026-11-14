@@ -14,6 +14,7 @@ import base64
 import json
 import os
 import threading
+import urllib.error
 import urllib.request
 from functools import cache
 from pathlib import Path
@@ -37,6 +38,48 @@ def served():
 
 def _name():
     return os.environ.get("GEMMA_MODEL", "google/gemma-4-31B-it")
+
+
+def model_name():
+    """The name Gemma is served under."""
+    return _name()
+
+
+class ChatUnavailable(Exception):
+    """No chat API to pass a request to (`status` 503), or it did not answer (502)."""
+
+    def __init__(self, message, status):
+        super().__init__(message)
+        self.status = status
+
+
+def forward_chat(body):
+    """Sends an OpenAI-style chat request, tools and all, to the API at GEMMA_URL as it is.
+
+    Returns that API's status and JSON reply, errors included, so the caller sees what vLLM
+    said. Raises ChatUnavailable without GEMMA_URL or when it does not answer.
+    """
+    if not served():
+        raise ChatUnavailable("chat needs vLLM: set GEMMA_URL and GEMMA_API_KEY", 503)
+    request = urllib.request.Request(
+        served() + "/v1/chat/completions",
+        json.dumps(body).encode(),
+        {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {os.environ.get('GEMMA_API_KEY', '')}",
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=120) as response:
+            return response.status, json.load(response)
+    except urllib.error.HTTPError as error:
+        raw = error.read()
+        try:
+            return error.code, json.loads(raw)
+        except ValueError:
+            return error.code, {"detail": raw.decode(errors="replace")[:500]}
+    except (urllib.error.URLError, TimeoutError, OSError) as error:
+        raise ChatUnavailable(f"vLLM at GEMMA_URL did not answer: {error}", 502) from error
 
 
 @cache

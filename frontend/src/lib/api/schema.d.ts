@@ -195,6 +195,97 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/glasses/home": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Home */
+        get: operations["home_api_glasses_home_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/glasses/command": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Command */
+        post: operations["command_api_glasses_command_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/glasses/photos": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Upload Photo
+         * @description Saves the still. With a chat model the glasses describe it; with an embedding model it also becomes an image memory, captioned with that description.
+         */
+        post: operations["upload_photo_api_glasses_photos_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/glasses/photos/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Photo */
+        get: operations["get_photo_api_glasses_photos__name__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/glasses/memory/{batch}/keyframes/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Memory Keyframe
+         * @description A still from the glass-memory API, fetched with the backend's token.
+         */
+        get: operations["get_memory_keyframe_api_glasses_memory__batch__keyframes__name__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -227,10 +318,123 @@ export interface components {
             /** Created At */
             created_at?: string | null;
         };
+        /** Body_upload_photo_api_glasses_photos_post */
+        Body_upload_photo_api_glasses_photos_post: {
+            /**
+             * Photo
+             * @description One JPEG still
+             */
+            photo: string;
+        };
+        /** Button */
+        Button: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "button";
+            /** Label */
+            label: string;
+            /** Action */
+            action: string;
+        };
+        /**
+         * Command
+         * @description Exactly one of: what the wearer said (`text`), or the action of the button they pressed.
+         */
+        Command: {
+            /** Text */
+            text?: string | null;
+            /** Action */
+            action?: string | null;
+        };
+        /** FlexBox */
+        FlexBox: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "flexbox";
+            /**
+             * Direction
+             * @default column
+             * @enum {string}
+             */
+            direction: "column" | "row";
+            /**
+             * Gap
+             * @default 16
+             */
+            gap: number;
+            /**
+             * Padding
+             * @default 0
+             */
+            padding: number;
+            /**
+             * Align
+             * @default stretch
+             * @enum {string}
+             */
+            align: "start" | "center" | "end" | "stretch";
+            /**
+             * Justify
+             * @default start
+             * @enum {string}
+             */
+            justify: "start" | "center" | "end" | "space-between";
+            /**
+             * Children
+             * @default []
+             */
+            children: (components["schemas"]["FlexBox"] | components["schemas"]["Text"] | components["schemas"]["Icon"] | components["schemas"]["Image"] | components["schemas"]["Button"])[];
+        };
+        /**
+         * GlassesReply
+         * @description What a client does after any request: draw `screen`, speak `speech`, run `client_action`.
+         */
+        GlassesReply: {
+            /** Intent */
+            intent: string;
+            screen: components["schemas"]["FlexBox"];
+            /** Speech */
+            speech?: string | null;
+            /** Client Action */
+            client_action?: "capture_photo" | null;
+        };
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
+        };
+        /** Icon */
+        Icon: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "icon";
+            /** Name */
+            name: string;
+        };
+        /** Image */
+        Image: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "image";
+            /** Src */
+            src: string;
+            /**
+             * Alt
+             * @default
+             */
+            alt: string;
+            /** Width */
+            width?: number | null;
+            /** Height */
+            height?: number | null;
         };
         /** MemoryPublic */
         MemoryPublic: {
@@ -310,6 +514,22 @@ export interface components {
             arguments?: unknown;
             /** Results */
             results?: components["schemas"]["SearchResult"][] | null;
+        };
+        /** Text */
+        Text: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "text";
+            /** Value */
+            value: string;
+            /**
+             * Style
+             * @default BODY
+             * @enum {string}
+             */
+            style: "HEADING" | "BODY" | "CAPTION";
         };
         /** TextMemoryCreate */
         TextMemoryCreate: {
@@ -685,6 +905,176 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
                 };
+            };
+        };
+    };
+    home_api_glasses_home_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GlassesReply"];
+                };
+            };
+        };
+    };
+    command_api_glasses_command_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Command"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GlassesReply"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    upload_photo_api_glasses_photos_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_upload_photo_api_glasses_photos_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GlassesReply"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_photo_api_glasses_photos__name__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "image/jpeg": unknown;
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_memory_keyframe_api_glasses_memory__batch__keyframes__name__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                batch: string;
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "image/jpeg": unknown;
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Bad Gateway */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

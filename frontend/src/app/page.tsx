@@ -35,6 +35,7 @@ export default function Home() {
           </a>
           <nav aria-label="Main navigation">
             <Link href="/memory">Memory lab</Link>
+            <Link href="/glasses">Glasses</Link>
             <a href="#workspace">Workspace</a>
             <a href="#crew">The crew</a>
             <a
