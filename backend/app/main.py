@@ -5,10 +5,13 @@ from contextlib import asynccontextmanager
 from fastapi import APIRouter, FastAPI
 from sqlmodel import Session
 
-from app import auth
+from app import auth, demo
 from app.db import get_engine, init_db
+from app.llm import get_embedder
 from app.routes import auth as auth_routes
+from app.routes import demo as demo_routes
 from app.routes import glasses, memories, notes
+from app.settings import get_settings
 
 log = logging.getLogger(__name__)
 SWEEP_EVERY_S = 300
@@ -21,8 +24,24 @@ async def lifespan(_app: FastAPI):
         auth.ensure_admin(session)
         auth.purge_expired_guests(session)
     sweeper = asyncio.create_task(_sweep_guests())
+    loader = asyncio.create_task(asyncio.to_thread(_load_demo))
     yield
     sweeper.cancel()
+    loader.cancel()
+
+
+def _load_demo() -> None:
+    """Embed and store the demo dataset (app/demo.py) when it is not stored yet. In the
+    background, so a slow or missing embedding model never holds up the start; the timeline works
+    without it, only asking about the demo waits for it."""
+    if not get_settings().embed_url:
+        log.warning("No EMBED_URL: the demo dataset is not stored, so asking finds nothing")
+        return
+    try:
+        with Session(get_engine()) as session:
+            demo.load_demo_memories(session, get_embedder())
+    except Exception:
+        log.exception("Storing the demo dataset failed; it is tried again on the next start")
 
 
 def _purge() -> None:
@@ -58,6 +77,7 @@ def health() -> dict[str, str]:
 
 
 api.include_router(auth_routes.router)
+api.include_router(demo_routes.router)
 api.include_router(notes.router)
 api.include_router(memories.router)
 api.include_router(glasses.router)

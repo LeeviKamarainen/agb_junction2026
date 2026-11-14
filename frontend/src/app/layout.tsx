@@ -13,9 +13,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Junction / 26 — Build something worth staying up for",
+  title: "Glass memory — your glasses remember the day",
   description:
-    "Four people. Infinite what ifs. The shared workspace of our Junction 2026 crew in Espoo, Finland. Big ideas, team notes, and just enough chaos.",
+    "A visual memory for smart glasses: watch a recorded day play back as a timeline and ask Gemma about what the glasses saw.",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

@@ -24,7 +24,7 @@ Anything that changes production needs that same explicit approval from a person
 
 ## Database
 
-The SQLite database is disposable. When the models or `backend/app/seed.py` change, the backend wipes it and re-seeds on start, in production too, so demo data belongs in `seed.py`. Reasoning: `docs/adr/0001-disposable-database.md`.
+The SQLite database is disposable. When the models or `backend/app/seed.py` change, the backend wipes it and re-seeds on start, in production too, so demo data belongs in `seed.py`. The exception is the demo dataset in `backend/app/demo.py`: it needs the embedding model, so the backend stores it as demo memories (collection `demo`) in the background after each start, replacing stale copies, and `GET /api/demo/timeline` serves it to anyone. Reasoning: `docs/adr/0001-disposable-database.md`.
 
 Vector search lives in the same file, through the sqlite-vec extension (`backend/app/vectors.py`): declare a table in `VECTOR_TABLES`, then use `vectors.upsert` and `vectors.nearest` with a connection from `get_engine()`. Every row has a `created_at` timestamp (timezone-aware, defaults to now) that `nearest` can filter with `since` and `until`; extra metadata columns are declared per table and filtered with `where`. The vector tables count toward the fingerprint, so changing one wipes and re-seeds like any schema change. The `memory/` API does not use it (see `memory/docs/decisions.md`).
 
@@ -36,7 +36,7 @@ Every memory has an `owner_id` (0 = demo, which only the admin adds, with `demo=
 
 ## Frontend
 
-Read `frontend/AGENTS.md` before writing frontend code. Every new page gets a link from the site: in the home page's navigation (`frontend/src/app/page.tsx`), and from related pages where it fits.
+Read `frontend/AGENTS.md` before writing frontend code. The home page (`frontend/src/app/page.tsx`, its parts in `frontend/src/app/_home/`) is the demo: a timeline of the demo dataset, asking about it, and placeholders for the trigger demo and the logged-in user's own space. Its navigation shows only the login menu, plus the Memory lab for the admin; link other pages from the Memory lab or related pages.
 
 ## Deploying
 

@@ -9,7 +9,7 @@ import { nextPath } from "@/lib/session";
 
 /**
  * Starts a temporary guest account: no name or password, 30 minutes, then it and everything it
- * added are deleted. Goes on to ?next= (or the memory lab).
+ * added are deleted. Goes on to ?next= (or the demo page).
  */
 export function GuestButton({
   variant = "default",

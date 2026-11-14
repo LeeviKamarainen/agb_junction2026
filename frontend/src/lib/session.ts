@@ -45,11 +45,11 @@ export async function logOut() {
   await api.POST("/api/auth/logout");
 }
 
-/** Where to go after logging in: the ?next= path when it is one of ours, else the memory lab. */
+/** Where to go after logging in: the ?next= path when it is one of ours, else the demo page. */
 export function nextPath(): string {
-  if (typeof window === "undefined") return "/memory";
+  if (typeof window === "undefined") return "/";
   const next = new URLSearchParams(window.location.search).get("next");
   return next && next.startsWith("/") && !next.startsWith("//")
     ? next
-    : "/memory";
+    : "/";
 }
