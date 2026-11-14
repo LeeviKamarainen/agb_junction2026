@@ -1,0 +1,91 @@
+name: CI/CD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch: # "Run workflow" deploys the chosen branch
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.3 # setup-uv publishes no floating major tags
+        with:
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: make check
+
+  deploy:
+    needs: checks
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    runs-on: ubuntu-24.04
+    concurrency:
+      group: deploy
+      cancel-in-progress: false
+    env:
+      VM_IP: ${{ vars.VM_IP }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Write the production .env files
+        env:
+          SECRETS: ${{ toJSON(secrets) }}
+          VARS: ${{ toJSON(vars) }}
+        run: |
+          test -n "$VM_IP" || { echo "::error::The VM_IP repository variable is not set"; exit 1; }
+          site_host="$(echo "$VM_IP" | tr . -).sslip.io"
+          echo "SITE_HOST=$site_host" >> "$GITHUB_ENV"
+          echo "SITE_ADDRESS=$site_host" > .env
+          # Every APP_<NAME> secret or variable becomes <NAME> in backend/.env. Values are
+          # single-quoted so Compose does not interpolate them; $q is that quote character, passed
+          # in because a literal one would end the shell's single-quoted jq program.
+          jq -rn --arg q "'" '
+            [($ENV.SECRETS | fromjson), ($ENV.VARS | fromjson)]
+            | map(to_entries[] | select(.key | startswith("APP_")))
+            | (group_by(.key) | map(select(length > 1) | .[0].key)) as $both
+            | if ($both | length) > 0 then error("defined as both a secret and a variable: \($both | join(", "))") else . end
+            | .[]
+            | if (.value | test("[\($q)\n]")) then error("\(.key) contains a single quote or newline") else . end
+            | "\(.key | ltrimstr("APP_"))=\($q)\(.value)\($q)"
+          ' > backend/.env
+          chmod 600 .env backend/.env
+          echo "backend/.env keys: $(cut -d= -f1 backend/.env | tr '\n' ' ')"
+
+      - name: Set up SSH
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          VM_HOST_KEY: ${{ vars.VM_HOST_KEY }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          echo "$VM_IP $VM_HOST_KEY" > ~/.ssh/known_hosts
+
+      - name: Copy the code to the VM
+        run: rsync -az --delete --exclude .git ./ "deploy@$VM_IP:/opt/junction2026/"
+
+      # A failed build leaves the previous containers running.
+      - name: Build and start the containers
+        run: ssh "deploy@$VM_IP" 'cd /opt/junction2026 && docker compose up -d --build --remove-orphans && docker image prune -f'
+
+      - name: Wait for the health check
+        run: |
+          for _ in $(seq 60); do
+            if curl -fsS "https://$SITE_HOST/api/health"; then
+              echo "### Deployed to https://$SITE_HOST" >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::https://$SITE_HOST/api/health did not respond within 5 minutes"
+          exit 1

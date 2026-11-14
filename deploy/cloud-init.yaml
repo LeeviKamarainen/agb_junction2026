@@ -1,0 +1,26 @@
+#cloud-config
+# First-boot setup for the Hetzner VM: paste it as "Cloud config" when creating the server.
+# Keys: ilmari99's laptop and the GitHub Actions deploy key (private half in the DEPLOY_SSH_KEY
+# secret). Teammates get access later with `make prod-import-keys`.
+users:
+  - name: deploy
+    shell: /bin/bash
+    sudo: "ALL=(ALL) NOPASSWD:ALL"
+    ssh_authorized_keys:
+      - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIw8YHRiKVa1+28HlIodNoO6+MzGPGdDM7mFRxZ/kcRY ilmari@junction2026
+      - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPVKOhDsmcZDGl7FvItkp7WxUoS8YCifBlU8xbewUaW3 github-actions-deploy@junction2026
+disable_root: true
+ssh_pwauth: false
+package_update: true
+packages:
+  - rsync
+runcmd:
+  - curl -fsSL https://get.docker.com | sh
+  - usermod -aG docker deploy
+  - install -d -o deploy -g deploy /opt/junction2026
+  # Next.js builds run on this 4 GB VM; swap keeps them from running out of memory.
+  - fallocate -l 4G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile
+  - echo '/swapfile none swap sw 0 0' >> /etc/fstab
+  # MaxAuthTries: with many keys in an ssh-agent, the default of 6 fails before the right key.
+  - printf 'PermitRootLogin no\nPasswordAuthentication no\nMaxAuthTries 20\n' > /etc/ssh/sshd_config.d/99-junction.conf
+  - systemctl restart ssh

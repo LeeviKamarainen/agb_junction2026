@@ -1,0 +1,49 @@
+# The production stack. The VM runs it as-is; `make up` runs it locally at http://localhost.
+name: junction2026
+
+x-backend-url: &backend-url http://backend:8000
+
+services:
+  backend:
+    build: ./backend
+    env_file:
+      # App secrets. On the VM, each deploy writes it from the APP_* GitHub secrets and variables.
+      - path: backend/.env
+        required: false
+    environment:
+      DATABASE_PATH: /data/app.db
+    volumes:
+      - db:/data
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        BACKEND_URL: *backend-url
+    environment:
+      BACKEND_URL: *backend-url
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS:?SITE_ADDRESS must be set, e.g. http://localhost}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      # Keeps HTTPS certificates across deploys, so Let's Encrypt isn't asked again.
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - backend
+      - frontend
+    restart: unless-stopped
+
+volumes:
+  db:
+  caddy_data:
+  caddy_config:

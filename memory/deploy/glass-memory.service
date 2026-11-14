@@ -1,0 +1,18 @@
+[Unit]
+Description=glass-memory frames API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# Not root: setup.sh adds this user. It can write its home (/var/lib/glass-memory, where CLIP's
+# weights are cached) and res/items/API-1 (the batches), nothing else under /opt/glass-memory.
+User=glass
+WorkingDirectory=/opt/glass-memory
+# GEMMA_API_KEY and GLASS_API_TOKEN, typed there by the owner.
+EnvironmentFile=/opt/glass-memory/.env
+# Listens on this machine only: Caddy serves HTTPS to the outside. Port 8000 is vLLM's.
+ExecStart=/opt/glass-memory/.venv/bin/uvicorn glass_memory.api:app --host 127.0.0.1 --port 8001
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

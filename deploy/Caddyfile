@@ -1,0 +1,10 @@
+# SITE_ADDRESS is the VM's sslip.io hostname in production (HTTPS is automatic)
+# and http://localhost under `make up`.
+{$SITE_ADDRESS} {
+	handle /api/* {
+		reverse_proxy backend:8000
+	}
+	handle {
+		reverse_proxy frontend:3000
+	}
+}

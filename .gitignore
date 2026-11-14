@@ -1,3 +1,16 @@
+# Secrets: local keys in backend/.env; on the VM, deploys write .env and backend/.env.
+.env
+
+# Local SQLite database
+backend/data/
+
+# Python
+__pycache__/
+.venv/
+.pytest_cache/
+.ruff_cache/
+
+# From the web app (my-glasses-app)
 node_modules/
 dist/
 .DS_Store

@@ -60,11 +60,15 @@ class MainActivity : ComponentActivity() {
                     viewModel = viewModel,
                     onRegister = { viewModel.register(this) },
                     onUnregister = { viewModel.unregister(this) },
+                    onUpdateGlasses = { viewModel.openFirmwareUpdate(this) },
                     onToggleMock = { enabled ->
                         if (enabled) phoneCameraLauncher.launch(Manifest.permission.CAMERA)
                         else viewModel.disableMock()
                     },
                     onStart = { viewModel.startStreaming(::requestWearablesPermission) },
+                    onArmQuick = { viewModel.armQuickShot(::requestWearablesPermission) },
+                    onArmSnap = { viewModel.armSnapshot(::requestWearablesPermission) },
+                    onArmLive = { viewModel.armLive(::requestWearablesPermission) },
                 )
             }
         }

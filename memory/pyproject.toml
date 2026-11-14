@@ -1,0 +1,41 @@
+[project]
+name = "glass-memory"
+version = "0.1.0"
+description = "Visual memory for smart glasses: CLIP embeddings, a memory map and questions answered by Gemma"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "av>=19.0.2",
+    "fastapi[standard]>=0.162.7",
+    "numpy>=2.5.4",
+    "open-clip-torch>=4.2.2",
+    "pillow>=13.0.0",
+    "polars>=2.1.0",
+    "torch>=2.15.0",
+    "umap-learn>=0.6.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = [
+    "altair",
+    "marimo",
+    "polars",
+    "pytest",
+    "pyyaml",
+    "ruff",
+]
+
+[tool.ruff]
+line-length = 100
+# marimo cells redefine `_` by design; notebooks are checked by `marimo check` instead
+extend-exclude = ["notebooks"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

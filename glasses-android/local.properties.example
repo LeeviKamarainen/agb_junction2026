@@ -8,5 +8,10 @@ sdk.dir=C\:\\Users\\<you>\\AppData\\Local\\Android\\Sdk
 mwdat.applicationId=0
 mwdat.clientToken=0
 
+# Segmentation API (SAM 3). Token: run `make gpu-token`, or take the part after #token= in the webcam link.
+# Keep it secret; local.properties is git-ignored.
+segment.url=https://65-108-32-171.sslip.io/segment
+segment.token=PASTE_TOKEN_HERE
+
 # Where captured photos get POSTed (see PhotoSink.kt). Emulator -> host PC is 10.0.2.2.
 backend.url=http://10.0.2.2:8000/upload

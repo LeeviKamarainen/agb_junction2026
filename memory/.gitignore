@@ -1,0 +1,7 @@
+# Recorded clips and everything made from them; never in git.
+res/
+video/
+scratch/
+__marimo__/
+*.mp4
+*.npy
