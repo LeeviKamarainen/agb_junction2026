@@ -403,6 +403,9 @@ export interface paths {
         /**
          * Memory Image
          * @description 404, not 403, for someone else's image: nobody learns which ids exist.
+         *
+         *     With `v` (as `image_url` gives it) matching the image, the browser may keep it for good, since
+         *     a different image gets a different `v`; without it, it has to ask again every time.
          */
         get: operations["memory_image_api_memories__id__image_get"];
         put?: never;
@@ -1165,6 +1168,27 @@ export interface components {
             /** Content Type */
             content_type: string;
         };
+        /**
+         * ShowcaseCue
+         * @description Something the wearer says at `at_s` seconds into the clip. One that `stays` is shown as
+         *     active (a trigger, say) from then on, until a later cue `stops` it: by its id, or "*" for
+         *     every cue before it.
+         */
+        ShowcaseCue: {
+            /** Id */
+            id: string;
+            /** At S */
+            at_s: number;
+            /** Text */
+            text: string;
+            /**
+             * Stays
+             * @default true
+             */
+            stays: boolean;
+            /** Stops */
+            stops?: string | null;
+        };
         /** ShowcaseOrder */
         ShowcaseOrder: {
             /** Ids */
@@ -1208,6 +1232,8 @@ export interface components {
             id: number;
             /** Assets */
             assets: components["schemas"]["ShowcaseAsset"][];
+            /** Cues */
+            cues: components["schemas"]["ShowcaseCue"][];
         };
         /** ShowcaseWrite */
         ShowcaseWrite: {
@@ -1246,6 +1272,8 @@ export interface components {
             published: boolean;
             /** Asset Order */
             asset_order?: string[] | null;
+            /** Cues */
+            cues?: components["schemas"]["ShowcaseCue"][] | null;
         };
         /**
          * Step
@@ -2097,7 +2125,9 @@ export interface operations {
     };
     memory_image_api_memories__id__image_get: {
         parameters: {
-            query?: never;
+            query?: {
+                v?: string | null;
+            };
             header?: never;
             path: {
                 id: number;

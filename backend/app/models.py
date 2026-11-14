@@ -205,6 +205,8 @@ class Showcase(ShowcaseFields, table=True):
     id: int | None = Field(default=None, primary_key=True)
     # Only the upload endpoint writes this list of random file names and original labels.
     assets_json: str = "[]"
+    # What the wearer says during the clip (routes/showcases.py: ShowcaseCue), ordered by time.
+    cues_json: str = "[]"
 
 
 class GoalCreate(SQLModel):

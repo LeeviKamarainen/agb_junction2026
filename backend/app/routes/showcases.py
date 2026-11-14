@@ -17,9 +17,28 @@ from app.models import Showcase, ShowcaseFields
 router = APIRouter(prefix="/demo", tags=["demo"])
 
 
+class ShowcaseCue(BaseModel):
+    """Something the wearer says at `at_s` seconds into the clip. One that `stays` is shown as
+    active (a trigger, say) from then on, until a later cue `stops` it: by its id, or "*" for
+    every cue before it."""
+
+    id: str = Field(min_length=1, max_length=40)
+    at_s: float = Field(ge=0, le=3600)
+    text: str = Field(min_length=1, max_length=300)
+    stays: bool = True
+    stops: str | None = Field(default=None, max_length=40)
+
+
 class ShowcaseWrite(ShowcaseFields):
     kind: Literal["video", "images"] = "images"
     asset_order: list[str] | None = Field(default=None, max_length=showcase.MAX_ASSETS)
+    cues: list[ShowcaseCue] | None = Field(default=None, max_length=100)
+
+
+def cues_json(cues: list[ShowcaseCue]) -> str:
+    if len({cue.id for cue in cues}) != len(cues):
+        raise HTTPException(422, "Every prompt needs its own id")
+    return json.dumps([cue.model_dump() for cue in sorted(cues, key=lambda cue: cue.at_s)])
 
 
 class ShowcaseAsset(BaseModel):
@@ -32,6 +51,7 @@ class ShowcaseAsset(BaseModel):
 class ShowcasePublic(ShowcaseFields):
     id: int
     assets: list[ShowcaseAsset]
+    cues: list[ShowcaseCue]
 
 
 def assets(item: Showcase) -> list[dict]:
@@ -40,7 +60,8 @@ def assets(item: Showcase) -> list[dict]:
 
 def public(item: Showcase) -> ShowcasePublic:
     return ShowcasePublic(
-        **item.model_dump(exclude={"assets_json"}),
+        **item.model_dump(exclude={"assets_json", "cues_json"}),
+        cues=json.loads(item.cues_json),
         assets=[
             ShowcaseAsset(**a, url=f"/api/demo/clips/{item.id}/media/{a['name']}")
             for a in assets(item)
@@ -80,7 +101,9 @@ async def create(body: ShowcaseWrite, session: SessionDep, viewer: ViewerDep):
     admin(viewer)
     if body.published or body.asset_order:
         raise HTTPException(422, "Create a draft, upload media, then publish")
-    item = Showcase(**body.model_dump(exclude={"asset_order"}))
+    item = Showcase(
+        **body.model_dump(exclude={"asset_order", "cues"}), cues_json=cues_json(body.cues or [])
+    )
     session.add(item)
     await session.commit()
     return public(item)
@@ -101,7 +124,9 @@ async def update(id: int, body: ShowcaseWrite, session: SessionDep, viewer: View
             raise HTTPException(422, "The order must contain every uploaded asset exactly once")
         by_name = {a["name"]: a for a in current}
         item.assets_json = json.dumps([by_name[name] for name in body.asset_order])
-    item.sqlmodel_update(body.model_dump(exclude={"asset_order"}))
+    if body.cues is not None:
+        item.cues_json = cues_json(body.cues)
+    item.sqlmodel_update(body.model_dump(exclude={"asset_order", "cues"}))
     session.add(item)
     await session.commit()
     return public(item)
