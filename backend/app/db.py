@@ -11,7 +11,7 @@ from sqlalchemy import Engine, event
 from sqlalchemy.schema import CreateTable
 from sqlmodel import Session, SQLModel, create_engine
 
-from app import models, seed  # noqa: F401  (importing models registers their tables)
+from app import models, seed, vectors  # noqa: F401  (importing models registers their tables)
 from app.settings import get_settings
 
 log = logging.getLogger(__name__)
@@ -27,6 +27,7 @@ def get_engine() -> Engine:
 
 
 def _configure_connection(dbapi_connection, _connection_record) -> None:
+    vectors.load_extension(dbapi_connection)
     cursor = dbapi_connection.cursor()
     cursor.execute("PRAGMA journal_mode=WAL")
     cursor.execute("PRAGMA foreign_keys=ON")
@@ -45,7 +46,7 @@ SessionDep = Annotated[Session, Depends(get_session)]
 def fingerprint(engine: Engine) -> int:
     """32-bit hash of the table definitions and the seed data, kept in PRAGMA user_version."""
     ddl = "".join(str(CreateTable(t).compile(engine)) for t in SQLModel.metadata.sorted_tables)
-    digest = hashlib.sha256((ddl + inspect.getsource(seed)).encode()).digest()
+    digest = hashlib.sha256((ddl + vectors.ddl() + inspect.getsource(seed)).encode()).digest()
     return int.from_bytes(digest[:4], "big", signed=True)
 
 
@@ -71,6 +72,8 @@ def init_db() -> None:
         log.warning("Creating database %s from the models and seed data", path)
 
     SQLModel.metadata.create_all(engine)
+    with engine.begin() as connection:
+        vectors.create_tables(connection)
     with Session(engine) as session:
         seed.seed(session)
         session.commit()
