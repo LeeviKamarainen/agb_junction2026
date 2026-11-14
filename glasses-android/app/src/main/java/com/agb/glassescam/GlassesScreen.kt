@@ -21,10 +21,13 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.background
 import androidx.compose.material3.Button
+import androidx.compose.material3.Card
 import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableIntStateOf
@@ -106,6 +109,7 @@ fun GlassesScreen(
     onArmQuick: () -> Unit,
     onArmSnap: () -> Unit,
     onArmLive: () -> Unit,
+    onArmMemory: () -> Unit,
 ) {
     val ui by viewModel.ui.collectAsStateWithLifecycle()
     var showGallery by rememberSaveable { mutableStateOf(false) }
@@ -167,22 +171,22 @@ fun GlassesScreen(
             ) {
                 Button(
                     onClick = onStart,
-                    enabled = ui.initialized && !ui.quickArmed && !ui.snapArmed && !ui.liveArmed,
+                    enabled = ui.initialized && !ui.quickArmed && !ui.snapArmed && !ui.liveArmed && !ui.memoryArmed,
                 ) { Text("Start stream") }
                 // Quick shot: no video stream; the glasses take a full-res still (slow to transfer).
                 Button(
                     onClick = { if (ui.quickArmed) viewModel.stopStreaming() else onArmQuick() },
-                    enabled = ui.initialized && !ui.snapArmed && !ui.liveArmed,
+                    enabled = ui.initialized && !ui.snapArmed && !ui.liveArmed && !ui.memoryArmed,
                 ) { Text(if (ui.quickArmed) "Disarm quick shot" else "Arm quick shot") }
                 // Snapshot: stream stays open, a trigger saves the next video frame (fast, up to 720x1280).
                 Button(
                     onClick = { if (ui.snapArmed) viewModel.stopStreaming() else onArmSnap() },
-                    enabled = ui.initialized && !ui.quickArmed && !ui.liveArmed,
+                    enabled = ui.initialized && !ui.quickArmed && !ui.liveArmed && !ui.memoryArmed,
                 ) { Text(if (ui.snapArmed) "Disarm snapshot" else "Arm snapshot (fast)") }
                 // Live segment: every N seconds a frame is segmented and the result is drawn on the glasses.
                 Button(
                     onClick = { if (ui.liveArmed) viewModel.stopStreaming() else onArmLive() },
-                    enabled = ui.initialized && !ui.quickArmed && !ui.snapArmed,
+                    enabled = ui.initialized && !ui.quickArmed && !ui.snapArmed && !ui.memoryArmed,
                 ) { Text(if (ui.liveArmed) "Disarm live segment" else "Arm live segment") }
                 OutlinedButton(onClick = { viewModel.changeLiveInterval(-250) }) { Text("-") }
                 Text("every ${String.format(java.util.Locale.US, "%.2f", ui.liveIntervalMs / 1000.0)} s")
@@ -192,6 +196,14 @@ fun GlassesScreen(
                 OutlinedButton(onClick = viewModel::cycleProfile) { Text("Photo: ${ui.photoProfile}") }
                 OutlinedButton(onClick = { showGallery = true }) { Text("Gallery (${ui.photos.size})") }
             }
+
+            MemoryModeCard(
+                ui = ui,
+                onArm = { if (ui.memoryArmed) viewModel.stopStreaming() else onArmMemory() },
+                onToggleStream = viewModel::toggleMemoryStream,
+                onPhoto = viewModel::memoryPhoto,
+                onDismissMessage = viewModel::dismissGlassesMessage,
+            )
 
             CaptureStatusCard(ui)
 
@@ -265,6 +277,67 @@ fun GlassesScreen(
                 onDelete = viewModel::deletePhoto,
                 onRefresh = viewModel::refreshPhotos,
             )
+        }
+    }
+}
+
+/**
+ * Memory mode: frames from the glasses go to the backend's vector database. Stream at 2 fps or send
+ * single photos from here, or from the glasses (double tap / double press to stream, tap / press once
+ * for a photo). Trigger messages from the backend show on the glasses and here.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun MemoryModeCard(
+    ui: UiState,
+    onArm: () -> Unit,
+    onToggleStream: () -> Unit,
+    onPhoto: () -> Unit,
+    onDismissMessage: () -> Unit,
+) {
+    val busyElsewhere = ui.quickArmed || ui.snapArmed || ui.liveArmed
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Memory stream (backend)", style = MaterialTheme.typography.titleMedium)
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Button(onClick = onArm, enabled = ui.initialized && !busyElsewhere) {
+                    Text(if (ui.memoryArmed) "Disarm memory mode" else "Arm memory mode")
+                }
+                if (ui.memoryArmed) {
+                    Button(onClick = onToggleStream) {
+                        Text(if (ui.memoryStreaming) "Stop stream" else "Start stream (2 fps)")
+                    }
+                    OutlinedButton(onClick = onPhoto, enabled = !ui.memorySending) {
+                        Text(if (ui.memorySending) "Sending photo..." else "Send one photo")
+                    }
+                }
+            }
+            if (ui.memoryArmed) {
+                val indicator = when {
+                    ui.memoryStreaming -> "● REC  "
+                    ui.memorySending -> "↑ Sending  "
+                    else -> ""
+                }
+                Text(indicator + ui.memoryStatus)
+                Text(
+                    "On the glasses: double tap (Neural Band or touchpad) or double press the capture button to " +
+                        "start or stop streaming; one tap or press sends one photo.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+            ui.glassesMessage?.let { message ->
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        val kind = if (message.type == MessageType.TRIGGER) "Trigger" else "Reply"
+                        Text("$kind: ${message.title}", style = MaterialTheme.typography.titleSmall)
+                        Text(message.text)
+                        TextButton(onClick = onDismissMessage) { Text("Dismiss") }
+                    }
+                }
+            }
         }
     }
 }

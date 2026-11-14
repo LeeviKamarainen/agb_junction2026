@@ -46,6 +46,8 @@ VECTOR_TABLES: dict[str, VectorTable] = {
     # changes, change it here and the database rebuilds. kind and collection are copied here so a
     # search can filter on them.
     "memory_embedding": VectorTable(768, {"kind": "TEXT", "collection": "TEXT"}),
+    # One row per Trigger (app/models.py), same id: the embedding of its watch_for text.
+    "trigger_embedding": VectorTable(768),
 }
 
 
