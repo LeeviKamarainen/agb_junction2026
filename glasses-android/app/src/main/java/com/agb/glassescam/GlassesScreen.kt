@@ -165,6 +165,17 @@ fun GlassesScreen(
                 )
                 Text("Glasses screen messages (may block photo transfer)")
             }
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                // Replies read aloud by the phone's text to speech, heard through the glasses' speakers.
+                Switch(
+                    checked = ui.speakReplies,
+                    onCheckedChange = viewModel::setSpeakReplies,
+                )
+                Text("Read replies aloud")
+            }
             FlowRow(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp),
