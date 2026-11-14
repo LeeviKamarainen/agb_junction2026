@@ -26,6 +26,8 @@ Anything that changes production needs that same explicit approval from a person
 
 The SQLite database is disposable. When the models or `backend/app/seed.py` change, the backend wipes it and re-seeds on start, in production too, so demo data belongs in `seed.py`. Reasoning: `docs/adr/0001-disposable-database.md`.
 
+Vector search lives in the same file, through the sqlite-vec extension (`backend/app/vectors.py`): declare a table in `VECTOR_TABLES`, then use `vectors.upsert` and `vectors.nearest` with a connection from `get_engine()`. Every row has a `created_at` timestamp (timezone-aware, defaults to now) that `nearest` can filter with `since` and `until`; extra metadata columns are declared per table and filtered with `where`. The vector tables count toward the fingerprint, so changing one wipes and re-seeds like any schema change. The `memory/` API does not use it (see `memory/docs/decisions.md`).
+
 ## Frontend
 
 Read `frontend/AGENTS.md` before writing frontend code.
