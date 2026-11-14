@@ -3,13 +3,16 @@
 The model calls vector_search with the question as the user asked it, a few rewordings, keywords
 and an optional timespan. Every query is embedded and searched in memory_embedding; the keywords
 are matched against the memories' text. The ranked lists are merged with reciprocal rank fusion,
-so a memory that several queries (or a query and a keyword) agree on comes first.
+so a memory that several queries (or a query and a keyword) agree on comes first. A still that
+nearly copies a better hit from the same glance comes after the distinct ones (NEAR_COPY).
 
 VECTOR_SEARCH_TOOL is the OpenAI-format tool definition to hand to the model, and
 VectorSearchArgs validates what it sends back. Add memories with add_memory.
 """
 
 import json
+import math
+import operator
 import re
 from collections import defaultdict
 from collections.abc import Sequence
@@ -19,6 +22,7 @@ from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import or_
+from sqlalchemy.ext.asyncio import AsyncConnection
 from sqlmodel import col, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -42,6 +46,16 @@ LOCAL_TIMEZONE = ZoneInfo("Europe/Helsinki")
 def local(moment: datetime) -> str:
     """A time as the chat model sees it: ISO 8601 in the wearer's time zone, with its offset."""
     return moment.astimezone(LOCAL_TIMEZONE).isoformat(timespec="seconds")
+
+
+# Two stills of one owner and collection, seen within NEAR_COPY_S of each other and closer than
+# NEAR_COPY (cosine distance), are near-copies from one glance: a search lists the lower-ranked
+# one only after every distinct result. Measured with EmbeddingGemma 2 on 45 stream frames on
+# 2026-11-14: two thirds came 0.5 s after the previous stored frame, consecutive ones sat a median
+# 0.088 apart, and 90% of the gaps were under 2.5 s. A still scene stores a frame every 10 s
+# (glasses/frames.py), so the same scene seen again later always counts on its own.
+NEAR_COPY = 0.1
+NEAR_COPY_S = 5.0
 
 
 class Timespan(BaseModel):
@@ -323,10 +337,11 @@ async def vector_search(
     for ranking in rankings:
         for rank, id in enumerate(ranking):
             scores[id] += 1 / (RRF_K + rank + 1)
-    top = sorted(scores, key=lambda id: -scores[id])[: args.limit]
+    ranked = sorted(scores, key=lambda id: -scores[id])
 
-    found = await session.exec(select(Memory).where(col(Memory.id).in_(top)))
+    found = await session.exec(select(Memory).where(col(Memory.id).in_(ranked)))
     memories = {m.id: m for m in found}
+    top = await _near_copies_last(connection, ranked, memories, args.limit)
     return [
         SearchResult(
             id=id,
@@ -340,8 +355,54 @@ async def vector_search(
             score=scores[id],
         )
         for id in top
-        if id in memories  # an embedding without its Memory row is skipped
     ]
+
+
+def _direction(vector: list[float] | None) -> list[float] | None:
+    """The vector scaled to length 1, so a dot product of two is their cosine similarity."""
+    norm = math.sqrt(sum(x * x for x in vector)) if vector else 0.0
+    return [x / norm for x in vector] if vector and norm else None
+
+
+def _one_glance(a: Memory, b: Memory) -> bool:
+    """Two stills of one owner and collection, seen within NEAR_COPY_S of each other."""
+    return (
+        a.kind == b.kind == "image"
+        and a.owner_id == b.owner_id
+        and a.collection == b.collection
+        and abs((a.created_at - b.created_at).total_seconds()) <= NEAR_COPY_S
+    )
+
+
+async def _near_copies_last(
+    connection: AsyncConnection, ranked: list[int], memories: dict[int, Memory], limit: int
+) -> list[int]:
+    """The first `limit` ids of `ranked` that have a Memory row, with near-copies of a better-ranked
+    still moved after every distinct one. A vector is read only for a still from the same glance as
+    one already listed."""
+    directions: dict[int, list[float] | None] = {}
+
+    async def alike(a: int, b: int) -> bool:
+        if missing := [id for id in (a, b) if id not in directions]:
+            stored = await vectors.stored(connection, TABLE, missing)
+            directions.update({id: _direction(stored.get(id)) for id in missing})
+        x, y = directions[a], directions[b]
+        return x is not None and y is not None and 1 - sum(map(operator.mul, x, y)) < NEAR_COPY
+
+    listed: list[int] = []
+    copies: list[int] = []
+    for id in ranked:
+        memory = memories.get(id)
+        if memory is None:
+            continue  # an embedding without its Memory row
+        glance = [other for other in listed if _one_glance(memory, memories[other])]
+        if any([await alike(id, other) for other in glance]):
+            copies.append(id)
+            continue
+        listed.append(id)
+        if len(listed) == limit:
+            break
+    return (listed + copies)[:limit]
 
 
 def for_model(results: list[SearchResult]) -> str:

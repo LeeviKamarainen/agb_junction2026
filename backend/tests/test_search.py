@@ -426,6 +426,51 @@ def test_collections_group_memories_and_filter_searches(client, db, search):
     assert [m["id"] for m in listed] == [manual_id]
 
 
+NEAR_KEYS = [1.0, 0.05] + [0.0] * (WIDTH - 2)  # about 0.001 from unit(0), the "keys" axis
+
+
+def test_a_near_copy_from_one_glance_waits_behind_distinct_results(client, db, search):
+    """A still a second after a better one that looks the same shows nothing new, so its slot
+    goes to the next memory. The same scene hours earlier, in a note or in another collection
+    is a memory of its own: the latest sighting of something must never be dropped."""
+    second, morning_at = timedelta(seconds=1), NOON - timedelta(hours=6)
+
+    async def add(session):
+        rows = [
+            await add_memory(session, "image", unit(0), NOON, collection="glasses"),
+            await add_memory(session, "image", NEAR_KEYS, NOON + second, collection="glasses"),
+            await add_memory(session, "image", NEAR_KEYS, morning_at, collection="glasses"),
+            await add_memory(session, "text", unit(0), NOON + second, "keys", collection="glasses"),
+            await add_memory(session, "image", unit(0), NOON, collection="manual"),
+            await add_memory(session, "image", unit(0, 1), NOON, collection="glasses"),
+        ]
+        await session.commit()
+        return [row.id for row in rows]
+
+    first, copy, morning, note, manual, other = db(add)
+
+    found = [hit.id for hit in search(VectorSearchArgs(user_query="keys", limit=5))]
+
+    assert copy not in found
+    assert sorted(found) == sorted([first, morning, note, manual, other])
+
+
+def test_near_copies_still_fill_the_slots_left(client, db, search):
+    async def add(session):
+        rows = [
+            await add_memory(session, "image", unit(0), NOON, collection="glasses"),
+            await add_memory(
+                session, "image", NEAR_KEYS, NOON + timedelta(seconds=1), collection="glasses"
+            ),
+        ]
+        await session.commit()
+        return [row.id for row in rows]
+
+    first, copy = db(add)
+
+    assert [hit.id for hit in search(VectorSearchArgs(user_query="keys", limit=3))] == [first, copy]
+
+
 def test_uploads_take_a_collection_and_reject_a_bad_one(client):
     app.dependency_overrides[get_embedder] = lambda: fake_embed
     try:
