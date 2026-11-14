@@ -106,9 +106,12 @@
 
 @media (max-width: 1000px) {
   .gh-main {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 }
+
+/* Prevent the logical 600px display from setting the phone grid's minimum width. */
+.gh-stage, .gh-controls { min-width: 0; }
 
 /* --- The display ------------------------------------------------------------------------- */
 
@@ -575,3 +578,83 @@
 .gh-icon[aria-label="warning"] {
   color: #ffc94d;
 }
+
+.gh-phone-hint {
+  display: none;
+}
+.gh-nav {
+  flex-wrap: wrap;
+}
+
+@media (max-width: 700px) and (orientation: portrait) {
+  .gh-page {
+    padding: 16px;
+  }
+  .gh-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .gh-header-side {
+    align-items: flex-start;
+  }
+  .gh-keyboard-hint {
+    display: none;
+  }
+  .gh-phone-hint {
+    display: inline;
+  }
+}
+
+
+/* The camera fills the POV; the SDK overlay remains square and keeps its proportions. */
+.gh-pov {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  max-width: 600px;
+  aspect-ratio: 1;
+  overflow: hidden;
+  background: #000;
+}
+.gh-pov > .gh-display-frame { position: relative; width: 100%; }
+.gh-pov .gh-display { border: 0; border-radius: 0; box-shadow: none; }
+.gh-pov-live > .gh-display-frame { mix-blend-mode: screen; }
+.gh-stage { position: relative; }
+.gh-pov-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+.gh-pov-actions button { min-height: 44px; }
+
+/* On rotation the POV is the first viewport. Everything else follows in page scroll. */
+.gh-page.gh-theater {
+  display: grid;
+  grid-template-areas: "pov" "header" "controls";
+  grid-template-columns: minmax(0, 1fr);
+  padding: 0;
+  min-height: 100dvh;
+}
+.gh-theater .gh-main { display: contents; }
+.gh-theater .gh-stage { grid-area: pov; }
+.gh-theater .gh-pov {
+  width: 100%;
+  max-width: none;
+  height: 100dvh;
+  aspect-ratio: auto;
+}
+.gh-theater .gh-pov > .gh-display-frame { width: min(100%, 100dvh, 600px); }
+.gh-theater .gh-header { grid-area: header; margin: 0; padding: 20px; flex-wrap: wrap; }
+.gh-theater .gh-controls { grid-area: controls; padding: 20px; height: auto; overflow: visible; }
+.gh-theater .gh-stage-bar { margin: 0; padding: 16px 20px; }
+.gh-theater .gh-pov-actions {
+  position: absolute;
+  top: calc(100dvh - 12px - env(safe-area-inset-bottom));
+  transform: translateY(-100%);
+  right: max(12px, env(safe-area-inset-right));
+  left: max(12px, env(safe-area-inset-left));
+  margin: 0;
+  justify-content: flex-end;
+  z-index: 2;
+}
+.gh-theater .gh-pov-actions .gh-chip { background: rgb(0 0 0 / 0.65); color: white; }
+.gh-theater .gh-pov-actions .gh-error { background: #181818; padding: 8px; }
+.gh-page:fullscreen { overflow-y: auto; height: 100%; background: #000; }

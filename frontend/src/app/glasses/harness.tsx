@@ -6,8 +6,12 @@ import {
   Eye,
   EyeOff,
   Mic,
+  Maximize,
+  Minimize,
+  ChevronDown,
   Pointer,
   RotateCcw,
+  SwitchCamera,
   Send,
   Trash2,
   Video,
@@ -68,6 +72,14 @@ type Pending = {
 
 const CAMERA_WARMUP_MS = 800;
 const subscribeToNothing = () => () => {};
+const landscapeQuery = "(orientation: landscape) and (max-height: 700px)";
+function subscribeLandscape(changed: () => void) {
+  const media = window.matchMedia(landscapeQuery);
+  media.addEventListener("change", changed);
+  return () => media.removeEventListener("change", changed);
+}
+const isLandscapePhone = () => window.matchMedia(landscapeQuery).matches;
+
 // How often the camera sends a frame while watching. The backend checks the newest and drops
 // any that arrive while it is busy, so a slow vision model never builds a queue.
 const WATCH_EVERY_MS = 1000;
@@ -77,16 +89,22 @@ const PING_EVERY_MS = 20_000;
 const DOUBLE_TAP_MS = 400;
 
 /** Resolves once the video is playing and has painted a new frame. */
-async function liveFrame(video: HTMLVideoElement) {
-  if (video.paused || video.readyState < 2) {
-    await new Promise((resolve) =>
-      video.addEventListener("playing", resolve, { once: true }),
-    );
+async function liveFrame(video: HTMLVideoElement): Promise<boolean> {
+  const deadline = performance.now() + 5000;
+  while (video.paused || video.readyState < 2 || !video.videoWidth) {
+    if (performance.now() >= deadline) return false;
+    await new Promise((resolve) => setTimeout(resolve, 50));
   }
-  await new Promise<void>((resolve) => {
+  return new Promise<boolean>((resolve) => {
+    let callback: number | undefined;
+    const timeout = setTimeout(() => {
+      if (callback !== undefined) video.cancelVideoFrameCallback(callback);
+      resolve(false);
+    }, 3000);
+    const painted = () => { clearTimeout(timeout); resolve(true); };
     if ("requestVideoFrameCallback" in video)
-      video.requestVideoFrameCallback(() => resolve());
-    else setTimeout(resolve, 100);
+      callback = video.requestVideoFrameCallback(painted);
+    else setTimeout(painted, 100);
   });
 }
 
@@ -122,6 +140,38 @@ export function GlassesHarness({
   embedded = false,
   active = true,
 }: HarnessProps = {}) {
+  const rootRef = useRef<HTMLDivElement>(null);
+  const controlsRef = useRef<HTMLElement>(null);
+  const [fullscreen, setFullscreen] = useState(false);
+  const [fullscreenError, setFullscreenError] = useState<string | null>(null);
+  const landscape = useSyncExternalStore(subscribeLandscape, isLandscapePhone, () => false);
+  const theater = !embedded && (landscape || fullscreen);
+  useEffect(() => {
+    if (theater) {
+      rootRef.current?.scrollIntoView({ block: "start" });
+      if (rootRef.current) rootRef.current.scrollTop = 0;
+    }
+  }, [theater]);
+  useEffect(() => {
+    const changed = () => setFullscreen(document.fullscreenElement === rootRef.current);
+    document.addEventListener("fullscreenchange", changed);
+    return () => document.removeEventListener("fullscreenchange", changed);
+  }, []);
+
+  async function toggleFullscreen() {
+    setFullscreenError(null);
+    try {
+      if (document.fullscreenElement === rootRef.current) await document.exitFullscreen();
+      else if (rootRef.current?.requestFullscreen) {
+        await rootRef.current.requestFullscreen();
+        rootRef.current.scrollTop = 0;
+        rootRef.current.scrollIntoView({ block: "start" });
+      } else setFullscreenError("Fullscreen is unavailable here. Rotate your phone for the edge-to-edge view.");
+    } catch {
+      setFullscreenError("Could not enter fullscreen. Rotate your phone for the edge-to-edge view.");
+    }
+  }
+
   const [screen, setScreen] = useState<FlexBoxNode | null>(null);
   const [link, setLink] = useState<SocketState>({
     state: "connecting",
@@ -135,7 +185,9 @@ export function GlassesHarness({
   const [micError, setMicError] = useState<string | null>(null);
   const [typed, setTyped] = useState("");
   const [speak, setSpeak] = useState(true);
-  const [seeThrough, setSeeThrough] = useState(false);
+  const [seeThrough, setSeeThrough] = useState(!embedded);
+  const [cameraFacing, setCameraFacing] = useState<"environment" | "user">("environment");
+  const [cameraStarting, setCameraStarting] = useState(false);
   const [reminders, setReminders] = useState<Reminder[]>([]);
   const [newReminder, setNewReminder] = useState("");
   const [reminderError, setReminderError] = useState<string | null>(null);
@@ -164,6 +216,9 @@ export function GlassesHarness({
   const previewRef = useRef<HTMLVideoElement>(null);
   const backdropRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const cameraGeneration = useRef(0);
+  const cameraMounted = useRef(false);
+  const cameraRequest = useRef<Promise<MediaStream | null> | null>(null);
   const recognitionRef = useRef<Recognition | null>(null);
   const finalRef = useRef("");
   // After a double tap: the next words, spoken or typed, are the question the mic opened for.
@@ -364,29 +419,72 @@ export function GlassesHarness({
     else fail("open the app", result.error);
   }
 
-  async function startCamera(): Promise<MediaStream | null> {
-    if (streamRef.current) return streamRef.current;
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { width: { ideal: 1280 }, height: { ideal: 720 } },
-        audio: false,
-      });
-      streamRef.current = stream;
-      setCamera(stream);
-      setCameraError(null);
-      return stream;
-    } catch (error) {
-      setCameraError(`Camera unavailable: ${error}`);
-      return null;
-    }
+  function startCamera(facing = cameraFacing): Promise<MediaStream | null> {
+    if (!cameraMounted.current) return Promise.resolve(null);
+    if (streamRef.current) return Promise.resolve(streamRef.current);
+    if (cameraRequest.current) return cameraRequest.current;
+    const generation = cameraGeneration.current;
+    setCameraStarting(true);
+    const request = (async () => {
+      await Promise.resolve(); // publish the shared request before any synchronous API error
+      try {
+        if (!navigator.mediaDevices?.getUserMedia) {
+          throw new Error("Open this site over HTTPS to use your phone camera.");
+        }
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            facingMode: { ideal: facing },
+            width: { ideal: 1280 },
+            height: { ideal: 720 },
+          },
+          audio: false,
+        });
+        if (!cameraMounted.current || generation !== cameraGeneration.current) {
+          stream.getTracks().forEach((track) => track.stop());
+          return null;
+        }
+        streamRef.current = stream;
+        setCamera(stream);
+        setSeeThrough(!embedded);
+        setCameraError(null);
+        return stream;
+      } catch (error) {
+        if (cameraMounted.current && generation === cameraGeneration.current)
+          setCameraError(`Camera unavailable: ${error}`);
+        return null;
+      } finally {
+        if (generation === cameraGeneration.current) {
+          cameraRequest.current = null;
+          if (cameraMounted.current) setCameraStarting(false);
+        }
+      }
+    })();
+    cameraRequest.current = request;
+    return request;
   }
 
   function stopCamera() {
+    cameraGeneration.current++;
+    cameraRequest.current = null;
     streamRef.current?.getTracks().forEach((track) => track.stop());
     streamRef.current = null;
+    setCameraStarting(false);
     setCamera(null);
     setSeeThrough(false);
     setWatching(false);
+  }
+
+  async function switchCamera() {
+    const next = cameraFacing === "environment" ? "user" : "environment";
+    const resumeWatching = watching;
+    const resumeSeeThrough = seeThrough;
+    stopCamera();
+    setCameraFacing(next);
+    const stream = await startCamera(next);
+    if (stream && streamRef.current === stream) {
+      setSeeThrough(resumeSeeThrough);
+      setWatching(resumeWatching);
+    }
   }
 
   /** A JPEG of the webcam's current frame, or the reason there is none. */
@@ -397,12 +495,14 @@ export function GlassesHarness({
     const stream = await startCamera();
     const video = previewRef.current;
     if (!stream || !video)
-      return { error: "No camera: allow webcam access, then try again." };
+      return { error: "No camera: allow camera access, then try again." };
     if (video.srcObject !== stream) video.srcObject = stream;
-    await liveFrame(video);
+    if (!(await liveFrame(video))) return { error: "Camera did not produce a frame. Try turning it off and on." };
     // A webcam that just turned on is still adjusting its exposure; its first frames are dark.
     if (justStarted)
       await new Promise((resolve) => setTimeout(resolve, CAMERA_WARMUP_MS));
+    if (streamRef.current !== stream || !cameraMounted.current)
+      return { error: "Camera was stopped before the photo was ready." };
     const canvas = document.createElement("canvas");
     canvas.width = video.videoWidth;
     canvas.height = video.videoHeight;
@@ -413,6 +513,7 @@ export function GlassesHarness({
     if (!blob) return { error: "Could not encode the frame as JPEG." };
     return { blob, width: canvas.width, height: canvas.height };
   }
+
 
   async function loadReminders() {
     const request = "GET /api/glasses/reminders";
@@ -709,10 +810,16 @@ export function GlassesHarness({
   // Release the webcam when leaving the page. Next.js keeps a page it navigates away from
   // mounted but hidden, and runs this then too, so the controls must show the camera as off.
   const releaseCamera = useEffectEvent(stopCamera);
-  useEffect(() => () => releaseCamera(), []);
+  useEffect(() => {
+    cameraMounted.current = true;
+    return () => {
+      cameraMounted.current = false;
+      releaseCamera();
+    };
+  }, []);
 
   return (
-    <div className={`gh-root ${embedded ? "gh-embedded" : "gh-page"}`}>
+    <div ref={rootRef} className={`gh-root ${embedded ? "gh-embedded" : "gh-page"}${theater ? " gh-theater" : ""}`}>
       {embedded ? (
         <StatusLine link={link} />
       ) : (
@@ -738,6 +845,7 @@ export function GlassesHarness({
         <section className="gh-stage" aria-label="Display">
           <Display
             ref={displayRef}
+            immersive={!embedded}
             screen={screen}
             listening={listening}
             seeThrough={seeThrough && camera !== null}
@@ -755,9 +863,27 @@ export function GlassesHarness({
               />
             ) : null}
           </Display>
+          {!embedded ? (
+            <div className="gh-pov-actions">
+              {!camera ? (
+                <button type="button" className="gh-chip" onClick={() => cameraStarting ? stopCamera() : void startCamera()}>
+                  <Video size={16} aria-hidden="true" /> {cameraStarting ? "Cancel camera" : "Start camera"}
+                </button>
+              ) : null}
+              <button type="button" className="gh-chip" onClick={() => void toggleFullscreen()}>
+                {fullscreen ? <Minimize size={16} aria-hidden="true" /> : <Maximize size={16} aria-hidden="true" />}
+                {fullscreen ? "Exit fullscreen" : "Fullscreen"}
+              </button>
+              <button type="button" className="gh-chip" onClick={() => controlsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })}>
+                <ChevronDown size={16} aria-hidden="true" /> Controls
+              </button>
+              {fullscreenError ? <p role="status" className="gh-error">{fullscreenError}</p> : null}
+            </div>
+          ) : null}
           <div className="gh-stage-bar">
             <span>
-              600 × 600 · T T = double tap (ask) · hold Space = talk
+              <span className="gh-keyboard-hint">600 × 600 · T T = double tap (ask) · hold Space = talk</span>
+              <span className="gh-phone-hint">Turn your phone sideways · rear camera preferred</span>
             </span>
             <span className="gh-stage-actions">
               <label className="gh-toggle">
@@ -780,7 +906,45 @@ export function GlassesHarness({
           </div>
         </section>
 
-        <aside className="gh-controls">
+        <aside ref={controlsRef} className="gh-controls">
+          <section className="gh-card" aria-labelledby={ids.camera}>
+            <div className="gh-card-heading">
+              <h2 id={ids.camera}>Camera</h2>
+              {camera || cameraStarting ? (
+                <button type="button" className="gh-chip" onClick={stopCamera}>
+                  <VideoOff size={14} aria-hidden="true" /> {cameraStarting ? "Cancel camera" : "Turn off"}
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="gh-chip"
+                  disabled={cameraStarting}
+                  onClick={() => void startCamera()}
+                >
+                  <Video size={14} aria-hidden="true" /> {cameraStarting ? "Opening camera…" : "Start camera"}
+                </button>
+              )}
+            </div>
+            {camera ? (
+              <button type="button" className="gh-chip" disabled={cameraStarting} onClick={() => void switchCamera()}>
+                <SwitchCamera size={16} aria-hidden="true" /> Switch camera
+              </button>
+            ) : null}
+            <div className="gh-preview">
+              <video
+                ref={previewRef}
+                autoPlay
+                muted
+                playsInline
+                hidden={!camera}
+              />
+              {!camera ? (
+                <p>Start your phone camera to see its feed here and on the display. Rotate to landscape for the best view.</p>
+              ) : null}
+            </div>
+            {cameraError ? <p className="gh-error">{cameraError}</p> : null}
+          </section>
+
           <section className="gh-card" aria-labelledby={ids.inputs}>
             <h2 id={ids.inputs}>Glasses &amp; Neural Band</h2>
             <p className="gh-note">
@@ -795,38 +959,6 @@ export function GlassesHarness({
                 <Pointer size={16} aria-hidden="true" /> Double tap (ask) · T T
               </button>
             </div>
-          </section>
-
-          <section className="gh-card" aria-labelledby={ids.camera}>
-            <div className="gh-card-heading">
-              <h2 id={ids.camera}>Camera</h2>
-              {camera ? (
-                <button type="button" className="gh-chip" onClick={stopCamera}>
-                  <VideoOff size={14} aria-hidden="true" /> Turn off
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  className="gh-chip"
-                  onClick={() => void startCamera()}
-                >
-                  <Video size={14} aria-hidden="true" /> Turn on webcam
-                </button>
-              )}
-            </div>
-            <div className="gh-preview">
-              <video
-                ref={previewRef}
-                autoPlay
-                muted
-                playsInline
-                hidden={!camera}
-              />
-              {!camera ? (
-                <p>The webcam stands in for the glasses&apos; camera.</p>
-              ) : null}
-            </div>
-            {cameraError ? <p className="gh-error">{cameraError}</p> : null}
           </section>
 
           <section className="gh-card" aria-labelledby={ids.voice}>
@@ -910,7 +1042,7 @@ export function GlassesHarness({
             </div>
             <p className="gh-note">
               Say or type “remind me not to trip over the stool”. While
-              watching, the webcam sends a frame every second over the socket
+              watching, the camera sends a frame every second over the socket
               and the backend pushes a warning when the thing is in view.
             </p>
             {lastWatch ? (

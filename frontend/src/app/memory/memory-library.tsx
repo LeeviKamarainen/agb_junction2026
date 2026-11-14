@@ -5,7 +5,6 @@ import {
   LoaderCircle,
   NotebookPen,
   RefreshCw,
-  Trash2,
   Upload,
   X,
 } from "lucide-react";
@@ -23,10 +22,10 @@ import {
 import {
   type CollectionCount,
   errorText,
-  formatTime,
   type Memory,
   toLocalInput,
 } from "./types";
+import { MemoryGallery } from "./memory-gallery";
 import { WebcamCapture } from "./webcam-capture";
 
 type Pending = {
@@ -447,63 +446,7 @@ export function MemoryLibrary({
         </p>
       )}
       {memories && memories.length > 0 && (
-        <ul className="grid max-h-[60vh] grid-cols-2 gap-2 overflow-y-auto sm:grid-cols-3">
-          {memories.map((memory) => (
-            <li
-              key={memory.id}
-              className="group relative flex flex-col overflow-hidden rounded-md border border-border bg-background/60"
-            >
-              {memory.image_url ? (
-                /* eslint-disable-next-line @next/next/no-img-element -- served by the API */
-                <img
-                  src={memory.image_url}
-                  alt={memory.text || `Memory ${memory.id}`}
-                  className="aspect-[4/3] w-full object-cover"
-                  loading="lazy"
-                />
-              ) : (
-                <p className="line-clamp-4 aspect-[4/3] p-2 text-xs">
-                  {memory.text}
-                </p>
-              )}
-              <div className="flex flex-col gap-0.5 p-1.5 text-[11px] text-muted-foreground">
-                <span>
-                  #{memory.id} · {formatTime(memory.created_at)} ·{" "}
-                  <span className="text-primary">{memory.collection}</span>
-                </span>
-                <span>
-                  {memory.demo ? (
-                    <span className="rounded-full border border-primary/50 px-1.5 text-primary">
-                      demo
-                    </span>
-                  ) : (
-                    <span className="rounded-full border border-border px-1.5">
-                      {memory.owner && memory.owner !== user?.username
-                        ? memory.owner
-                        : "yours"}
-                    </span>
-                  )}
-                </span>
-                {memory.image_url && memory.text && (
-                  <span className="truncate text-foreground">
-                    {memory.text}
-                  </span>
-                )}
-              </div>
-              {isAdmin || !memory.demo ? (
-                <Button
-                  variant="destructive"
-                  size="icon-xs"
-                  className="absolute top-1 right-1 opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
-                  onClick={() => void deleteMemory(memory.id)}
-                  aria-label={`Delete memory ${memory.id}`}
-                >
-                  <Trash2 aria-hidden="true" />
-                </Button>
-              ) : null}
-            </li>
-          ))}
-        </ul>
+        <MemoryGallery memories={memories} isAdmin={isAdmin} username={user?.username} onDelete={deleteMemory} />
       )}
     </section>
   );
