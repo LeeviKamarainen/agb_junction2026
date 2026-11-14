@@ -24,7 +24,7 @@ Anything that changes production needs that same explicit approval from a person
 
 ## Database
 
-The SQLite database is disposable. When the models or `backend/app/seed.py` change, the backend wipes it and re-seeds on start, in production too, so demo data belongs in `seed.py`. The exception is the demo dataset in `backend/app/demo.py`: it needs the embedding model, so the backend stores it as demo memories (collection `demo`) in the background after each start, replacing stale copies, and `GET /api/demo/timeline` serves it to anyone. Reasoning: `docs/adr/0001-disposable-database.md`.
+The SQLite database is disposable. When the models or `backend/app/seed.py` change, the backend wipes it and re-seeds on start, in production too, so demo data belongs in `seed.py`. Reasoning: `docs/adr/0001-disposable-database.md`.
 
 Database access is async (`backend/app/db.py`: SQLAlchemy on aiosqlite, `AsyncSession` from SQLModel): routes are `async def`, take `SessionDep` and await every query (`await session.exec(...)`, `await session.get(...)`, `await session.commit()`); outside a request, open one with `async with new_session() as session:`. Sessions keep their objects after commit, since an async session cannot reload an attribute lazily. The model clients (`backend/app/llm.py`) are async httpx too, so never call blocking I/O from a route; run CPU or file work such as image resizing or password hashing with `anyio.to_thread.run_sync`. SQLite still takes one writer at a time (WAL, `busy_timeout` 5 s). Tests stay synchronous: `TestClient` for routes, and the `db` fixture (`backend/tests/conftest.py`) to run `await work(session)` on the app's event loop; model fakes are `async def`.
 
@@ -92,3 +92,5 @@ Every image the backend receives has its faces filled by `faces.anonymise` (`bac
 ## Agent skills
 
 Skills live in `.agents/skills/` (`.claude/skills` is a symlink to it; edit the real path): `add-feature`, `ship`, `review`, `submission`.
+
+The database starts empty: there is no built-in sample-day loader. The Memory tab and `/glasses` share `GlassesHarness`; streaming posts frames through `/api/glasses/frames` and microphone questions use the glasses WebSocket. Manage goals and triggers in the Memory tab.

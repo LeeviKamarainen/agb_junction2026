@@ -4,17 +4,13 @@ from contextlib import asynccontextmanager
 
 from fastapi import APIRouter, FastAPI
 
-from app import auth, demo, faces
+from app import auth, faces
 from app.db import get_engine, init_db, new_session
-from app.llm import get_embedder
 from app.routes import auth as auth_routes
-from app.routes import demo as demo_routes
-from app.routes import glasses, memories, notes, showcases
-from app.settings import get_settings
+from app.routes import glasses, memories, showcases
 
 log = logging.getLogger(__name__)
 SWEEP_EVERY_S = 300
-DEMO_RETRY_S = 60
 
 
 @asynccontextmanager
@@ -25,31 +21,10 @@ async def lifespan(_app: FastAPI):
         await auth.ensure_admin(session)
         await auth.purge_expired_guests(session)
     sweeper = asyncio.create_task(_sweep_guests())
-    loader = asyncio.create_task(_load_demo())
     yield
     sweeper.cancel()
-    loader.cancel()
-    # Let both stop before the engine goes, so neither is mid-write when it closes.
-    await asyncio.gather(sweeper, loader, return_exceptions=True)
+    await asyncio.gather(sweeper, return_exceptions=True)
     await get_engine().dispose()
-
-
-async def _load_demo() -> None:
-    """Embed and store the demo dataset (app/demo.py) when it is not stored yet. In the
-    background, so a slow or missing embedding model never holds up the start; the timeline works
-    without it, only asking about the demo waits for it. Retries every DEMO_RETRY_S until it
-    succeeds, so an embedding server that is down during a deploy only delays it."""
-    if not get_settings().embed_url:
-        log.warning("No EMBED_URL: the demo dataset is not stored, so asking finds nothing")
-        return
-    while True:
-        try:
-            async with new_session() as session:
-                await demo.load_demo_memories(session, get_embedder())
-            return
-        except Exception:
-            log.exception("Storing the demo dataset failed; trying again in %d s", DEMO_RETRY_S)
-        await asyncio.sleep(DEMO_RETRY_S)
 
 
 async def _sweep_guests() -> None:
@@ -81,9 +56,7 @@ def health() -> dict[str, str]:
 
 
 api.include_router(auth_routes.router)
-api.include_router(demo_routes.router)
 api.include_router(showcases.router)
-api.include_router(notes.router)
 api.include_router(memories.router)
 api.include_router(glasses.router)
 app.include_router(api)
