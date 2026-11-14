@@ -43,6 +43,16 @@ decodes it (HEIC or Bitmap), saves a JPEG (quality 95) to the app's private stor
 **Gallery** shows a thumbnail grid; tap a photo to swipe through them full-screen, and Delete removes one.
 Pull the files off the phone with Android Studio's Device Explorer (data/data/com.agb.glassescam/files/photos).
 
+## Snapshot (fast, from the video stream)
+
+**Arm snapshot (fast)** keeps the glasses' compressed video stream open (720x1280, 7 fps) and decodes it in the
+background with `MediaCodec` (`SnapshotDecoder.kt`, no on-screen preview). The capture button, a Neural Band
+gesture or the Capture button saves the NEXT decoded frame as a JPEG (typically well under a second, tens of KB over
+the link instead of ~1.4 MB for a full photo). Nothing is stored on the glasses, so there is no backlog of
+older photos. Trade-offs: max 720x1280 (stream frames are compressed, so softer than a real still), and the stream
+uses battery and Bluetooth bandwidth while armed. Use **Arm quick shot** when you need a full-resolution still.
+Unverified: the first frames after arming can look blocky until the stream's first keyframe arrives.
+
 ## Quick shot (single photo, no stream)
 
 **Arm quick shot** opens a session without starting video. The Capture button on screen, the glasses'

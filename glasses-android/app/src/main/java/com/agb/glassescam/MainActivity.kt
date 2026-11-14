@@ -67,6 +67,7 @@ class MainActivity : ComponentActivity() {
                     },
                     onStart = { viewModel.startStreaming(::requestWearablesPermission) },
                     onArmQuick = { viewModel.armQuickShot(::requestWearablesPermission) },
+                    onArmSnap = { viewModel.armSnapshot(::requestWearablesPermission) },
                 )
             }
         }

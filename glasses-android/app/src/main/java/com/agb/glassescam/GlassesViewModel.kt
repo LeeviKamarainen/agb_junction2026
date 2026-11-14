@@ -67,6 +67,7 @@ data class UiState(
     val mockEnabled: Boolean = false,
     val photoProfile: String = "Balanced",
     val useDisplay: Boolean = false, // show messages on Ray-Ban Display glasses (can interfere with photo transfer)
+    val snapArmed: Boolean = false, // snapshot mode: stream is open, trigger saves the next frame
     val quickArmed: Boolean = false, // quick-shot mode: no stream, glasses button/gesture takes a photo
     val photos: List<java.io.File> = emptyList(), // gallery, newest first
     val message: String = "",
@@ -82,7 +83,11 @@ class GlassesViewModel : ViewModel() {
     private var stream: Stream? = null
     private var streamJobs = mutableListOf<Job>()
 
-    private enum class Mode { NONE, STREAM, QUICK }
+    private enum class Mode { NONE, STREAM, QUICK, SNAP }
+
+    // Snapshot-from-stream mode: the video stream stays open and a trigger saves the next decoded frame.
+    private var snapDecoder: SnapshotDecoder? = null
+    private val snapLock = Any()
     private var mode = Mode.NONE
     // Quick-shot bookkeeping. Photos arrive asynchronously (and older queued ones can arrive first),
     // so we count requests vs. received instead of blocking while a transfer is in flight.
@@ -268,8 +273,11 @@ class GlassesViewModel : ViewModel() {
                 Log.i("GlassesVM", "session state: $state")
                 _ui.update { it.copy(sessionState = state.toString()) }
                 when (state) {
-                    DeviceSessionState.STARTED ->
-                        if (mode == Mode.QUICK) startQuick(s) else startCamera(s)
+                    DeviceSessionState.STARTED -> when (mode) {
+                        Mode.QUICK -> startQuick(s)
+                        Mode.SNAP -> startSnap(s)
+                        else -> startCamera(s)
+                    }
                     DeviceSessionState.STOPPED -> cleanup()
                     else -> Unit
                 }
@@ -419,13 +427,13 @@ class GlassesViewModel : ViewModel() {
                     pendingShortPress?.cancel()
                     pendingShortPress = viewModelScope.launch {
                         delay(400)
-                        triggerQuickCapture()
+                        triggerCapture()
                     }
                 }
                 CapturePressType.DOUBLE_PRESS -> pendingShortPress?.cancel()
                 else -> Unit
             }
-            is InputEvent.Select -> triggerQuickCapture() // Neural Band tap/select
+            is InputEvent.Select -> triggerCapture() // Neural Band tap/select
             else -> Unit
         }
     }
@@ -461,6 +469,142 @@ class GlassesViewModel : ViewModel() {
     fun cycleProfile() {
         profile = Profile.entries[(profile.ordinal + 1) % Profile.entries.size]
         _ui.update { it.copy(photoProfile = profile.label) }
+    }
+
+    // ------------------------------------------------ snapshot from the video stream
+
+    /**
+     * Snapshot mode: keeps the (compressed, tens-of-KB-per-frame) video stream open and, on a trigger,
+     * saves the next decoded frame as a JPEG. Near-instant and nothing queues up on the glasses, but the
+     * picture is limited to stream resolution (up to 720x1280) instead of a full still photo.
+     */
+    fun armSnapshot(requestPermission: suspend (Permission) -> PermissionStatus) =
+        openSession(Mode.SNAP, requestPermission)
+
+    private fun startSnap(s: DeviceSession) {
+        if (camera != null) return
+        val config = StreamConfiguration(
+            videoQuality = VideoQuality.HIGH, // 720x1280, the best a stream frame can be
+            frameRate = 7,                    // low frame rate keeps Bluetooth bandwidth for resolution
+            compressVideo = true,
+        )
+        s.addCamera(config).fold(
+            onSuccess = { cam ->
+                camera = cam
+                val st = cam.stream
+                stream = st
+                streamJobs += viewModelScope.launch {
+                    var wasActive = false
+                    st.state.collect { state ->
+                        Log.i("GlassesVM", "snapshot stream state: $state")
+                        _ui.update { it.copy(streamState = "snapshot $state") }
+                        when (state) {
+                            StreamState.STARTING,
+                            StreamState.STARTED,
+                            StreamState.STREAMING,
+                            StreamState.PAUSED -> wasActive = true
+                            StreamState.STOPPED,
+                            StreamState.CLOSED -> if (wasActive) stopStreaming()
+                            else -> Unit
+                        }
+                    }
+                }
+                streamJobs += viewModelScope.launch(Dispatchers.Default) {
+                    var frames = 0
+                    st.videoStream.collect {
+                        if (frames++ == 0) Log.i("GlassesVM", "snapshot: first frame ${it.width}x${it.height}")
+                        handleSnapFrame(it)
+                    }
+                }
+                startGlassesInputs(s)
+                if (_ui.value.useDisplay) startGlassesDisplay(s)
+                st.start().onFailure { error, _ -> say("Stream start failed: ${error.description}") }
+                _ui.update { it.copy(snapArmed = true) }
+                say("Snapshot mode armed. Press the glasses capture button or use a Neural Band gesture.")
+            },
+            onFailure = { error, _ -> say("Camera failed: ${error.description}") },
+        )
+    }
+
+    private fun handleSnapFrame(frame: VideoFrame) {
+        if (!frame.isCompressed) return
+        val buf = frame.buffer
+        val pos = buf.position()
+        val bytes = ByteArray(buf.remaining())
+        buf.get(bytes)
+        buf.position(pos)
+
+        synchronized(snapLock) {
+            val d = snapDecoder ?: SnapshotDecoder(frame.width, frame.height).also { snapDecoder = it }
+            d.decode(bytes, frame.presentationTimeUs, frame.isCodecConfig)
+        }
+    }
+
+    private fun releaseSnapDecoder() {
+        synchronized(snapLock) {
+            snapDecoder?.release()
+            snapDecoder = null
+        }
+    }
+
+    private fun triggerCapture() {
+        if (mode == Mode.SNAP) triggerSnapshot() else triggerQuickCapture()
+    }
+
+    private fun triggerSnapshot() {
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastCaptureRequestMs < 600) return // double-fire guard
+        val decoder = snapDecoder ?: return say("No video frames yet. Wait a second after arming and try again.")
+        if (decoder.hasPending) return say("Busy: still grabbing the previous frame.")
+        lastCaptureRequestMs = now
+
+        doneResetJob?.cancel()
+        setStage(CaptureStage.CAPTURING, 0f, "Grabbing the next video frame")
+        feedback?.started()
+        decoder.requestSnapshot { jpeg -> onSnapshotJpeg(jpeg) }
+
+        // Frames normally arrive several times a second; if none does, tell the user instead of hanging.
+        viewModelScope.launch {
+            delay(4_000)
+            val d = snapDecoder
+            if (d != null && d.hasPending) {
+                d.cancelSnapshot()
+                setStage(CaptureStage.FAILED, 0f, "No video frame arrived within 4 s")
+                feedback?.failed()
+                say("No video frame arrived. Is the glasses stream running?")
+            }
+        }
+    }
+
+    private fun onSnapshotJpeg(jpeg: ByteArray) {
+        val ctx = appContext ?: return
+        viewModelScope.launch {
+            setStage(CaptureStage.SAVING, 1f, "${jpeg.size / 1024} KB frame")
+            val size = withContext(Dispatchers.Default) {
+                val o = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                android.graphics.BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size, o)
+                o.outWidth to o.outHeight
+            }
+            PhotoStore.saveJpeg(ctx, jpeg)
+            _ui.update { it.copy(photos = PhotoStore.list(ctx)) }
+
+            val hasBackend = BuildConfig.BACKEND_URL.isNotBlank()
+            if (hasBackend) {
+                setStage(CaptureStage.SENDING, 0f, "Uploading to backend")
+                showOnGlasses?.invoke("Saved. Sending...")
+            }
+            val sendResult = PhotoSink.sendJpeg(jpeg, size.first, size.second)
+            say("Snapshot ${size.first}x${size.second} (${jpeg.size / 1024} KB). $sendResult")
+
+            feedback?.done()
+            setStage(CaptureStage.DONE, 1f, sendResult)
+            doneResetJob?.cancel()
+            doneResetJob = viewModelScope.launch {
+                delay(5_000)
+                if (_ui.value.captureStage == CaptureStage.DONE) setStage(CaptureStage.IDLE)
+            }
+            showOnGlasses?.invoke(if (hasBackend) "Photo saved and sent (${_ui.value.photos.size})" else "Photo saved (${_ui.value.photos.size})")
+        }
     }
 
     private fun triggerQuickCapture() {
@@ -578,7 +722,7 @@ class GlassesViewModel : ViewModel() {
      * saves it to the gallery, then hands it to [PhotoSink].
      */
     fun capturePhoto() {
-        if (mode == Mode.QUICK) return triggerQuickCapture()
+        if (mode == Mode.QUICK || mode == Mode.SNAP) return triggerCapture()
         val st = stream ?: return say("Start streaming first")
         val ctx = appContext ?: return say("Not initialized yet")
         viewModelScope.launch {
@@ -632,7 +776,8 @@ class GlassesViewModel : ViewModel() {
         doneResetJob?.cancel()
         setStage(CaptureStage.IDLE)
         mode = Mode.NONE
-        _ui.update { it.copy(quickArmed = false) }
+        releaseSnapDecoder()
+        _ui.update { it.copy(quickArmed = false, snapArmed = false) }
         camera = null
         stream = null
         session = null // a stopped session can't be restarted; create a new one next time

@@ -35,6 +35,12 @@ object PhotoStore {
         file
     }
 
+    /** Saves an already-encoded JPEG as-is (no recompression). */
+    suspend fun saveJpeg(context: Context, jpeg: ByteArray): File = withContext(Dispatchers.IO) {
+        val stamp = SimpleDateFormat("yyyyMMdd_HHmmss_SSS", Locale.US).format(Date())
+        File(dir(context), "IMG_$stamp.jpg").also { it.writeBytes(jpeg) }
+    }
+
     suspend fun delete(file: File) = withContext(Dispatchers.IO) { file.delete() }
 
     /** HEIC bytes from the glasses -> upright Bitmap at the original resolution. */

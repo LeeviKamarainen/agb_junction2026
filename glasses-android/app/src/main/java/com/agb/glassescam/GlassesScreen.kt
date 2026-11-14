@@ -97,6 +97,7 @@ fun GlassesScreen(
     onToggleMock: (Boolean) -> Unit,
     onStart: () -> Unit,
     onArmQuick: () -> Unit,
+    onArmSnap: () -> Unit,
 ) {
     val ui by viewModel.ui.collectAsStateWithLifecycle()
     var showGallery by rememberSaveable { mutableStateOf(false) }
@@ -137,7 +138,7 @@ fun GlassesScreen(
                 Switch(
                     checked = ui.useDisplay,
                     onCheckedChange = viewModel::setUseDisplay,
-                    enabled = ui.initialized && !ui.quickArmed,
+                    enabled = ui.initialized && !ui.quickArmed && !ui.snapArmed,
                 )
                 Text("Glasses screen messages (may block photo transfer)")
             }
@@ -145,12 +146,20 @@ fun GlassesScreen(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
-                Button(onClick = onStart, enabled = ui.initialized && !ui.quickArmed) { Text("Start stream") }
-                // Quick shot: no video stream. Press the glasses capture button / Neural Band to take a photo.
+                Button(
+                    onClick = onStart,
+                    enabled = ui.initialized && !ui.quickArmed && !ui.snapArmed,
+                ) { Text("Start stream") }
+                // Quick shot: no video stream; the glasses take a full-res still (slow to transfer).
                 Button(
                     onClick = { if (ui.quickArmed) viewModel.stopStreaming() else onArmQuick() },
-                    enabled = ui.initialized,
+                    enabled = ui.initialized && !ui.snapArmed,
                 ) { Text(if (ui.quickArmed) "Disarm quick shot" else "Arm quick shot") }
+                // Snapshot: stream stays open, a trigger saves the next video frame (fast, up to 720x1280).
+                Button(
+                    onClick = { if (ui.snapArmed) viewModel.stopStreaming() else onArmSnap() },
+                    enabled = ui.initialized && !ui.quickArmed,
+                ) { Text(if (ui.snapArmed) "Disarm snapshot" else "Arm snapshot (fast)") }
                 OutlinedButton(onClick = viewModel::stopStreaming) { Text("Stop") }
                 Button(onClick = viewModel::capturePhoto) { Text("Capture") }
                 OutlinedButton(onClick = viewModel::cycleProfile) { Text("Photo: ${ui.photoProfile}") }
