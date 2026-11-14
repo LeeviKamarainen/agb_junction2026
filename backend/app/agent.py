@@ -65,6 +65,35 @@ When the user tells you to stop watching for one of them, or that they no longer
 search: call stop_watching with that goal's number, then confirm in one short sentence. Never \
 stop one they did not ask you to stop."""
 
+CAN_WATCH = """
+
+The user's glasses can watch out for things. When the user asks you to watch out for something, \
+or to warn, alert or tell them when something comes into view, do not search: call \
+start_watching with what they asked, in their own words, then confirm in one short sentence."""
+
+START_WATCHING_TOOL: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "start_watching",
+        "description": (
+            "Have the user's glasses watch out for something from now on: triggers are written "
+            "for it and checked against every frame of the camera stream. Call it only when the "
+            "user asks you to watch out for, warn about or tell them about something."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "goal": {
+                    "type": "string",
+                    "description": "What the user asked for, in their words, e.g. 'I'm "
+                    "allergic to nuts, warn me when I pick up food that might have them'.",
+                }
+            },
+            "required": ["goal"],
+        },
+    },
+}
+
 STOP_WATCHING_TOOL: dict[str, Any] = {
     "type": "function",
     "function": {
@@ -162,7 +191,8 @@ async def run(
     `owners` is whose memories the model may reach (app.auth.Viewer.owners; None for all): every
     vector_search it makes is limited to them, and only their stills are attached. With
     `collections`, every search is limited to them too, whatever the model asks for. `owner_id`
-    is the account asking: the model is told that account's goals and may remove one of them.
+    is the account asking: the model is told that account's goals, may remove one of them, and
+    may add one, for which it writes the triggers (app/glasses/triggers.py).
 
     Raises UpstreamError when a model server fails.
     """
@@ -170,18 +200,24 @@ async def run(
     now = now or datetime.now(UTC)
     watched = await triggers.of(session, owner_id) if owner_id is not None else []
     watching = WATCHING.format(goals="\n".join(f"- goal {g.id}: “{g.text}”" for g in watched))
-    tools = [VECTOR_SEARCH_TOOL, STOP_WATCHING_TOOL] if watched else [VECTOR_SEARCH_TOOL]
+    tools = [VECTOR_SEARCH_TOOL]
+    if owner_id is not None:
+        tools.append(START_WATCHING_TOOL)
+    if watched:
+        tools.append(STOP_WATCHING_TOOL)
+    about_watching = (CAN_WATCH if owner_id is not None else "") + (watching if watched else "")
     messages: list[dict[str, Any]] = [
         {
             "role": "system",
             "content": SYSTEM.format(
-                now=local(now), zone=LOCAL_TIMEZONE.key, watching=watching if watched else ""
+                now=local(now), zone=LOCAL_TIMEZONE.key, watching=about_watching
             ),
         },
         {"role": "user", "content": question},
     ]
     shown: set[int] = set()
     stopped: set[str] = set()  # the goals stop_watching removed during this answer
+    started_goals: set[str] = set()  # what start_watching added during this answer
     images_pending = 0
 
     def step(type, round, **fields) -> Step:
@@ -223,6 +259,27 @@ async def run(
                     content = json.dumps({"stopped_watching": goal.text})
                     done = f"Stopped watching: {goal.text}"
                     yield step("tool_result", round, call_id=call_id, content=done)
+            elif name == START_WATCHING_TOOL["function"]["name"] and owner_id is not None:
+                goal_text = arguments.get("goal") if isinstance(arguments, dict) else None
+                goal_text = goal_text.strip()[:500] if isinstance(goal_text, str) else ""
+                if goal_text.lower() in started_goals:
+                    content = json.dumps({"already_watching": True})
+                    yield step("tool_result", round, call_id=call_id, content="Already watching")
+                else:
+                    try:
+                        if not goal_text:
+                            raise ValueError("say what to watch out for in `goal`")
+                        drafts = await triggers.write(chat, goal_text)
+                    except ValueError as error:  # no goal, or no usable trigger was written
+                        content = json.dumps({"error": str(error)})
+                        yield step("tool_error", round, call_id=call_id, content=str(error))
+                    else:
+                        await triggers.add(session, owner_id, goal_text, drafts)
+                        started_goals.add(goal_text.lower())
+                        names = [draft.name for draft in drafts]
+                        content = json.dumps({"now_watching": goal_text, "triggers": names})
+                        done = f"Now watching: {goal_text} ({', '.join(names)})"
+                        yield step("tool_result", round, call_id=call_id, content=done)
             elif name != VECTOR_SEARCH_TOOL["function"]["name"]:
                 error = f"No tool named {name}"
                 content = json.dumps({"error": error})
