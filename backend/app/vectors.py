@@ -39,7 +39,11 @@ class Hit:
 # 512 is what CLIP ViT-B/32 produces (see memory/docs/decisions.md). note_embedding is for the
 # example Note feature, so delete it together with Note. To keep more than a timestamp, declare it,
 # e.g. VectorTable(512, {"source": "TEXT", "frame": "INTEGER"}).
-VECTOR_TABLES: dict[str, VectorTable] = {"note_embedding": VectorTable(512)}
+VECTOR_TABLES: dict[str, VectorTable] = {
+    "note_embedding": VectorTable(512),
+    # One row per Memory (app/models.py), same id. kind is copied here so a search can filter on it.
+    "memory_embedding": VectorTable(512, {"kind": "TEXT"}),
+}
 
 
 def load_extension(dbapi_connection) -> None:

@@ -39,14 +39,214 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/memories": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Memories
+         * @description Every memory, newest first.
+         */
+        get: operations["list_memories_api_memories_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/memories/image": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Add Image
+         * @description Store one image: shrink it, embed it with the image model, keep an optional caption.
+         */
+        post: operations["add_image_api_memories_image_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/memories/text": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Add Text
+         * @description Store a text memory, embedded with the text model.
+         */
+        post: operations["add_text_api_memories_text_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/memories/{id}/image": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Memory Image */
+        get: operations["memory_image_api_memories__id__image_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/memories/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete Memory */
+        delete: operations["delete_memory_api_memories__id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Search
+         * @description Run the vector_search tool directly, with the arguments the chat model would send.
+         */
+        post: operations["search_api_search_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/ask": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Ask
+         * @description Answer a question from the memories: the chat model searches them, then answers.
+         */
+        post: operations["ask_api_ask_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/ask/stream": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Ask Stream
+         * @description The same as /ask, as newline-delimited JSON: one Step per line as it happens.
+         *
+         *     A failure after the first line arrives as {"type": "error", "content": "..."}.
+         */
+        post: operations["ask_stream_api_ask_stream_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** Answer */
+        Answer: {
+            /** Answer */
+            answer: string;
+            /** Searches */
+            searches: components["schemas"]["VectorSearchArgs"][];
+            /** Sources */
+            sources: components["schemas"]["SearchResult"][];
+            /** Steps */
+            steps: components["schemas"]["Step"][];
+        };
+        /** AskRequest */
+        AskRequest: {
+            /** Question */
+            question: string;
+        };
+        /** Body_add_image_api_memories_image_post */
+        Body_add_image_api_memories_image_post: {
+            /** File */
+            file: string;
+            /**
+             * Text
+             * @default
+             */
+            text: string;
+            /** Created At */
+            created_at?: string | null;
+        };
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
+        };
+        /** MemoryPublic */
+        MemoryPublic: {
+            /** Id */
+            id: number;
+            /** Kind */
+            kind: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Text */
+            text: string;
+            /** Image Url */
+            image_url: string | null;
         };
         /** NoteCreate */
         NoteCreate: {
@@ -60,6 +260,77 @@ export interface components {
             /** Id */
             id: number;
         };
+        /** SearchResult */
+        SearchResult: {
+            /** Id */
+            id: number;
+            /** Kind */
+            kind: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Text */
+            text: string;
+            /** Image Url */
+            image_url: string | null;
+            /** Distance */
+            distance: number | null;
+            /** Matched Keywords */
+            matched_keywords: string[];
+            /** Score */
+            score: number;
+        };
+        /**
+         * Step
+         * @description One thing that happened while answering, in order.
+         */
+        Step: {
+            /**
+             * Type
+             * @enum {string}
+             */
+            type: "model_call" | "model_text" | "tool_call" | "tool_result" | "tool_error" | "answer" | "error";
+            /** Round */
+            round: number;
+            /** Elapsed Ms */
+            elapsed_ms: number;
+            /** Content */
+            content?: string | null;
+            /** Tools Offered */
+            tools_offered?: boolean | null;
+            /** Images Sent */
+            images_sent?: number | null;
+            /** Call Id */
+            call_id?: string | null;
+            /** Name */
+            name?: string | null;
+            /** Arguments */
+            arguments?: unknown;
+            /** Results */
+            results?: components["schemas"]["SearchResult"][] | null;
+        };
+        /** TextMemoryCreate */
+        TextMemoryCreate: {
+            /** Text */
+            text: string;
+            /** Created At */
+            created_at?: string | null;
+        };
+        /** Timespan */
+        Timespan: {
+            /**
+             * Start
+             * @description Inclusive. ISO 8601, e.g. 2026-11-14T09:00Z
+             */
+            start?: string | null;
+            /**
+             * End
+             * @description Exclusive. ISO 8601, e.g. 2026-11-14T12:00Z
+             */
+            end?: string | null;
+        };
         /** ValidationError */
         ValidationError: {
             /** Location */
@@ -72,6 +343,23 @@ export interface components {
             input?: unknown;
             /** Context */
             ctx?: Record<string, never>;
+        };
+        /** VectorSearchArgs */
+        VectorSearchArgs: {
+            /** User Query */
+            user_query: string;
+            /** Alternative Queries */
+            alternative_queries?: string[];
+            /** Keywords */
+            keywords?: string[];
+            timespan?: components["schemas"]["Timespan"] | null;
+            /** Kinds */
+            kinds?: ("image" | "text")[];
+            /**
+             * Limit
+             * @default 8
+             */
+            limit: number;
         };
     };
     responses: never;
@@ -144,6 +432,249 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["NotePublic"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_memories_api_memories_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MemoryPublic"][];
+                };
+            };
+        };
+    };
+    add_image_api_memories_image_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_add_image_api_memories_image_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MemoryPublic"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    add_text_api_memories_text_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TextMemoryCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MemoryPublic"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    memory_image_api_memories__id__image_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_memory_api_memories__id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    search_api_search_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VectorSearchArgs"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SearchResult"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    ask_api_ask_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AskRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Answer"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    ask_stream_api_ask_stream_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AskRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/x-ndjson": unknown;
                 };
             };
             /** @description Validation Error */
