@@ -38,6 +38,11 @@ check-backend:
 check-frontend: frontend/node_modules
 	cd frontend && npm run lint && BACKEND_URL=$(LOCAL_BACKEND_URL) npm run typecheck && npm test
 
+# demo-pull: download a recorded demo (the tag it was recorded under) into backend/demo-data/<tag>/, to commit.
+# TAG=<tag> API=https://<host> (no /api); asks for the admin password (or reads ADMIN_PASSWORD).
+demo-pull:
+	cd backend && uv run python scripts/pull_demo.py $(TAG) --api $(API)
+
 # Regenerate frontend/src/lib/api/schema.d.ts from FastAPI's OpenAPI schema.
 api-types: frontend/node_modules
 	cd backend && uv run python -c 'import json; from app.main import app; print(json.dumps(app.openapi()))' > ../frontend/openapi.json

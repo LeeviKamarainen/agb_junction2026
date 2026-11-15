@@ -141,6 +141,7 @@ async def upload_frame(
     seen_at: Annotated[datetime | None, Form()] = None,
     store: Annotated[bool, Form()] = True,
     client: Annotated[str, Form(max_length=100)] = "",
+    collection: Annotated[str, Form(max_length=40)] = "",
 ):
     """One frame from the glasses, with every face in it blurred first: embedded, stored as a
     memory in the glasses collection, and checked against the triggers.
@@ -152,7 +153,8 @@ async def upload_frame(
 
     `store=false` only checks the frame against the triggers: the home page sends the demo clips
     this way, since they are stored as demo memories already. `client` names the app sending it
-    ("live", "harness", ...) for the admin's stream wall.
+    ("live", "harness", ...) for the admin's stream wall. `collection` tags what is stored (one
+    recorded demo, say; a-z, 0-9, _ and -, up to 40), "glasses" when left out.
     """
     return await actions.memory_frame(
         session,
@@ -165,6 +167,7 @@ async def upload_frame(
         seen_at,
         store,
         feeds.clean_client(client, "web"),
+        collection,
     )
 
 

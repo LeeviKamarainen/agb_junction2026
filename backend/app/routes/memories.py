@@ -6,11 +6,11 @@ from typing import Annotated
 
 import anyio
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, UploadFile
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from sqlmodel import col, func, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from app import agent, faces, media, vectors
+from app import agent, demo_bundles, faces, media, vectors
 from app.auth import DEMO_OWNER, Viewer, ViewerDep
 from app.db import SessionDep, new_session
 from app.glasses import feeds
@@ -148,6 +148,42 @@ async def memory_vectors(
         for memory in memories
         if (vector := stored.get(memory.id or 0)) is not None
     ]
+
+
+@router.get(
+    "/memories/export",
+    response_class=Response,
+    responses={200: {"content": {"application/zip": {}}}},
+)
+async def export_collection(
+    session: SessionDep,
+    viewer: ViewerDep,
+    collection: Annotated[str, Query(description="The collection (a recorded demo's tag)")],
+):
+    """A zip of one collection's stills you may see, oldest first, with their embeddings: unpack it
+    under `backend/demo-data/<collection>/` and commit it, and every start loads it again as demo
+    memories (app/demo_bundles.py), however often the database is rebuilt. At most 2000 stills."""
+    tag = _collection(collection)
+    query = (
+        _visible(
+            select(Memory).where(col(Memory.collection) == tag, col(Memory.kind) == "image"),
+            viewer,
+        )
+        .order_by(col(Memory.created_at), col(Memory.id))
+        .limit(MAX_VECTORS)
+    )
+    memories = list((await session.exec(query)).all())
+    if not memories:
+        raise HTTPException(404, f"No images in the collection {tag!r}")
+    stored = await vectors.stored(
+        await session.connection(), TABLE, {m.id for m in memories if m.id}
+    )
+    data = await anyio.to_thread.run_sync(demo_bundles.pack, memories, stored, tag)
+    return Response(
+        data,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{tag}.zip"'},
+    )
 
 
 @router.post("/memories/image", response_model=MemoryPublic, status_code=201)
