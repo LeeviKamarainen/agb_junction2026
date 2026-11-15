@@ -10,6 +10,7 @@ COPY pyproject.toml uv.lock .python-version ./
 RUN --mount=type=cache,target=/root/.cache/uv uv sync --locked --no-install-project
 
 COPY app ./app
+COPY demo-data ./demo-data
 
 EXPOSE 8000
 CMD ["/app/.venv/bin/fastapi", "run", "app/main.py", "--host", "0.0.0.0", "--port", "8000"]

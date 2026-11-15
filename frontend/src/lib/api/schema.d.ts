@@ -444,6 +444,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/memories/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Export Collection
+         * @description A zip of one collection's stills you may see, oldest first, with their embeddings: unpack it
+         *     under `backend/demo-data/<collection>/` and commit it, and every start loads it again as demo
+         *     memories (app/demo_bundles.py), however often the database is rebuilt. At most 2000 stills.
+         */
+        get: operations["export_collection_api_memories_export_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/memories/image": {
         parameters: {
             query?: never;
@@ -733,7 +755,8 @@ export interface paths {
          *
          *     `store=false` only checks the frame against the triggers: the home page sends the demo clips
          *     this way, since they are stored as demo memories already. `client` names the app sending it
-         *     ("live", "harness", ...) for the admin's stream wall.
+         *     ("live", "harness", ...) for the admin's stream wall. `collection` tags what is stored (one
+         *     recorded demo, say; a-z, 0-9, _ and -, up to 40), "glasses" when left out.
          */
         post: operations["upload_frame_api_glasses_frames_post"];
         delete?: never;
@@ -917,6 +940,11 @@ export interface components {
              * @default
              */
             client: string;
+            /**
+             * Collection
+             * @default
+             */
+            collection: string;
         };
         /** Body_watch_api_glasses_watch_post */
         Body_watch_api_glasses_watch_post: {
@@ -2364,6 +2392,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MemoryVector"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    export_collection_api_memories_export_get: {
+        parameters: {
+            query: {
+                /** @description The collection (a recorded demo's tag) */
+                collection: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/zip": unknown;
                 };
             };
             /** @description Validation Error */

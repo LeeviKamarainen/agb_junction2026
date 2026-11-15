@@ -186,9 +186,10 @@ async def receive(
     seen_at: datetime | None = None,
     owner_id: int = 0,
     store: bool = True,
+    collection: str = COLLECTION,
 ) -> FrameReply:
-    """Embed one frame of `owner_id`'s, store it when it is new enough, and fire at most one
-    trigger of their enabled goals.
+    """Embed one frame of `owner_id`'s, store it when it is new enough (in `collection`, a tag
+    such as one recorded demo), and fire at most one trigger of their enabled goals.
 
     With `store` False the frame is only checked against the triggers, never stored.
 
@@ -213,7 +214,7 @@ async def receive(
         )
         if why_not is None:
             memory = await add_memory(
-                session, "image", vector, moment, "", name, collection=COLLECTION, owner_id=owner_id
+                session, "image", vector, moment, "", name, collection=collection, owner_id=owner_id
             )
             reply.stored, reply.memory_id = True, memory.id
         else:

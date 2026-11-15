@@ -39,6 +39,50 @@ Minimal Android app that streams the camera from Meta glasses via the
 | `VoiceInput.kt` | Push-to-talk speech to text: Android's speech recognizer on the glasses' Bluetooth mic |
 | `Speaker.kt` | Reads messages aloud with Android's text to speech, through the glasses' speakers |
 
+## Production mode (the default)
+
+The app opens in production mode: nothing to press. Once the glasses are registered (**Register glasses** on the
+first start) it opens the session by itself, starts the 2 fps memory stream and keeps it running.
+
+- **Talk:** any press of the glasses' capture button (short, double or hold), the touchpad or a Neural Band tap
+  starts a voice message; it is sent when you stop talking for 1.5 s (or press again). The phone's **Talk** button
+  does the same. The Neural Band is not needed. The reply is shown and read aloud; a reply that asks a question
+  opens the microphone again. No photos or stream toggling in production: the stream never stops.
+- **Always on:** a foreground service (`ProductionService`, with a notification) and the screen kept on keep it
+  running; a session that ends (glasses off, Bluetooth drops) is opened again after 3 s, doubling up to 30 s while
+  it keeps failing, and a camera that sends no video for 15 s is restarted. The first start asks for the
+  microphone and notifications, and the Meta AI app for the glasses' camera permission; after that nothing is shown.
+  Swiping the app away stops everything.
+- **Developer options** (everything described below): tap the invisible button in the top right corner of the
+  production screen three times. They turn production off, and **Back to production mode** turns it on again.
+- Set `glasses.api` and a real `glasses.token` in `local.properties` for production: without a token the app uses a
+  guest that expires after 60 minutes and loses its memories.
+
+### Recording a demo
+
+The production screen has a **Demo recording** card: type a tag (lower case letters, digits, `-` and `_`, up to 40;
+spaces become dashes), press **Record demo**, and from then on the frames of the always-running stream are stored
+in the backend as memories whose `collection` is that tag (sent as `collection` in the `memory_frame` header, or
+as a form field of `POST /api/glasses/frames`; blank means the usual `glasses`). **Stop demo** ends it. The card
+shows how many frames were sent and stored, and the glasses show "DEMO" instead of "REC". The backend's usual
+rule still applies, so a still scene stores one frame every 10 s, not every frame. Find the demo again by that
+collection in the Memory lab, `GET /api/memories` or a search limited to it. Triggers keep firing meanwhile.
+
+### Voice from the camera stream's audio (beta)
+
+Meta's hands-free (Bluetooth) mic is 8 or 16 kHz and beamformed, and plays the glasses' output in voice quality
+while it is open ([Meta docs](https://wearables.developer.meta.com/docs/develop/dat/microphones-and-speakers/)). The
+camera stream can instead carry 16-bit PCM audio, which Meta marks beta only, not supported in production release
+channels. With the developer switch **Voice from camera stream audio** on (the default), the memory camera is
+opened with `AudioCodec.PCM(RATE_16000, 1)`, and while a voice message is recorded those frames are written to a
+pipe that Android's recognizer reads as its audio source (`RecognizerIntent.EXTRA_AUDIO_SOURCE`, Android 13+,
+`VoiceInput.feedPcm`). No Bluetooth route is set up, the glasses keep playing in high quality, and the video is not
+paused. The status line says "glasses camera stream (16 kHz)" while it is used; "No audio came from the glasses'
+camera stream" means no frames arrived. The stream's audio needs a second permission in the Meta AI app (the glasses' microphone, beside the camera one): the app asks for it when arming, and if it is refused it uses the Bluetooth microphone instead (without it the stream fails with `PERMISSIONS_DENIED`, video included). Switch it off to go back to the hands-free microphone (with the video paused).
+Unverified on hardware: that the glasses send the audio, and that Google's recognizer honours an audio source
+(recognizer services may ignore it, in which case nothing is heard and server-side speech to text is the next step).
+The audio is only sent while a message is recorded, but the stream carries it all the time.
+
 ## Memory mode (frames to the backend)
 
 **Arm memory mode** opens a session with the glasses' inputs and display, without the camera. Frames then go to
@@ -59,13 +103,13 @@ vector database (the `glasses` collection) and checks the frames of a stream aga
   trigger fired; drawn with a bell and the title as a heading) or `"text_reply"` (an answer to the wearer; the
   text, with the title as a small label). An unknown type is drawn as a reply.
 - **Voice messages:** **hold** the capture button (or the phone's **Talk** button) to start talking; any press or
-  tap (or **Stop and send**) ends the message. Android's own speech recognizer turns it into text on the phone
+  tap (or **Stop and send**) ends the message, and so does 1.5 s of silence after the last words (8 s if nothing was said). The camera is closed while the microphone is open (the video and the glasses' mic share one Bluetooth link; with both running, words went missing) and opens again afterwards, so no frames are uploaded meanwhile. A press only buzzes the phone; a beep (through the glasses' speakers) then says the microphone is open, after a short wait for the Bluetooth audio link, and listening starts just after it. The recognizer is fixed to English (`VoiceInput.LANGUAGE`), whatever the phone's language. Android's own speech recognizer turns it into text on the phone
   (`VoiceInput.kt`), and only the text goes to the backend, as a `command` over the same WebSocket (the same as
   `POST /api/glasses/command` with `{"question": ...}`), which gives the words to Gemma as they are; its reply
   shows like any other message. The microphone is the
   glasses': they are a Bluetooth headset to the phone, so while listening the phone's communication device is set
   to their hands-free (SCO) input, and the status line says which mic is used (the phone's if no headset is
-  connected). Pauses do not end the message, the button does; it ends by itself after 60 s. On the glasses: a
+  connected). Shorter pauses do not end it; it ends by itself after 60 s at the latest. On the glasses: a
   speech bubble and the words heard so far. When a reply asks for a question
   (`client_action: "listen_question"`), listening starts again.
   Arming memory mode asks for the microphone permission first. Google's recognizer needs a network. Unverified on
@@ -79,7 +123,8 @@ vector database (the `glasses` collection) and checks the frames of a stream aga
   starting to talk stops it, and other audio is ducked meanwhile. When a reply asks for a question
   (`listen_question`), the microphone opens only after the reply has been read, or it would hear it. The
   **Read replies aloud** switch turns it off (remembered across app starts); the voice is the phone's English
-  voice, so the phone needs one installed. Unverified on hardware: that the speech follows the Bluetooth route to
+  voice, so the phone needs one installed. It is loud on purpose: the media volume goes to the maximum while it talks
+  (and back afterwards) and a loudness enhancer adds 10 dB (`GAIN_MB` in `Speaker.kt`; much more distorts). Unverified on hardware: that the speech follows the Bluetooth route to
   the glasses, and how it sounds right after the hands-free microphone is released.
 
 Set `glasses.api` in `local.properties` to the backend's HTTP(S) address without `/api` (see

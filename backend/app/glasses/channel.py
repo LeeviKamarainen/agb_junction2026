@@ -8,7 +8,8 @@ as the next, binary, frame. Client to server:
 - `command`: `action` or `question`, exactly as POST /api/glasses/command; answered with a `reply`
   carrying the same `id`.
 - `memory_frame` + JPEG: as POST /api/glasses/frames, with `source` (stream/single),
-  `stream_id` and optional `seen_at`; answered with `memory_result` containing a FrameReply.
+  `stream_id`, optional `seen_at` and optional `collection` (a tag such as one recorded demo,
+  default "glasses"); answered with `memory_result` containing a FrameReply.
   One may be in flight per connection; another gets 429, keeping camera uploads bounded.
 - `watch` with `on`: start or stop watching for reminders.
 - `frame` + JPEG, while watching: as POST /api/glasses/watch; answered with a `watch_result`.
@@ -85,6 +86,7 @@ class MemoryFrameMessage(BaseModel):
     stream_id: str = Field(default="", max_length=100)
     seen_at: datetime | None = None
     client: str = Field(default="", max_length=100)  # the app, for the admin's stream wall
+    collection: str = Field(default="", max_length=40)  # tag for what is stored; blank: "glasses"
 
 
 class WatchMessage(BaseModel):
@@ -326,6 +328,7 @@ class Channel:
                 message.seen_at,
                 True,
                 feeds.clean_client(message.client, DEFAULT_CLIENT),
+                message.collection,
             )
             if result is not None:
                 await self.send(MemoryResultMessage(id=message.id, result=result))
