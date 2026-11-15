@@ -75,10 +75,11 @@ def _visible(query, viewer: Viewer, mine: bool = False):
     return query if owners is None else query.where(col(Memory.owner_id).in_(owners))
 
 
-def _newest(collections: list[str], viewer: Viewer, mine: bool = False):
-    """Memories `viewer` may see, or with `mine` their own, newest first, only in `collections`
-    unless it is empty."""
-    query = select(Memory).order_by(col(Memory.created_at).desc(), col(Memory.id).desc())
+def _newest(collections: list[str], viewer: Viewer, query=None, mine: bool = False):
+    """`query` (of memories when not given) limited to those `viewer` may see, or with `mine` to
+    their own, newest first, only in `collections` unless it is empty."""
+    query = select(Memory) if query is None else query
+    query = query.order_by(col(Memory.created_at).desc(), col(Memory.id).desc())
     names = [_stored_name(name) for name in collections if name.strip()]
     query = query.where(col(Memory.collection).in_(names)) if names else query
     return _visible(query, viewer, mine)
@@ -127,11 +128,6 @@ async def list_collections(session: SessionDep, viewer: ViewerDep):
     return [CollectionCount(name=name, count=n) for name, n in rows]
 
 
-def _clip_at_s(memory: Memory, starts: dict[str, datetime]) -> float | None:
-    """How many seconds into its demo clip a frame was taken; None for any other memory."""
-    return None if demo.clip_of(memory.source) is None else demo.frame_at_s(memory, starts)
-
-
 @router.get("/memories/vectors", response_model=list[MemoryVector])
 async def memory_vectors(
     session: SessionDep,
@@ -156,14 +152,17 @@ async def memory_vectors(
     """
     if clip is not None and mine:
         raise HTTPException(422, "A demo clip is demo memory, never your own: leave out mine")
-    query = _newest(collection, viewer, mine=mine)
+    # The frames with their clips' starts, in one statement: read apart, a clip that demo.sync
+    # replaced in between would leave a frame without its start.
+    starts = demo.clip_starts()
+    joined = select(Memory, starts.c.start).outerjoin(starts, starts.c.source == Memory.source)
+    query = _newest(collection, viewer, joined, mine)
     if clip is not None:
         query = query.where(col(Memory.source).startswith(demo.clip_prefix(clip)))
     if after_id is not None:
         query = query.where(col(Memory.id) > after_id)
-    memories = (await session.exec(query.limit(MAX_VECTORS))).all()
-    starts = await demo.clip_starts(session, {m.source for m in memories})
-    ids = {m.id for m in memories if m.id}
+    rows = (await session.exec(query.limit(MAX_VECTORS))).all()
+    ids = {memory.id for memory, _start in rows if memory.id}
     stored = await vectors.stored(await session.connection(), TABLE, ids)
     names = await _usernames(session)
     return [
@@ -171,9 +170,9 @@ async def memory_vectors(
             **public(memory, names).model_dump(),
             embedding=base64.b64encode(struct.pack(f"<{len(vector)}f", *vector)).decode(),
             clip_id=demo.clip_of(memory.source),
-            clip_at_s=_clip_at_s(memory, starts),
+            clip_at_s=None if start is None else demo.frame_at_s(memory, start),
         )
-        for memory in memories
+        for memory, start in rows
         if (vector := stored.get(memory.id or 0)) is not None
     ]
 

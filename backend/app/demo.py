@@ -14,7 +14,6 @@ whenever the admin changes a clip (`request_sync`), since embedding a video take
 import asyncio
 import hashlib
 import logging
-from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
@@ -96,25 +95,23 @@ def _aware(moment: datetime) -> datetime:
     return moment if moment.tzinfo else moment.replace(tzinfo=UTC)
 
 
-async def clip_starts(session: AsyncSession, sources: Iterable[str]) -> dict[str, datetime]:
-    """When each clip among `sources` (memories' `source`; others are skipped) starts, by source:
-    its earliest frame, as `_store_clip` always keeps a clip's first frame. Over all of the
-    clip's frames, for a caller that has only some of them (a limit or a filter cut the rest)."""
-    clips = {source for source in sources if clip_of(source) is not None}
-    if not clips:
-        return {}
-    rows = await session.exec(
-        select(Memory.source, func.min(col(Memory.created_at)))
-        .where(Memory.owner_id == DEMO_OWNER, col(Memory.source).in_(clips))
+def clip_starts():
+    """When each clip starts, by its memories' `source`: its earliest frame, as `_store_clip`
+    always keeps a clip's first frame. Over all of a clip's frames, for a reader that has only
+    some of them (a limit or a filter cut the rest). A subquery (`source`, `start`) to join in
+    the statement that reads the frames, so that both see the same clips: a second read could
+    miss a clip that `sync` replaced in between."""
+    return (
+        select(col(Memory.source).label("source"), func.min(col(Memory.created_at)).label("start"))
+        .where(Memory.owner_id == DEMO_OWNER, col(Memory.source).startswith(_PREFIX))
         .group_by(col(Memory.source))
+        .subquery()
     )
-    return {source: _aware(start) for source, start in rows}
 
 
-def frame_at_s(frame: Memory, starts: dict[str, datetime]) -> float:
-    """How many seconds into its clip a clip frame was taken: `starts` holds each clip's start,
-    by source."""
-    return (_aware(frame.created_at) - starts[frame.source]).total_seconds()
+def frame_at_s(frame: Memory, start: datetime) -> float:
+    """How many seconds into its clip a clip frame was taken, the clip starting at `start`."""
+    return (_aware(frame.created_at) - _aware(start)).total_seconds()
 
 
 async def clip_frames(session: AsyncSession, clip_id: int) -> list[tuple[float, Memory]]:
@@ -132,7 +129,7 @@ async def clip_frames(session: AsyncSession, clip_id: int) -> list[tuple[float, 
     starts: dict[str, datetime] = {}
     for frame in frames:
         starts.setdefault(frame.source, _aware(frame.created_at))
-    return [(frame_at_s(frame, starts), frame) for frame in frames]
+    return [(frame_at_s(frame, starts[frame.source]), frame) for frame in frames]
 
 
 def frames_until(frames: list[tuple[float, Memory]], at_s: float) -> set[int]:

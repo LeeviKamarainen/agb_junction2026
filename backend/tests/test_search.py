@@ -6,11 +6,14 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from PIL import Image
 from pydantic import ValidationError
+from sqlmodel import col, select
+from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app import agent, demo, media, vectors
+from app.db import new_session
 from app.llm import UpstreamError, get_chat, get_embedder
 from app.main import app
-from app.models import Showcase
+from app.models import Memory, Showcase
 from app.search import (
     CANDIDATES_PER_LIST,
     DEMO_OWNER,
@@ -563,6 +566,35 @@ def test_a_question_on_an_image_sequence_reaches_the_image_on_screen(client, db)
     steps = asking(client, gemma, demo_clip_id=steps_clip, demo_at_s=at_s)
 
     assert sorted(searched(steps)) == frames[:4]
+
+
+def test_the_map_survives_a_clip_replaced_while_it_reads(client, db, monkeypatch):
+    walk, frames = demo_clip(db, "Walk", [0, 3, 6])
+    original = AsyncSession.exec
+    replaced = []
+
+    async def exec_then_replace(self, statement, *args, **kwargs):
+        """Right after the request's first read of memories, demo.sync replaces the clip: none
+        of its frames carries the source that read gave them any more."""
+        result = await original(self, statement, *args, **kwargs)
+        described = getattr(statement, "column_descriptions", None) or [{}]
+        if not replaced and described[0].get("entity") is Memory:
+            replaced.append(statement)
+            async with new_session() as other:
+                query = select(Memory).where(col(Memory.id).in_(frames))
+                for memory in await original(other, query):
+                    memory.source = f"{demo.clip_prefix(walk)}new-media"
+                    other.add(memory)
+                await other.commit()
+        return result
+
+    monkeypatch.setattr(AsyncSession, "exec", exec_then_replace)
+    reply = client.get("/api/memories/vectors", params={"clip": walk})
+
+    assert replaced
+    assert reply.status_code == 200, reply.text
+    # The frames and their clip's start as they were when read together.
+    assert [m["clip_at_s"] for m in reply.json()] == [6, 3, 0]
 
 
 def test_ask_stream_reports_a_failing_model_server(client, memories):
