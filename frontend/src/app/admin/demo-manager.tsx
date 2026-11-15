@@ -12,6 +12,9 @@ import { CueEditor } from "./cue-editor";
 import type { Cue } from "@/components/glasses-view/cues";
 
 type Clip = components["schemas"]["ShowcasePublic"];
+// How often the list is fetched again while a video is being prepared: it takes about as long as
+// the video plays, so a few seconds late is soon enough.
+const PREPARING_POLL_MS = 5000;
 const field =
   "w-full rounded border border-border bg-background px-3 py-2 text-sm";
 function message(error: unknown): string {
@@ -107,6 +110,14 @@ export function DemoManager() {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     if (user?.role === "admin") void load();
   }, [load, user?.role]);
+  // An uploaded video becomes playable by itself once the backend has blurred its faces and
+  // re-encoded it: look again until none is left preparing.
+  const preparing = clips.some((clip) => clip.converting);
+  useEffect(() => {
+    if (!preparing) return;
+    const timer = setInterval(() => void load(), PREPARING_POLL_MS);
+    return () => clearInterval(timer);
+  }, [preparing, load]);
   async function create(event: React.FormEvent) {
     event.preventDefault();
     setBusy(true);
@@ -301,6 +312,11 @@ function ClipEditor({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const blocked = busy || disabled;
+  // The video's preparation, from the latest list rather than the draft, which keeps the admin's
+  // unsaved edits: until it is done the video cannot be played, nor a draft published.
+  const preparing = clip.kind === "video" && clip.converting;
+  const failed = clip.kind === "video" ? (clip.conversion_error ?? null) : null;
+  const unready = preparing || failed !== null;
   const patch = (change: Partial<Clip>) =>
     setDraft((d) => ({ ...d, ...change }));
   async function save() {
@@ -409,6 +425,20 @@ function ClipEditor({
           }}
         />
       </label>
+      {preparing ? (
+        <p
+          role="status"
+          className="flex items-center gap-2 text-sm text-muted-foreground"
+        >
+          <LoaderCircle className="size-4 animate-spin" aria-hidden="true" />
+          Blurring faces and preparing the video for the web: about as long as
+          it plays.
+        </p>
+      ) : failed ? (
+        <p role="alert" className="text-sm text-destructive">
+          The video could not be prepared ({failed}). Upload it again.
+        </p>
+      ) : null}
       <ol className="flex max-h-80 flex-col gap-2 overflow-y-auto">
         {draft.assets.map((asset, index) => (
           <li
@@ -487,7 +517,9 @@ function ClipEditor({
       </ol>
       <CueEditor
         cues={draft.cues}
-        videoUrl={draft.kind === "video" ? draft.assets[0]?.url : undefined}
+        videoUrl={
+          draft.kind === "video" && !unready ? draft.assets[0]?.url : undefined
+        }
         disabled={blocked}
         onChange={(cues) => patch({ cues: cues.map(whole) })}
         onRecord={(update) =>
@@ -502,7 +534,9 @@ function ClipEditor({
           <input
             type="checkbox"
             checked={draft.published}
-            disabled={blocked || !draft.assets.length}
+            disabled={
+              blocked || !draft.assets.length || (unready && !clip.published)
+            }
             onChange={(e) => patch({ published: e.target.checked })}
           />
           Published
