@@ -30,8 +30,8 @@ export function SiteHeader({ requireLogin = false }: Props) {
 
   return (
     <header className="site-header">
-      <Link href="/" className="wordmark" aria-label="GlassMemory home">
-        GLASS<span className="wordmark-accent">/MEMORY</span>
+      <Link href="/" className="wordmark" aria-label="Recall and remind, home">
+        RECALL<span className="wordmark-accent">/REMIND</span>
       </Link>
       <nav
         aria-label="Main navigation"
