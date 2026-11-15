@@ -278,7 +278,15 @@ export function TryView() {
 
   useEffect(() => {
     const media = mediaRef.current;
-    if (onCamera && media instanceof HTMLVideoElement) media.srcObject = camera.stream;
+    if (!onCamera || !(media instanceof HTMLVideoElement)) return;
+    media.srcObject = camera.stream;
+    // GlassesView pauses the view when Next hides this page, which clears autoplay.
+    if (camera.stream)
+      media.play().catch((problem: unknown) => {
+        // A newer stream replacing this one aborts its play(): nothing went wrong.
+        if (!(problem instanceof DOMException && problem.name === "AbortError"))
+          setError(`The camera could not play: ${problem instanceof Error ? problem.message : problem}`);
+      });
   }, [onCamera, camera.stream]);
 
   // React sets `muted` only when the element is created; the sound toggle changes it after.
@@ -558,7 +566,9 @@ export function TryView() {
       {onCamera ? "Start your camera" : "Start"}
     </button>
   );
-  const overlay = !started ? (
+  // The camera also stops when Next hides this page (useCamera's cleanup): Start opens it again.
+  const needsStart = !started || (onCamera && !camera.stream && !camera.busy);
+  const overlay = needsStart ? (
     sourceKey !== null && startButton
   ) : ended ? (
     <button type="button" className="try-start" onClick={replay}>
