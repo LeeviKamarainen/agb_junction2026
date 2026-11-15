@@ -42,6 +42,10 @@ class CollectionCount(SQLModel):
 
 class MemoryVector(MemoryPublic):
     embedding: str  # base64 of the little-endian float32 vector, 768 numbers
+    # For a frame of a published demo clip (app/demo.py): the clip, and how many seconds into it
+    # the frame was taken, so a map can grow as the clip plays. None for every other memory.
+    clip_id: int | None
+    clip_at_s: float | None
 
 
 class TextMemoryCreate(SQLModel):

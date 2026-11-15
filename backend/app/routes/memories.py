@@ -10,7 +10,7 @@ from fastapi.responses import FileResponse, Response, StreamingResponse
 from sqlmodel import col, func, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from app import agent, demo_bundles, faces, media, vectors
+from app import agent, demo, demo_bundles, faces, media, vectors
 from app.auth import DEMO_OWNER, Viewer, ViewerDep
 from app.db import SessionDep, new_session
 from app.glasses import feeds
@@ -125,18 +125,35 @@ async def list_collections(session: SessionDep, viewer: ViewerDep):
     return [CollectionCount(name=name, count=n) for name, n in rows]
 
 
+def _clip_at_s(memory: Memory, starts: dict[str, datetime]) -> float | None:
+    """How many seconds into its demo clip a frame was taken; None for any other memory."""
+    return None if demo.clip_of(memory.source) is None else demo.frame_at_s(memory, starts)
+
+
 @router.get("/memories/vectors", response_model=list[MemoryVector])
 async def memory_vectors(
     session: SessionDep,
     viewer: ViewerDep,
     collection: CollectionsQuery = [],  # noqa: B006
+    clip: Annotated[int | None, Query(description="Only the frames of this demo clip")] = None,
+    after_id: Annotated[
+        int | None,
+        Query(description="Only memories with a larger id: stored after the ones you have"),
+    ] = None,
 ):
     """The stored embeddings with their memories, for drawing a map: the newest 2000.
 
     Each embedding is base64 of its float32 numbers, little-endian: a third of the size of a
-    JSON list.
+    JSON list. A frame of a published demo clip says which clip it is from (`clip_id`) and how
+    many seconds into the clip it was taken (`clip_at_s`).
     """
-    memories = (await session.exec(_newest(collection, viewer).limit(MAX_VECTORS))).all()
+    query = _newest(collection, viewer)
+    if clip is not None:
+        query = query.where(col(Memory.source).startswith(demo.clip_prefix(clip)))
+    if after_id is not None:
+        query = query.where(col(Memory.id) > after_id)
+    memories = (await session.exec(query.limit(MAX_VECTORS))).all()
+    starts = await demo.clip_starts(session, {m.source for m in memories})
     ids = {m.id for m in memories if m.id}
     stored = await vectors.stored(await session.connection(), TABLE, ids)
     names = await _usernames(session)
@@ -144,6 +161,8 @@ async def memory_vectors(
         MemoryVector(
             **public(memory, names).model_dump(),
             embedding=base64.b64encode(struct.pack(f"<{len(vector)}f", *vector)).decode(),
+            clip_id=demo.clip_of(memory.source),
+            clip_at_s=_clip_at_s(memory, starts),
         )
         for memory in memories
         if (vector := stored.get(memory.id or 0)) is not None

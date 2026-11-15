@@ -507,6 +507,20 @@ def test_vectors_endpoint_sends_the_stored_embeddings(client, memories):
     assert texts == []
 
 
+def test_vectors_endpoint_sends_only_memories_stored_after_one(client, db, memories):
+    async def add(session):
+        # Stored after all the others, though seen before any of them.
+        memory = await add_memory(session, "text", unit(2), NOON - timedelta(days=1), "Late")
+        await session.commit()
+        return memory.id
+
+    late = db(add)
+
+    body = client.get("/api/memories/vectors", params={"after_id": memories[1]}).json()
+
+    assert [m["id"] for m in body] == [memories[3], memories[2], late]  # newest seen first
+
+
 def test_ask_can_pin_the_collections_searched(client, memories):
     gemma = FakeGemma(
         {"content": None, "tool_calls": [tool_call("a", user_query="keys")]},

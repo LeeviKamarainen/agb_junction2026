@@ -13,7 +13,8 @@ from sqlmodel import select
 from app import demo, vectors
 from app.llm import UpstreamError
 from app.models import Memory
-from app.search import DEMO_OWNER, TABLE
+from app.routes import memories as memory_routes
+from app.search import DEMO_OWNER, TABLE, add_memory
 
 WIDTH = vectors.VECTOR_TABLES[TABLE].dimensions
 
@@ -165,6 +166,70 @@ def test_new_media_replaces_a_clips_memories(client, db):
     # SQLite may reuse the old ids: the new media's digest tells the rows apart.
     assert len(stored) == 2 and {m.source for m in stored} != {first.source}
     assert len({m.source for m in stored}) == 1
+
+
+def note(db, text: str) -> int:
+    """A demo text memory, which is no clip's frame."""
+
+    async def add(session):
+        memory = await add_memory(session, "text", [1.0] + [0.0] * (WIDTH - 1), text=text)
+        await session.commit()
+        return memory.id
+
+    return db(add)
+
+
+def on_map(client, headers=None, **params) -> list[tuple]:
+    """(text, clip_id, clip_at_s) of each memory /memories/vectors sends, in its order."""
+    reply = client.get("/api/memories/vectors", params=params, headers=headers or {})
+    assert reply.status_code == 200, reply.text
+    return [(m["text"], m["clip_id"], m["clip_at_s"]) for m in reply.json()]
+
+
+def test_the_map_gets_each_clip_frames_clip_and_time_into_it(client, guest, db):
+    kitchen = published_images(client, "Kitchen", count=3)  # an image every 3 s
+    hall = published_images(client, "Hall", count=2)
+    sync(db)
+    note(db, "Not a clip")
+
+    expected = [
+        ("Hall", hall["id"], 0),
+        ("Hall", hall["id"], 3),
+        ("Kitchen", kitchen["id"], 0),
+        ("Kitchen", kitchen["id"], 3),
+        ("Kitchen", kitchen["id"], 6),
+        ("Not a clip", None, None),
+    ]
+    assert sorted(on_map(client)) == expected
+    assert sorted(on_map(client, guest())) == expected  # a guest sees the demo clips too
+
+
+def test_clip_times_count_from_the_first_frame_when_it_is_not_sent(client, db, monkeypatch):
+    published_images(client, "Kitchen", count=3)
+    sync(db)
+    first = demo_memories(db)[0]  # the frame 0 s in
+
+    after_first = on_map(client, after_id=first.id)
+    monkeypatch.setattr(memory_routes, "MAX_VECTORS", 2)
+    newest_two = on_map(client)
+
+    # Newest first: 6 s and 3 s into the clip, not 3 s and 0 s.
+    assert [at for _, _, at in after_first] == [6, 3]
+    assert [at for _, _, at in newest_two] == [6, 3]
+
+
+def test_the_map_can_ask_for_one_clips_frames(client, db):
+    kitchen = published_images(client, "Kitchen", count=3)
+    for i in range(8):  # drafts, so that the next clip's id starts with the kitchen's
+        client.post("/api/demo/clips", json={"title": f"Draft {i}"})
+    hall = published_images(client, "Hall", count=2)
+    assert (kitchen["id"], hall["id"]) == (1, 10)
+    sync(db)
+    note(db, "Not a clip")
+
+    assert on_map(client, clip=1) == [("Kitchen", 1, 6), ("Kitchen", 1, 3), ("Kitchen", 1, 0)]
+    assert on_map(client, clip=10) == [("Hall", 10, 3), ("Hall", 10, 0)]
+    assert on_map(client, clip=99) == []
 
 
 def test_a_failing_embedding_model_keeps_nothing_of_the_clip(client, db):

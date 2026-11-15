@@ -272,6 +272,14 @@ def test_search_only_reaches_your_memories(client, two_guests):
     assert found == {"demo: keys on the hook", "aino: keys under the mat"}
 
 
+def test_the_map_shows_only_what_you_see(client, two_guests):
+    aino, _ = two_guests
+
+    for params in ({}, {"after_id": 0}, {"after_id": 0, "collection": "manual"}):
+        body = client.get("/api/memories/vectors", params=params, headers=aino).json()
+        assert {m["text"] for m in body} == {"demo: keys on the hook", "aino: keys under the mat"}
+
+
 def test_collections_count_only_what_you_see(client, two_guests):
     aino, _ = two_guests
 

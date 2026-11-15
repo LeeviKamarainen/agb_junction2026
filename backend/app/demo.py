@@ -14,12 +14,13 @@ whenever the admin changes a clip (`request_sync`), since embedding a video take
 import asyncio
 import hashlib
 import logging
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 import anyio
 import cv2
-from sqlmodel import col, select
+from sqlmodel import col, func, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app import faces, media, showcase, vectors
@@ -83,6 +84,21 @@ def clip_of(source: str) -> int | None:
 def _aware(moment: datetime) -> datetime:
     # SQLite gives times back without their offset; every time stored here is UTC.
     return moment if moment.tzinfo else moment.replace(tzinfo=UTC)
+
+
+async def clip_starts(session: AsyncSession, sources: Iterable[str]) -> dict[str, datetime]:
+    """When each clip among `sources` (memories' `source`; others are skipped) starts, by source:
+    its earliest frame, as `_store_clip` always keeps a clip's first frame. Over all of the
+    clip's frames, for a caller that has only some of them (a limit or a filter cut the rest)."""
+    clips = {source for source in sources if clip_of(source) is not None}
+    if not clips:
+        return {}
+    rows = await session.exec(
+        select(Memory.source, func.min(col(Memory.created_at)))
+        .where(Memory.owner_id == DEMO_OWNER, col(Memory.source).in_(clips))
+        .group_by(col(Memory.source))
+    )
+    return {source: _aware(start) for source, start in rows}
 
 
 def frame_at_s(frame: Memory, starts: dict[str, datetime]) -> float:
