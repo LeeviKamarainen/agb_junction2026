@@ -205,3 +205,78 @@ def test_a_frame_that_cannot_be_embedded_is_logged_as_an_error(client, no_models
 
     assert entry["kind"] == "error" and "EMBED_URL" in entry["text"]
     assert client.get("/api/admin/streams/nope").status_code == 404
+
+
+def test_the_admin_asks_about_a_stream_as_its_user_with_the_newest_frame(client, guest, no_models):
+    seen = []
+
+    async def chat(messages, tools):
+        if not messages[0]["content"].startswith("You answer questions"):  # writing triggers
+            return {"role": "assistant", "content": '{"triggers": [{"watch_for": "a stool"}]}'}
+        seen.append((messages, [tool["function"]["name"] for tool in tools or []]))
+        if len(seen) == 1:
+            call = {"name": "start_watching", "arguments": '{"goal": "warn me about the stool"}'}
+            calls = [{"id": "c1", "function": call}]
+            return {"role": "assistant", "content": "", "tool_calls": calls}
+        return {"role": "assistant", "content": "Watching for the stool."}
+
+    async def embed(inputs, input_type="query"):
+        return [[1.0] + [0.0] * 767 for _ in inputs]
+
+    app.dependency_overrides[get_chat] = lambda: chat
+    app.dependency_overrides[get_embedder] = lambda: embed
+    aino = guest("aino")
+    send(client, aino, source="stream", stream_id="s1", client="live")
+    (feed,) = client.get("/api/admin/streams").json()
+    url = f"/api/admin/streams/{feed['id']}"
+
+    assert (
+        client.post(f"{url}/ask/stream", json={"question": "hi"}, headers=aino).status_code == 403
+    )
+    asked = client.post(f"{url}/ask/stream", json={"question": "watch for the stool"})
+
+    assert asked.status_code == 200, asked.text
+    messages, tools = seen[0]
+    assert "start_watching" in tools
+    assert "operator watching this user's live camera stream" in messages[0]["content"]
+    parts = messages[1]["content"]
+    assert parts[0]["text"] == "watch for the stool"
+    assert parts[2]["image_url"]["url"].startswith("data:image/jpeg;base64,")
+    goals = client.get("/api/glasses/goals", headers=aino).json()
+    assert [g["text"] for g in goals] == ["warn me about the stool"]  # the stream's user's
+    assert client.get("/api/glasses/goals").json() == []  # not the admin's
+    log = client.get(url).json()["log"]
+    assert ("question", "watch for the stool", "admin") in [
+        (e["kind"], e["text"], e["via"]) for e in log
+    ]
+
+
+def test_the_admin_lists_and_removes_a_streams_goals(client, guest, no_models):
+    aino, ville = guest("aino"), guest("ville")
+    draft = {"name": "Stool", "watch_for": "a bar stool"}
+    goal = client.post(
+        "/api/glasses/goals", json={"text": "the stool", "triggers": [draft]}, headers=aino
+    ).json()
+    theirs = client.post(
+        "/api/glasses/goals", json={"text": "the bus", "triggers": [draft]}, headers=ville
+    ).json()
+    send(client, aino, source="stream", stream_id="s1", client="live")
+    (feed,) = client.get("/api/admin/streams").json()
+    url = f"/api/admin/streams/{feed['id']}/goals"
+
+    assert client.get(url, headers=aino).status_code == 403
+    assert [g["text"] for g in client.get(url).json()] == ["the stool"]
+    assert client.delete(f"{url}/{theirs['id']}").status_code == 404  # ville's, not this user's
+    assert client.delete(f"{url}/{goal['id']}").status_code == 204
+    assert client.get(url).json() == []
+    assert client.get("/api/admin/streams/nope/goals").status_code == 404
+
+
+def test_a_stream_that_stopped_can_still_be_asked_about(client, guest, no_models, monkeypatch):
+    aino = guest("aino")
+    send(client, aino, source="stream", stream_id="s1", client="live")
+    (feed,) = client.get("/api/admin/streams").json()
+    monkeypatch.setattr(feeds, "IDLE_S", -1.0)
+    assert client.get("/api/admin/streams").json() == []
+
+    assert client.get(f"/api/admin/streams/{feed['id']}/goals").status_code == 200

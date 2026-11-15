@@ -113,6 +113,15 @@ STOP_WATCHING_TOOL: dict[str, Any] = {
 }
 
 
+LIVE = """
+
+The person asking is an operator watching this user's live camera stream, on the user's behalf: \
+treat their requests to watch out for something, or to stop, as the user's own. The image sent \
+with the question is the stream's newest frame, from just now. When the question is about what \
+is in view right now, answer from that frame without searching; search the memories for anything \
+earlier."""
+
+
 class AskRequest(BaseModel):
     question: str = Field(min_length=1, max_length=2000)
     # Search only these collections, whatever the model asks for. Empty: the model chooses.
@@ -212,10 +221,13 @@ async def run(
     now: datetime | None = None,
     collections: list[str] | None = None,
     owner_id: int | None = None,
+    live_frame: str | None = None,
 ) -> AsyncIterator[Step]:
     """Answer `question`, yielding each step; the last one is the answer. Each step worth seeing
     also goes to the asker's log on the admin's stream wall."""
-    async for step in _run(session, question, chat, embed, owners, now, collections, owner_id):
+    async for step in _run(
+        session, question, chat, embed, owners, now, collections, owner_id, live_frame
+    ):
         if owner_id is not None:
             _log_step(owner_id, step)
         yield step
@@ -230,6 +242,7 @@ async def _run(
     now: datetime | None = None,
     collections: list[str] | None = None,
     owner_id: int | None = None,
+    live_frame: str | None = None,
 ) -> AsyncIterator[Step]:
     """Answer `question`, yielding each step; the last one is the answer.
 
@@ -237,7 +250,9 @@ async def _run(
     vector_search it makes is limited to them, and only their stills are attached. With
     `collections`, every search is limited to them too, whatever the model asks for. `owner_id`
     is the account asking: the model is told that account's goals, may remove one of them, and
-    may add one, for which it writes the triggers (app/glasses/triggers.py).
+    may add one, for which it writes the triggers (app/glasses/triggers.py). `live_frame` (a
+    JPEG data URL) is the newest frame of a stream the admin is watching: it goes with the
+    question, and the model is told an operator asks on the user's behalf.
 
     Raises UpstreamError when a model server fails.
     """
@@ -251,6 +266,15 @@ async def _run(
     if watched:
         tools.append(STOP_WATCHING_TOOL)
     about_watching = (CAN_WATCH if owner_id is not None else "") + (watching if watched else "")
+    if live_frame is not None:
+        about_watching += LIVE
+    asked: str | list[dict[str, Any]] = question
+    if live_frame is not None:
+        asked = [
+            {"type": "text", "text": question},
+            {"type": "text", "text": f"The stream's newest frame, at {local(now)}:"},
+            {"type": "image_url", "image_url": {"url": live_frame}},
+        ]
     messages: list[dict[str, Any]] = [
         {
             "role": "system",
@@ -258,12 +282,12 @@ async def _run(
                 now=local(now), zone=LOCAL_TIMEZONE.key, watching=about_watching
             ),
         },
-        {"role": "user", "content": question},
+        {"role": "user", "content": asked},
     ]
     shown: set[int] = set()
     stopped: set[str] = set()  # the goals stop_watching removed during this answer
     started_goals: set[str] = set()  # what start_watching added during this answer
-    images_pending = 0
+    images_pending = 1 if live_frame is not None else 0
 
     def step(type, round, **fields) -> Step:
         elapsed = int((time.monotonic() - started) * 1000)
