@@ -232,12 +232,8 @@ export function DemoManager() {
         </Button>
       </form>
       <p className="text-xs text-muted-foreground">
-        Playback uploads are separate from searchable memories. To make a demo
-        searchable, add its memories in the{" "}
-        <Link href="/memory" className="underline">
-          Memory lab
-        </Link>
-        .
+        Publishing a demo also makes it searchable: its frames are stored as
+        demo memories, which questions about it search.
       </p>
       {error ? (
         <p role="alert" className="text-sm text-destructive">
