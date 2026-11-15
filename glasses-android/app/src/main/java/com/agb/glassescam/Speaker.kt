@@ -4,6 +4,7 @@ import android.content.Context
 import android.media.AudioAttributes
 import android.media.AudioFocusRequest
 import android.media.AudioManager
+import android.media.audiofx.LoudnessEnhancer
 import android.os.Bundle
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
@@ -17,6 +18,9 @@ import java.util.Locale
  * Reads the backend's replies aloud with Android's own text to speech, on the phone. The glasses are a
  * Bluetooth headset to the phone, so what the phone plays comes out of their speakers; nothing is
  * generated on the backend and no network is needed.
+ *
+ * It is made loud on purpose, since the glasses' speakers are small: while it talks the media volume is raised
+ * to the maximum (and put back afterwards), and a [LoudnessEnhancer] adds [GAIN_MB] of gain on top.
  *
  * A new [speak] replaces whatever is still being read. Other audio (music) is ducked while it talks.
  * [awaitDone] lets the caller wait until the speech has ended, which matters before the glasses' microphone
@@ -33,6 +37,11 @@ class Speaker(context: Context) {
     private val focus = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
         .setAudioAttributes(attributes)
         .build()
+
+    // TextToSpeech plays on this audio session, which is what the loudness boost is attached to.
+    private val sessionId = audio.generateAudioSessionId()
+    private var booster: LoudnessEnhancer? = null
+    private var savedVolume: Int? = null // the media volume before it was raised, put back when the speech ends
 
     private val lock = Any()
     private var tts: TextToSpeech? = null
@@ -70,6 +79,12 @@ class Speaker(context: Context) {
                 Log.w(TAG, "no English voice installed, using the phone's default")
             }
             engine.setOnUtteranceProgressListener(listener)
+            booster = runCatching {
+                LoudnessEnhancer(sessionId).apply {
+                    setTargetGain(GAIN_MB)
+                    enabled = true
+                }
+            }.onFailure { Log.w(TAG, "no loudness boost", it) }.getOrNull()
             ready = true
             pending?.let { start(it) }
             pending = null
@@ -115,6 +130,8 @@ class Speaker(context: Context) {
             tts?.shutdown()
             tts = null
             ready = false
+            booster?.release()
+            booster = null
             end()
         }
     }
@@ -123,7 +140,15 @@ class Speaker(context: Context) {
     private fun start(text: String) {
         val t = tts ?: return end()
         audio.requestAudioFocus(focus)
-        val result = t.speak(text, TextToSpeech.QUEUE_FLUSH, Bundle.EMPTY, "reply-$latest")
+        if (savedVolume == null) {
+            savedVolume = audio.getStreamVolume(AudioManager.STREAM_MUSIC)
+            audio.setStreamVolume(AudioManager.STREAM_MUSIC, audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC), 0)
+        }
+        val params = Bundle().apply {
+            putInt(TextToSpeech.Engine.KEY_PARAM_SESSION_ID, sessionId)
+            putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, 1f)
+        }
+        val result = t.speak(text, TextToSpeech.QUEUE_FLUSH, params, "reply-$latest")
         if (result != TextToSpeech.SUCCESS) {
             Log.w(TAG, "text to speech refused the text ($result)")
             end()
@@ -131,6 +156,8 @@ class Speaker(context: Context) {
     }
 
     private fun end() {
+        savedVolume?.let { audio.setStreamVolume(AudioManager.STREAM_MUSIC, it, 0) }
+        savedVolume = null
         audio.abandonAudioFocusRequest(focus)
         speaking.value = false
     }
@@ -155,6 +182,7 @@ class Speaker(context: Context) {
 
     private companion object {
         const val TAG = "Speaker"
+        const val GAIN_MB = 1_000 // +10 dB on top of the maximum volume; much more starts to distort speech
         const val MAX_CHARS = 500 // about 35 s of speech, far longer than a reply; the engine refuses ~4000
         const val AWAIT_MS = 45_000L // longer than MAX_CHARS takes; a stuck engine must not keep the mic closed
     }

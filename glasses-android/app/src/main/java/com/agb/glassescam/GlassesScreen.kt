@@ -114,6 +114,22 @@ fun GlassesScreen(
     val ui by viewModel.ui.collectAsStateWithLifecycle()
     var showGallery by rememberSaveable { mutableStateOf(false) }
 
+    // The default screen is production mode; the developer options (everything below) open from a hidden
+    // button in its top right corner and turn production off while they are open.
+    if (ui.production) {
+        ProductionScreen(
+            ui = ui,
+            onRegister = onRegister,
+            onRetry = viewModel::retryProduction,
+            onTalk = viewModel::toggleVoice,
+            onDismissMessage = viewModel::dismissGlassesMessage,
+            onOpenDeveloper = { viewModel.setProduction(false) },
+            onDemoTag = viewModel::setDemoTag,
+            onToggleDemo = { if (ui.demoRecording) viewModel.stopDemo() else viewModel.startDemo() },
+        )
+        return
+    }
+
     // The live-preview screen stays composed underneath the gallery so the video surface and
     // decoder keep running; the gallery is drawn over it.
     Box(modifier = Modifier.fillMaxSize()) {
@@ -121,6 +137,9 @@ fun GlassesScreen(
             modifier = Modifier.statusBarsPadding().verticalScroll(rememberScrollState()).padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
+            Button(onClick = { viewModel.setProduction(true) }, modifier = Modifier.fillMaxWidth()) {
+                Text("Back to production mode")
+            }
             Text("Registration: ${ui.registration}")
             Text("Devices: ${ui.deviceCount}   Session: ${ui.sessionState}   Stream: ${ui.streamState}")
 
@@ -175,6 +194,18 @@ fun GlassesScreen(
                     onCheckedChange = viewModel::setSpeakReplies,
                 )
                 Text("Read replies aloud")
+            }
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                // Voice messages from the PCM audio of the glasses' camera stream (16 kHz, beta in Meta's SDK)
+                // instead of the Bluetooth hands-free mic. Applies the next time the camera opens.
+                Switch(
+                    checked = ui.cameraAudio,
+                    onCheckedChange = viewModel::setCameraAudio,
+                )
+                Text("Voice from camera stream audio (beta, 16 kHz)")
             }
             FlowRow(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
