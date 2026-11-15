@@ -276,6 +276,43 @@ def test_ask_stream_sends_one_step_per_line(client, memories):
     assert steps[-1]["content"] == "With Aino at 11:00."
 
 
+@pytest.mark.parametrize(
+    ("said", "text", "cited"),
+    [
+        # The usual: the best one at the end.
+        ("On the table, at 09:00. [Memory {keys}]", "On the table, at 09:00.", ["keys"]),
+        # Any case and spacing, several, mid-sentence: in the order cited, no space left over.
+        (
+            "Rex [memory{rex}] sniffed the keys [ MEMORY {keys} ].",
+            "Rex sniffed the keys.",
+            ["rex", "keys"],
+        ),
+        # A memory the searches did not return (the dog), or none at all: no evidence.
+        ("Rex was there. [Memory {dog}] [Memory 999]", "Rex was there.", []),
+        ("On the table, at 09:00.", "On the table, at 09:00.", []),
+    ],
+)
+def test_an_answer_cites_only_memories_its_searches_returned(client, memories, said, text, cited):
+    ids = {"keys": memories[0], "dog": memories[1], "rex": memories[3]}
+    gemma = FakeGemma(
+        # Returns the keys and Rex sniffing them, not the dog.
+        {"content": None, "tool_calls": [tool_call("a", user_query="keys", limit=2)]},
+        {"content": said.format(**ids)},
+    )
+    app.dependency_overrides[get_embedder] = lambda: fake_embed
+    app.dependency_overrides[get_chat] = lambda: gemma
+    try:
+        body = client.post("/api/ask", json={"question": "Where are my keys?"}).json()
+    finally:
+        app.dependency_overrides.clear()
+
+    assert [r["id"] for r in body["steps"][2]["results"]] == [ids["keys"], ids["rex"]]
+    answer = body["steps"][-1]
+    assert body["answer"] == answer["content"] == text
+    assert [m["id"] for m in body["evidence"]] == [ids[name] for name in cited]
+    assert answer["evidence"] == body["evidence"]
+
+
 def test_ask_stream_reports_a_failing_model_server(client, memories):
     async def broken(messages, tools):
         raise UpstreamError("The chat model answered 400: tool choice not enabled")

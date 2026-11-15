@@ -153,6 +153,15 @@ def test_question_goes_through_the_question_loop(client):
     assert "Where are my keys?" in texts(reply["screen"])
 
 
+def test_the_glasses_show_an_answer_without_its_citation(client):
+    use_models(chat=says("On the kitchen table, at 09:12. [Memory 7]"), embed=fake_embed)
+
+    reply = client.post("/api/glasses/command", json={"question": "Where are my keys?"}).json()
+
+    assert reply["speech"] == "On the kitchen table, at 09:12."
+    assert "Memory" not in texts(reply["screen"])
+
+
 def test_unreachable_memory_is_spoken_not_raised(client):
     use_models(chat=broken, embed=fake_embed)
 

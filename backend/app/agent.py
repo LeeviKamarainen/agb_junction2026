@@ -15,6 +15,7 @@ parser that matches the model (memory/docs/backend-requirements.md).
 """
 
 import json
+import re
 import time
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
@@ -51,7 +52,8 @@ when the question names a time ("this morning", "yesterday"). If the results do 
 question, search again with other wording or a wider timespan.
 
 Answer from the memories only, briefly, and say when you saw it. If nothing relevant was found, \
-say so instead of guessing.
+say so instead of guessing. When the answer rests on particular memories, end it with the id of \
+the one that shows it best, written like [Memory 12].
 
 The current time is {now}, the user's local time ({zone}). Every time you read or write is \
 local time: write times in tool calls as ISO 8601 with the offset, like the current \
@@ -122,6 +124,19 @@ is in view right now, answer from that frame without searching; search the memor
 earlier."""
 
 
+# How an answer cites the memory it rests on (SYSTEM): the id its search results give, written as
+# the stills it was shown are labelled ("Memory 12, seen at …"). The space before a citation goes
+# with it, so that removing it leaves no gap.
+_CITATION = re.compile(r"\s*\[\s*memory\s*(\d+)\s*\]", re.IGNORECASE)
+
+
+def _cited(text: str, found: dict[int, SearchResult]) -> tuple[str, list[SearchResult]]:
+    """The answer without its citations, and the memories it cites in the order cited: only
+    those this answer's searches returned, since the model was shown no other."""
+    ids = dict.fromkeys(int(number) for number in _CITATION.findall(text))
+    return _CITATION.sub("", text).strip(), [found[id] for id in ids if id in found]
+
+
 class AskRequest(BaseModel):
     question: str = Field(min_length=1, max_length=2000)
     # Search only these collections, whatever the model asks for. Empty: the model chooses.
@@ -149,10 +164,14 @@ class Step(BaseModel):
     name: str | None = None  # tool_call: the tool the model called
     arguments: Any = None  # tool_call: the arguments as the model sent them
     results: list[SearchResult] | None = None  # tool_result
+    # answer: the memories it cites, in the order cited ([] when it cites none); its content
+    # comes without the citations
+    evidence: list[SearchResult] | None = None
 
 
 class Answer(BaseModel):
-    answer: str
+    answer: str  # without its citations
+    evidence: list[SearchResult]  # the memories the answer cites, in the order cited
     searches: list[VectorSearchArgs]  # every vector_search call the model made, in order
     sources: list[SearchResult]  # every memory those calls returned, first seen first
     steps: list[Step]
@@ -244,7 +263,8 @@ async def _run(
     owner_id: int | None = None,
     live_frame: str | None = None,
 ) -> AsyncIterator[Step]:
-    """Answer `question`, yielding each step; the last one is the answer.
+    """Answer `question`, yielding each step; the last one is the answer, without the citations
+    the model ends it with, which become its evidence.
 
     `owners` is whose memories the model may reach (app.auth.Viewer.owners; None for all): every
     vector_search it makes is limited to them, and only their stills are attached. With
@@ -285,6 +305,7 @@ async def _run(
         {"role": "user", "content": asked},
     ]
     shown: set[int] = set()
+    found: dict[int, SearchResult] = {}  # every memory a search returned: what it may cite
     stopped: set[str] = set()  # the goals stop_watching removed during this answer
     started_goals: set[str] = set()  # what start_watching added during this answer
     images_pending = 1 if live_frame is not None else 0
@@ -300,7 +321,8 @@ async def _run(
         calls = message.get("tool_calls") or []
         text = (message.get("content") or "").strip()
         if not calls or last:
-            yield step("answer", round, content=text)
+            content, evidence = _cited(text, found)
+            yield step("answer", round, content=content, evidence=evidence)
             return
 
         if text:
@@ -365,6 +387,7 @@ async def _run(
                     results = await vector_search(session, args, embed, owners)
                     yield step("tool_result", round, call_id=call_id, results=results)
                     for result in results:
+                        found.setdefault(result.id, result)
                         if result.image_url and result.id not in shown:
                             if len(shown) < MAX_IMAGES:
                                 shown.add(result.id)
@@ -413,5 +436,11 @@ async def answer(
                 pass
         for result in step.results or []:
             sources.setdefault(result.id, result)
-    final = (steps[-1].content or "") if steps and steps[-1].type == "answer" else ""
-    return Answer(answer=final, searches=searches, sources=list(sources.values()), steps=steps)
+    final = steps[-1] if steps and steps[-1].type == "answer" else None
+    return Answer(
+        answer=(final.content or "") if final else "",
+        evidence=(final.evidence or []) if final else [],
+        searches=searches,
+        sources=list(sources.values()),
+        steps=steps,
+    )

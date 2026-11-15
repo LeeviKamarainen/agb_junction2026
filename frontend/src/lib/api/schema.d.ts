@@ -786,6 +786,8 @@ export interface components {
         Answer: {
             /** Answer */
             answer: string;
+            /** Evidence */
+            evidence: components["schemas"]["SearchResult"][];
             /** Searches */
             searches: components["schemas"]["VectorSearchArgs"][];
             /** Sources */
@@ -1417,6 +1419,8 @@ export interface components {
             arguments?: unknown;
             /** Results */
             results?: components["schemas"]["SearchResult"][] | null;
+            /** Evidence */
+            evidence?: components["schemas"]["SearchResult"][] | null;
         };
         /** Text */
         Text: {
