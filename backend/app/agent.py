@@ -148,7 +148,7 @@ class AskRequest(BaseModel):
     # up to there only, and its time is the clip's (app/demo.py: shown_so_far). Both or neither,
     # and not with collections or mine, which scope a camera's memories instead.
     demo_clip_id: int | None = None
-    demo_at_s: float | None = Field(default=None, ge=0)
+    demo_at_s: float | None = Field(default=None, ge=0, le=demo.LONGEST_CLIP_S, allow_inf_nan=False)
 
     @model_validator(mode="after")
     def one_scope(self) -> Self:

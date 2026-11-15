@@ -1,9 +1,11 @@
 import io
 import json
+import math
 from datetime import UTC, datetime, timedelta
 
 import pytest
 from PIL import Image
+from pydantic import ValidationError
 
 from app import agent, demo, media, vectors
 from app.llm import UpstreamError, get_chat, get_embedder
@@ -497,6 +499,35 @@ def test_a_demo_view_is_a_clip_and_a_time_into_it_alone(client, path, view):
         app.dependency_overrides.clear()
 
     assert reply.status_code == 422
+
+
+@pytest.mark.parametrize("path", ["/api/ask", "/api/ask/stream"])
+@pytest.mark.parametrize(
+    ("at_s", "status"),
+    [
+        (1e12, 422),  # past any date there is: refused rather than overflowing the clip's time
+        (demo.LONGEST_CLIP_S, 200),  # the end of the longest clip there can be is a time in it
+    ],
+)
+def test_a_time_into_a_clip_is_at_most_the_longest_clip(client, db, path, at_s, status):
+    walk, _ = demo_clip(db, "Walk", [0, 3])
+    body = {"question": "What next?", "demo_clip_id": walk, "demo_at_s": at_s}
+    app.dependency_overrides[get_embedder] = lambda: fake_embed
+    app.dependency_overrides[get_chat] = lambda: FakeGemma({"content": "Not yet."})
+    try:
+        reply = client.post(path, json=body)
+    finally:
+        app.dependency_overrides.clear()
+
+    assert reply.status_code == status, reply.text
+
+
+@pytest.mark.parametrize("at_s", [1e12, math.inf, math.nan])
+def test_a_time_into_a_clip_is_a_number_up_to_the_longest_clip(at_s):
+    # Python's JSON reads Infinity and NaN in a body; only the first overflows the clip's time
+    # without a bound, NaN was refused already (by ge=0).
+    with pytest.raises(ValidationError):
+        agent.AskRequest(question="What next?", demo_clip_id=1, demo_at_s=at_s)
 
 
 def test_ask_stream_reports_a_failing_model_server(client, memories):

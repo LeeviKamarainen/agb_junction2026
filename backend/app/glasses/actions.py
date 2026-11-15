@@ -125,7 +125,7 @@ class Command(BaseModel):
     # /try plays a demo clip instead of a camera: which, and how many seconds into it. Déjà vu
     # then asks about the clip's frame there (demo.DemoView).
     demo_clip_id: int | None = None
-    demo_at_s: float | None = Field(default=None, ge=0)
+    demo_at_s: float | None = Field(default=None, ge=0, le=demo.LONGEST_CLIP_S, allow_inf_nan=False)
     # Only the wearer's own memories: not the demo ones, nor (for the admin) anyone else's.
     # /try's camera, whose memory is what the visitor's camera saw. Not with a demo clip.
     mine: bool = False

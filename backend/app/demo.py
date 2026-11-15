@@ -26,7 +26,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from app import faces, media, showcase, vectors
 from app.glasses.frames import SCENE_CHANGE, STORE_EVERY_S, cosine_distance
 from app.llm import Embedder, UpstreamError
-from app.models import Memory, Showcase
+from app.models import MAX_IMAGE_S, MAX_VIDEO_S, Memory, Showcase
 from app.search import DEMO_OWNER, TABLE, add_memory, width_error
 
 log = logging.getLogger(__name__)
@@ -36,6 +36,10 @@ FPS = 2  # as the glasses stream
 MAX_FRAMES = 1200  # ten minutes of video at FPS; the rest of a longer video is left out
 BATCH = 8  # images per call to the embedding model
 _PREFIX = "clip:"
+# How far into a clip anyone can be watching, in seconds: the longest video, or the longest image
+# sequence, showcase.MAX_ASSETS images each shown for as long as one may be. A request naming a
+# point further in is refused, rather than overflowing the clip's time.
+LONGEST_CLIP_S = float(max(MAX_VIDEO_S, showcase.MAX_ASSETS * MAX_IMAGE_S))
 
 # Made by the running worker (`worker`), so it belongs to the app's event loop.
 _wanted: asyncio.Event | None = None

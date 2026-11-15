@@ -1,12 +1,15 @@
 import io
+import math
 from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi import WebSocketDisconnect
 from PIL import Image
+from pydantic import ValidationError
 
 from app import media, vectors
 from app.glasses import triggers
+from app.glasses.actions import Command
 from app.llm import UpstreamError
 from app.main import app
 from app.routes.glasses import optional_chat, optional_embedder
@@ -528,6 +531,7 @@ def test_recall_with_mine_looks_only_in_the_askers_own_stills(client, db):
     "view",
     [
         {"demo_clip_id": 1, "demo_at_s": 3, "mine": True},  # a clip is demo memory, never yours
+        {"demo_clip_id": 1, "demo_at_s": 1e12},  # past the longest clip there can be
     ],
 )
 def test_a_command_on_a_clip_is_a_time_into_it_and_never_mine(client, view):
@@ -538,6 +542,12 @@ def test_a_command_on_a_clip_is_a_time_into_it_and_never_mine(client, view):
     )
 
     assert reply.status_code == 422
+
+
+@pytest.mark.parametrize("at_s", [1e12, math.inf, math.nan])
+def test_a_commands_time_into_a_clip_is_a_number_up_to_the_longest_clip(at_s):
+    with pytest.raises(ValidationError):
+        Command(question="have I seen this before", demo_clip_id=1, demo_at_s=at_s)
 
 
 def demo_clip(db, title: str, frames: list[tuple[float, float]]) -> tuple[int, list[int]]:
