@@ -90,7 +90,7 @@ async def upload_frame(
     wearer took (always stored). Most answers carry no `message`; when a trigger fires,
     `message` is what to show on the glasses.
 
-    `store=false` only checks the frame against the triggers: the home page sends the demo clips
+    `store=false` only checks the frame against the triggers: /try sends a demo clip's frames
     this way, since they are stored as demo memories already. `client` names the app sending it
     ("live", "harness", ...) for the admin's stream wall. `collection` tags what is stored (one
     recorded demo, say; a-z, 0-9, _ and -, up to 40), "glasses" when left out.

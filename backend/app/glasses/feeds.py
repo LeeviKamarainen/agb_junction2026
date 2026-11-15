@@ -2,7 +2,7 @@
 
 Every frame that reaches the backend (a memory frame or a watched frame, over HTTP or the
 WebSocket) is recorded here once its faces are blurred, under the client that sent it: who
-(the login), which app (`client`: "live" for the home page, "harness" for the glasses harness,
+(the login), which app (`client`: "live" for /try, "harness" for the glasses harness,
 "glasses" for the Android app, as each says), what kind (a "stream" or
 "photo" frames) and which stream. Only the newest frame of each feed is kept, in memory: nothing is
 written, a restart forgets them, and a feed with no frame for IDLE_S is dropped.
@@ -59,7 +59,7 @@ class FeedPublic(BaseModel):
     user: str
     kind: Kind
     stream_id: str
-    demo: bool  # checked against the triggers only, not stored (the home page's demo clips)
+    demo: bool  # checked against the triggers only, not stored (/try's demo clips)
     started_at: datetime
     last_at: datetime
     live: bool
