@@ -51,6 +51,20 @@ async def guest(request: Request, response: Response, session: SessionDep):
     return await _logged_in(request, response, session, await auth.create_guest(session))
 
 
+@router.delete("/guest", status_code=204)
+async def end_guest(response: Response, session: SessionDep, viewer: ViewerDep):
+    """Delete the guest that calls this now, with everything it added (memories and their
+    images, goals, reminders), instead of at its expiry. For a client that made a guest for one
+    job, as the demo editor's recording does. 403 for the admin."""
+    if viewer.user.role != "guest":
+        raise HTTPException(403, "Only a guest account can be ended")
+    viewer.user.expires_at = datetime.now(UTC)
+    session.add(viewer.user)
+    await session.commit()
+    await auth.purge_expired_guests(session)
+    response.delete_cookie(auth.COOKIE, path="/")
+
+
 @router.post("/guest/login", response_model=LoginResult)
 async def guest_login(body: GuestLogin, request: Request, response: Response, session: SessionDep):
     """Reopen a guest by username while it is active. Keeps its original expiry; an unknown,

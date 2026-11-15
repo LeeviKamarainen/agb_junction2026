@@ -18,15 +18,23 @@ router = APIRouter(prefix="/demo", tags=["demo"])
 
 
 class ShowcaseCue(BaseModel):
-    """Something the wearer says at `at_s` seconds into the clip. One that `stays` is shown as
-    active (a trigger, say) from then on, until a later cue `stops` it: by its id, or "*" for
-    every cue before it."""
+    """Something the wearer says at `at_s` seconds into the clip, and the `answer` Gemma gave,
+    recorded beforehand. One that `stays` is shown as active (a trigger, say) from then on, until
+    `until_s` or until a later cue `stops` it: by its id, or "*" for every cue before it.
+
+    The admin's editor records the answers, and the triggers that fired, by playing the clip to
+    the backend as a throwaway guest (frontend: admin/recording.ts); playback only shows them."""
 
     id: str = Field(min_length=1, max_length=40)
     at_s: float = Field(ge=0, le=3600)
     text: str = Field(min_length=1, max_length=300)
     stays: bool = True
     stops: str | None = Field(default=None, max_length=40)
+    until_s: float | None = Field(default=None, ge=0, le=3600)
+    answer: str = Field(default="", max_length=1000)
+    # "trigger": not something the wearer said, but what the glasses showed when a trigger
+    # fired at `at_s`, recorded with the answers; `text` is that message.
+    kind: Literal["prompt", "trigger"] = "prompt"
 
 
 class ShowcaseWrite(ShowcaseFields):
@@ -101,7 +109,7 @@ async def create(body: ShowcaseWrite, session: SessionDep, viewer: ViewerDep):
         **body.model_dump(exclude={"asset_order", "cues"}), cues_json=cues_json(body.cues or [])
     )
     session.add(item)
-    await session.commit()
+    await showcase.commit(session)
     return public(item)
 
 
@@ -124,7 +132,7 @@ async def update(id: int, body: ShowcaseWrite, session: SessionDep, viewer: View
         item.cues_json = cues_json(body.cues)
     item.sqlmodel_update(body.model_dump(exclude={"asset_order", "cues"}))
     session.add(item)
-    await session.commit()
+    await showcase.commit(session)
     demo.request_sync()  # the demo memories follow the published clips
     return public(item)
 
@@ -165,7 +173,7 @@ async def upload(
             item.duration_s = video_duration_s
         session.add(item)
         with anyio.CancelScope(shield=True):
-            await session.commit()
+            await showcase.commit(session)
     except BaseException:
         with anyio.CancelScope(shield=True):
             await anyio.to_thread.run_sync(showcase.delete, [a["name"] for a in added])
@@ -198,7 +206,7 @@ async def remove(id: int, session: SessionDep, viewer: ViewerDep):
     item = await find(session, id)
     names = [a["name"] for a in showcase.assets(item)]
     await session.delete(item)
-    await session.commit()
+    await showcase.commit(session)
     demo.request_sync()  # the demo memories follow the published clips
     await anyio.to_thread.run_sync(showcase.delete, names)
 
@@ -217,7 +225,7 @@ async def reorder(body: ShowcaseOrder, session: SessionDep, viewer: ViewerDep):
     for position, id in enumerate(body.ids):
         by_id[id].position = position
         session.add(by_id[id])
-    await session.commit()
+    await showcase.commit(session)
     return [public(by_id[id]) for id in body.ids]
 
 
@@ -233,7 +241,7 @@ async def remove_asset(id: int, name: str, session: SessionDep, viewer: ViewerDe
     if not remaining:
         item.published = False
     session.add(item)
-    await session.commit()
+    await showcase.commit(session)
     demo.request_sync()  # the demo memories follow the published clips
     await anyio.to_thread.run_sync(showcase.delete, [name])
     return public(item)

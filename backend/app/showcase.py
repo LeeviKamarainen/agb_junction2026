@@ -1,15 +1,29 @@
 """Uploaded playback media, separate from private memories. Files survive database rebuilds,
-so random file names prevent a reused demo id from inheriting earlier uploads."""
+so random file names prevent a reused demo id from inheriting earlier uploads.
+
+The demos themselves survive a rebuild too, unlike the rest of the database
+(docs/adr/0001-disposable-database.md): every change is also written to a manifest beside the
+database file, and `restore` reads it back at startup when the table came up empty. Curating a
+demo is hand work that a model change elsewhere should not undo.
+"""
 
 import io
 import json
+import logging
 import uuid
 from pathlib import Path
 
+import anyio
 from PIL import Image, ImageOps, UnidentifiedImageError
+from pydantic import ValidationError
+from sqlmodel import select
+from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app import faces
+from app.models import Showcase
 from app.settings import get_settings
+
+log = logging.getLogger(__name__)
 
 MAX_UPLOAD = 200 * 1024 * 1024
 MAX_IMAGE = 15 * 1024 * 1024
@@ -54,3 +68,48 @@ def assets(item) -> list[dict]:
 def delete(names: list[str]) -> None:
     for name in names:
         (folder() / Path(name).name).unlink(missing_ok=True)
+
+
+def manifest() -> Path:
+    return get_settings().database_path.parent / "showcases.json"
+
+
+def _write(text: str) -> None:
+    draft = manifest().with_suffix(".tmp")
+    draft.write_text(text)
+    draft.replace(manifest())  # in one step, so a crash never leaves half a manifest
+
+
+async def commit(session: AsyncSession) -> None:
+    """Commit a change to the demos and write all of them to the manifest."""
+    await session.commit()
+    rows = [row.model_dump() for row in await session.exec(select(Showcase))]
+    await anyio.to_thread.run_sync(_write, json.dumps(rows))
+
+
+async def restore(session: AsyncSession) -> int:
+    """At startup: bring the demos back from the manifest when the database was rebuilt, and
+    return how many. With demos and no manifest yet (the first start with this code), write
+    one."""
+    if (await session.exec(select(Showcase))).first() is not None:
+        if not manifest().is_file():
+            await commit(session)
+        return 0
+    if not manifest().is_file():
+        return 0
+    try:
+        rows = json.loads(manifest().read_text())
+    except (OSError, json.JSONDecodeError):
+        log.exception("The demo manifest %s cannot be read", manifest())
+        return 0
+    restored = 0
+    for row in rows if isinstance(rows, list) else []:
+        try:
+            session.add(Showcase.model_validate(row))
+            restored += 1
+        except ValidationError:
+            log.warning("Skipping a demo the manifest no longer describes: %r", row)
+    await session.commit()
+    if restored:
+        log.warning("Restored %d demo(s) from %s after a database rebuild", restored, manifest())
+    return restored
