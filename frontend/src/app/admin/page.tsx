@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { SiteShell } from "../_home/site-shell";
+import { SiteShell } from "@/components/site-shell";
 import { DemoManager } from "./demo-manager";
 
 export const metadata: Metadata = {

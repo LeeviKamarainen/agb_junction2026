@@ -3,7 +3,7 @@
 import { Mic } from "lucide-react";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 
-import { type Recognition, recognitionConstructor, transcripts } from "../glasses/speech";
+import { type Recognition, recognitionConstructor, transcripts } from "@/app/glasses/speech";
 
 const subscribeToNothing = () => () => {};
 

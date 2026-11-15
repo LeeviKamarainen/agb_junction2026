@@ -2,7 +2,7 @@ import { Suspense } from "react";
 import type { Metadata } from "next";
 import { io } from "next/cache";
 import { api } from "@/lib/api/server";
-import { SiteShell } from "../_home/site-shell";
+import { SiteShell } from "@/components/site-shell";
 import { ShowcasePlayer } from "./showcase-player";
 
 export const metadata: Metadata = { title: "Demos — Glass memory" };

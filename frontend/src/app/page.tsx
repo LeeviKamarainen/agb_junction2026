@@ -1,5 +1,5 @@
 import { LiveHome } from "./_home/live";
-import { SiteShell } from "./_home/site-shell";
+import { SiteShell } from "@/components/site-shell";
 
 export default function Home() {
   return (

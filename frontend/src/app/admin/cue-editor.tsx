@@ -12,8 +12,8 @@ import {
   Trash2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { type Cue, clock } from "../demos/cues";
-import { CueOverlay, Overlay } from "../demos/cue-overlay";
+import { type Cue, clock } from "@/components/glasses-view/cues";
+import { CueOverlay, Overlay } from "@/components/glasses-view/cue-overlay";
 import { useRecording } from "./recording";
 
 const field = "rounded border border-border bg-background px-2 py-1 text-sm";

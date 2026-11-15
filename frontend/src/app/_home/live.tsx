@@ -30,17 +30,17 @@ import {
   messageScreen,
   plain as plainAnswer,
   secondsToRead,
-} from "./glasses-screens";
+} from "@/components/glasses-view/screens";
 import { type AskChatHandle, AskChat } from "../memory/ask-chat";
 import {
   FPS,
   type GlassesReply,
   RECALL,
   Recalled,
-} from "./recalled";
+} from "@/components/glasses-view/recalled";
 import { type Match, TriggerEditor } from "../memory/trigger-editor";
 import { errorText } from "../memory/types";
-import { HoldToTalk } from "./hold-to-talk";
+import { HoldToTalk } from "@/components/hold-to-talk";
 
 type Clip = components["schemas"]["ShowcasePublic"];
 type FrameReply = components["schemas"]["FrameReply"];

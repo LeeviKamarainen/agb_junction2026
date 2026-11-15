@@ -13,8 +13,8 @@ import {
 import { Button } from "@/components/ui/button";
 import type { components } from "@/lib/api/schema";
 
-import { CueOverlay } from "./cue-overlay";
-import { clock } from "./cues";
+import { CueOverlay } from "@/components/glasses-view/cue-overlay";
+import { clock } from "@/components/glasses-view/cues";
 
 type Clip = components["schemas"]["ShowcasePublic"];
 

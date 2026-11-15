@@ -9,7 +9,7 @@ import { useSession } from "@/lib/session";
 import { Button } from "@/components/ui/button";
 import { AuthForm } from "../login/auth-form";
 import { CueEditor } from "./cue-editor";
-import type { Cue } from "../demos/cues";
+import type { Cue } from "@/components/glasses-view/cues";
 
 type Clip = components["schemas"]["ShowcasePublic"];
 const field =

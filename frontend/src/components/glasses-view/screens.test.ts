@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { answerScreen, messageScreen, plain, secondsToRead } from "./glasses-screens.ts";
+import { answerScreen, messageScreen, plain, secondsToRead } from "./screens.ts";
 
 test("a trigger is a bell and its title as a heading, then the text, at the bottom", () => {
   const screen = messageScreen({ type: "trigger", title: "Keys", text: "On the bench." });

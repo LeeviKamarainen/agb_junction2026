@@ -4,7 +4,7 @@ import { History } from "lucide-react";
 
 import type { components } from "@/lib/api/schema";
 
-import type { LayoutNode } from "../glasses/types";
+import type { LayoutNode } from "@/app/glasses/types";
 
 export type GlassesReply = components["schemas"]["GlassesReply"];
 
