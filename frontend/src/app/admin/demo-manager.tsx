@@ -165,8 +165,8 @@ export function DemoManager() {
     return (
       <p role="alert" className="py-8 text-sm">
         Demo editing is available to the admin.{" "}
-        <Link href="/demos" className="underline">
-          Watch demos
+        <Link href="/" className="underline">
+          Watch the demos
         </Link>{" "}
         or log out to use an admin login.
       </p>
@@ -177,12 +177,12 @@ export function DemoManager() {
         <div>
           <h1>Manage demos</h1>
           <p>
-            Upload media, arrange the sequence, then publish it on the Demos
+            Upload media, arrange the sequence, then publish it on the home
             page.
           </p>
         </div>
-        <Link href="/demos" className="text-sm text-primary">
-          View Demos ↗
+        <Link href="/" className="text-sm text-primary">
+          View the home page ↗
         </Link>
       </div>
       <form

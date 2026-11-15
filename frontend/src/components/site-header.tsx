@@ -7,18 +7,14 @@ import { Suspense } from "react";
 import { UserMenu } from "@/components/user-menu";
 import { useSession } from "@/lib/session";
 
-const PUBLIC_LINKS = [
-  { href: "/", label: "Live" },
-  { href: "/demos", label: "Demos" },
-];
-
-// Anyone logged in, a guest too: the demo memories and their own, from every client.
-const USER_LINKS = [{ href: "/memory", label: "Memory lab" }];
+// Visitors need no login: /try starts a guest when they press Start.
+const PUBLIC_LINKS = [{ href: "/try", label: "Try it" }];
 
 // The developer views, for the admin only.
 const ADMIN_LINKS = [
   { href: "/admin", label: "Manage demos" },
   { href: "/admin/streams", label: "Streams" },
+  { href: "/memory", label: "Memory lab" },
   { href: "/glasses", label: "Glasses harness" },
 ];
 
@@ -27,18 +23,14 @@ type Props = {
   requireLogin?: boolean;
 };
 
-/** The header every page shares: the wordmark, the page links and the login menu. */
+/** The header every page shares: the wordmark, the page links and who is logged in. */
 export function SiteHeader({ requireLogin = false }: Props) {
   const { user } = useSession();
-  const links = [
-    ...PUBLIC_LINKS,
-    ...(user ? USER_LINKS : []),
-    ...(user?.role === "admin" ? ADMIN_LINKS : []),
-  ];
+  const links = [...PUBLIC_LINKS, ...(user?.role === "admin" ? ADMIN_LINKS : [])];
 
   return (
     <header className="site-header">
-      <Link href="/" className="wordmark" aria-label="Glass memory home">
+      <Link href="/" className="wordmark" aria-label="GlassMemory home">
         GLASS<span className="wordmark-accent">/MEMORY</span>
       </Link>
       <nav

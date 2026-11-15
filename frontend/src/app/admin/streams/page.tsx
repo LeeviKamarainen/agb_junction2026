@@ -4,7 +4,7 @@ import { SiteShell } from "@/components/site-shell";
 import { StreamWall } from "./stream-wall";
 
 export const metadata: Metadata = {
-  title: "Live streams — Glass memory",
+  title: "Live streams — GlassMemory",
   robots: { index: false },
 };
 

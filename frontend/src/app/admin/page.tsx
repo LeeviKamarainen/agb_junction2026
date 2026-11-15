@@ -3,7 +3,7 @@ import { SiteShell } from "@/components/site-shell";
 import { DemoManager } from "./demo-manager";
 
 export const metadata: Metadata = {
-  title: "Manage demos — Glass memory",
+  title: "Manage demos — GlassMemory",
   robots: { index: false },
 };
 export default function AdminPage() {

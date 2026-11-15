@@ -5,7 +5,7 @@ import Link from "next/link";
 import { GuestButton } from "@/components/guest-button";
 
 export const metadata: Metadata = {
-  title: "Try it as a guest — Glass memory",
+  title: "Try it as a guest — GlassMemory",
   description:
     "A 60-minute guest session: no sign-up, see the demo pictures and add your own.",
 };

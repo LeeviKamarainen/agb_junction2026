@@ -13,9 +13,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Glass memory — your glasses remember the day",
+  title: "GlassMemory — a private visual memory for your Meta glasses",
   description:
-    "Ask about your day, explore curated demos, and try a visual memory for smart glasses.",
+    "Give your Meta glasses a private visual memory and real-time notifications triggered from visual cues.",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
