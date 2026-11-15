@@ -10,6 +10,7 @@ from app.llm import UpstreamError, get_chat, get_embedder
 from app.main import app
 from app.models import Showcase
 from app.search import (
+    CANDIDATES_PER_LIST,
     DEMO_OWNER,
     TABLE,
     VECTOR_SEARCH_TOOL,
@@ -386,13 +387,32 @@ def searched(steps: list[dict]) -> list[int]:
 
 def test_a_search_limited_to_some_memories_finds_only_those(client, db, memories):
     _keys, dog, coffee, _rex = memories
-    # Unlimited, both lists would put the keys and Rex sniffing them first.
-    args = VectorSearchArgs(user_query="keys", keywords=["keys", "rex"], limit=20)
 
-    found = db(lambda session: vector_search(session, args, fake_embed, None, {dog}))
-    by_keyword, _ = db(lambda session: _keyword_ranking(session, args, 80, None, {dog, coffee}))
+    async def decoys(session):
+        # Nearer "keys" than the dog, and holding both keywords where it holds one.
+        for _ in range(10):
+            await add_memory(session, "text", unit(0), NOON, "keys and Rex")
+        await session.commit()
 
-    assert [hit.id for hit in found] == [dog]
+    db(decoys)
+    # With limit 2 each ranking takes 8 candidates, all of them decoys when nothing is left out
+    # first: restricting them afterwards would leave nothing. No keywords in the vector search,
+    # so only its vector ranking can find the dog. One allowed id as well as several: SQLite
+    # writes a list of one differently (app/vectors.py: nearest).
+    near = VectorSearchArgs(user_query="keys", limit=2)
+    worded = VectorSearchArgs(user_query="keys", keywords=["keys", "rex"], limit=2)
+    candidates = worded.limit * CANDIDATES_PER_LIST
+
+    def found(ids: set[int]) -> set[int]:
+        hits = db(lambda session: vector_search(session, near, fake_embed, None, ids))
+        return {hit.id for hit in hits}
+
+    by_keyword, _ = db(
+        lambda session: _keyword_ranking(session, worded, candidates, None, {dog, coffee})
+    )
+
+    assert found({dog}) == {dog}
+    assert found({dog, coffee}) == {dog, coffee}
     assert by_keyword == [dog]
 
 

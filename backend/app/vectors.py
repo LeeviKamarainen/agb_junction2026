@@ -12,6 +12,7 @@ Search is exact (brute force over every vector that passes the filters), which i
 hundreds of thousands of vectors: a 768-wide float32 vector is 3 KB.
 """
 
+import json
 import struct
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -161,7 +162,7 @@ async def nearest(
     `where` keeps only rows whose extra metadata columns equal the given values. A list, tuple or
     set as a value keeps rows equal to any of them (an empty one keeps none). `ids` keeps only
     those rows (an empty one keeps none): sqlite-vec picks the k closest among them, rather than
-    dropping the others from the k closest (checked with sqlite-vec 0.1.9).
+    dropping the others from the k closest.
     """
     blob = _serialize(table, vector)
     extra_columns = list(_table(table).metadata)
@@ -169,8 +170,11 @@ async def nearest(
     if ids is not None:
         if not ids:
             return []
-        conditions.append(f"id IN ({', '.join('?' * len(ids))})")
-        params.extend(ids)
+        # A subquery, not a list: SQLite turns `id IN (?)` with one value into `id = ?`, which
+        # sqlite-vec (0.1.9) applies only after taking the k closest, where an IN goes into the
+        # search itself.
+        conditions.append("id IN (SELECT value FROM json_each(?))")
+        params.append(json.dumps(list(ids)))
     if since is not None:
         conditions.append("created_at >= ?")
         params.append(_to_unix(since))
