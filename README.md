@@ -49,7 +49,7 @@ EMBED_API_KEY=...
 ADMIN_PASSWORD=...   # optional: otherwise a random admin password is printed in the backend log
 ```
 
-`LLM_URL` and `EMBED_URL` can both point to the memory API on the Gemma server (`https://<vm2-ip-with-dashes>.sslip.io`) with its token. `make reset-db` deletes the local database; it is rebuilt and re-seeded on the next start.
+`LLM_URL` and `EMBED_URL` can both point to the memory API on the Gemma server (`https://<vm2-ip-with-dashes>.sslip.io`) with its token. `make reset-db` deletes the local database; an empty one is created on the next start.
 
 ## How to use it
 
@@ -69,7 +69,7 @@ At `/admin`, add a draft, upload one MP4/WebM video (up to 200 MB) or a batch of
 
 At `/admin/streams` the admin sees every client streaming right now (the live page, the glasses harness, the glasses app), each with its newest frame refreshing about twice a second and, under it, a log of the questions its user asked, the goals they set, and the triggers that fired. Click a stream to open it in full, with fullscreen and a verbose backend log: every frame's result and trigger scores, Gemma's searches and answers, and errors, each with its JSON.
 
-Media files live in `showcase-media/` beside the database. Schema or seed changes rebuild the disposable database and remove demo configurations; old files are not reassigned to new demos. The database starts empty; upload your own memories and curated media after a rebuild.
+Media files live in `showcase-media/` beside the database. A change to the models keeps the data: the next start carries the rows over to the new tables, or stops with a message that says what to do when it cannot ([ADR 0003](docs/adr/0003-carry-rows-over.md)).
 
 ### Memory lab (`/memory`)
 

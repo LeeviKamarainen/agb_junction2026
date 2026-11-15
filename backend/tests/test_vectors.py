@@ -123,7 +123,7 @@ async def test_upsert_replaces_and_delete_removes(db_path):
         assert await vectors.nearest(connection, TABLE, unit(1), k=5) == []
 
 
-async def test_vectors_survive_a_restart_and_a_schema_change_wipes_them(db_path):
+async def test_vectors_survive_a_restart_and_a_schema_change(db_path):
     await init_db()
     async with get_engine().begin() as connection:
         await vectors.upsert(connection, TABLE, 1, unit(0))
@@ -134,9 +134,9 @@ async def test_vectors_survive_a_restart_and_a_schema_change_wipes_them(db_path)
 
     async with get_engine().begin() as connection:
         await connection.exec_driver_sql("PRAGMA user_version = 1")  # as if built from older code
-    await init_db()
+    await init_db()  # carries the rows over to a new file (docs/adr/0003-carry-rows-over.md)
     async with get_engine().connect() as connection:
-        assert await vectors.nearest(connection, TABLE, unit(0)) == []
+        assert [hit.id for hit in await vectors.nearest(connection, TABLE, unit(0))] == [1]
 
 
 async def test_wrong_width_and_unknown_table_are_rejected(db_path):

@@ -176,7 +176,7 @@ def clean_collection(name: str | None) -> str:
 
 
 def image_url(memory: Memory) -> str | None:
-    """Versioned by the image's file name: the disposable database reuses ids after a wipe, and a
+    """Versioned by the image's file name: a wiped database (make reset-db) reuses ids, and a
     bare /api/memories/{id}/image would let a browser show the old memory's cached picture."""
     if not memory.image_file:
         return None
@@ -304,7 +304,8 @@ def width_error(got: int) -> str | None:
         return None
     return (
         f"The embedding model gives {got} numbers per input, but {TABLE} holds {width}: "
-        f"set its width in app/vectors.py to match (the database rebuilds)"
+        f"set its width in app/vectors.py to match; the next start then stops until the stored "
+        f"vectors are wiped, since another model's vectors cannot be compared with them"
     )
 
 

@@ -515,7 +515,7 @@ def test_upload_list_fetch_and_delete_an_image(client):
     assert image.headers["content-type"] == "image/jpeg"
     assert max(Image.open(io.BytesIO(image.content)).size) == media.MAX_SIDE
     # Versioned by file name, so it can be cached for good; a bare id is asked about every time,
-    # since the disposable database hands the same id to a different image after a wipe.
+    # since a wiped database hands the same id to a different image.
     assert "immutable" in image.headers["cache-control"]
     bare = client.get(f"/api/memories/{memory['id']}/image")
     assert bare.headers["cache-control"] == "private, no-cache"
