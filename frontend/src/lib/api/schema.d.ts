@@ -310,6 +310,70 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/streams/{feed_id}/ask/stream": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Ask About Stream
+         * @description Ask Gemma about a stream as its user would, as /api/ask/stream does: it searches that
+         *     user's memories (and the demo's), sees the stream's newest frame while the stream runs, and
+         *     can start or stop watching for something on the user's glasses. Newline-delimited JSON, one
+         *     Step per line. Works for a while after the stream stopped, without the frame; 404 for a
+         *     stream the backend does not know.
+         */
+        post: operations["ask_about_stream_api_admin_streams__feed_id__ask_stream_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/streams/{feed_id}/goals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Stream Goals
+         * @description What the stream's user has the glasses watching out for, each goal with its triggers.
+         */
+        get: operations["stream_goals_api_admin_streams__feed_id__goals_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/streams/{feed_id}/goals/{goal_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Remove Stream Goal
+         * @description Stop the stream's user's glasses watching for one goal: it goes with all its triggers.
+         */
+        delete: operations["remove_stream_goal_api_admin_streams__feed_id__goals__goal_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/memories": {
         parameters: {
             query?: never;
@@ -366,6 +430,28 @@ export interface paths {
          *     JSON list.
          */
         get: operations["memory_vectors_api_memories_vectors_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/memories/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Export Collection
+         * @description A zip of one collection's stills you may see, oldest first, with their embeddings: unpack it
+         *     under `backend/demo-data/<collection>/` and commit it, and every start loads it again as demo
+         *     memories (app/demo_bundles.py), however often the database is rebuilt. At most 2000 stills.
+         */
+        get: operations["export_collection_api_memories_export_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -663,7 +749,8 @@ export interface paths {
          *
          *     `store=false` only checks the frame against the triggers: the home page sends the demo clips
          *     this way, since they are stored as demo memories already. `client` names the app sending it
-         *     ("live", "harness", ...) for the admin's stream wall.
+         *     ("live", "harness", ...) for the admin's stream wall. `collection` tags what is stored (one
+         *     recorded demo, say; a-z, 0-9, _ and -, up to 40), "glasses" when left out.
          */
         post: operations["upload_frame_api_glasses_frames_post"];
         delete?: never;
@@ -847,6 +934,11 @@ export interface components {
              * @default
              */
             client: string;
+            /**
+             * Collection
+             * @default
+             */
+            collection: string;
         };
         /** Body_watch_api_glasses_watch_post */
         Body_watch_api_glasses_watch_post: {
@@ -1279,6 +1371,27 @@ export interface components {
             /** Content Type */
             content_type: string;
         };
+        /**
+         * ShowcaseCue
+         * @description Something the wearer says at `at_s` seconds into the clip. One that `stays` is shown as
+         *     active (a trigger, say) from then on, until a later cue `stops` it: by its id, or "*" for
+         *     every cue before it.
+         */
+        ShowcaseCue: {
+            /** Id */
+            id: string;
+            /** At S */
+            at_s: number;
+            /** Text */
+            text: string;
+            /**
+             * Stays
+             * @default true
+             */
+            stays: boolean;
+            /** Stops */
+            stops?: string | null;
+        };
         /** ShowcaseOrder */
         ShowcaseOrder: {
             /** Ids */
@@ -1322,6 +1435,8 @@ export interface components {
             id: number;
             /** Assets */
             assets: components["schemas"]["ShowcaseAsset"][];
+            /** Cues */
+            cues: components["schemas"]["ShowcaseCue"][];
         };
         /** ShowcaseWrite */
         ShowcaseWrite: {
@@ -1360,6 +1475,8 @@ export interface components {
             published: boolean;
             /** Asset Order */
             asset_order?: string[] | null;
+            /** Cues */
+            cues?: components["schemas"]["ShowcaseCue"][] | null;
         };
         /**
          * Step
@@ -2068,6 +2185,102 @@ export interface operations {
             };
         };
     };
+    ask_about_stream_api_admin_streams__feed_id__ask_stream_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                feed_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AskRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/x-ndjson": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    stream_goals_api_admin_streams__feed_id__goals_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                feed_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoalPublic"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    remove_stream_goal_api_admin_streams__feed_id__goals__goal_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                feed_id: string;
+                goal_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_memories_api_memories_get: {
         parameters: {
             query?: {
@@ -2139,6 +2352,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MemoryVector"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    export_collection_api_memories_export_get: {
+        parameters: {
+            query: {
+                /** @description The collection (a recorded demo's tag) */
+                collection: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/zip": unknown;
                 };
             };
             /** @description Validation Error */

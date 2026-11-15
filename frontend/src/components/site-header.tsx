@@ -11,12 +11,14 @@ const PUBLIC_LINKS = [
   { href: "/demos", label: "Demos" },
 ];
 
+// Anyone logged in, a guest too: the demo memories and their own, from every client.
+const USER_LINKS = [{ href: "/memory", label: "Memory lab" }];
+
 // The developer views, for the admin only.
 const ADMIN_LINKS = [
   { href: "/admin", label: "Manage demos" },
   { href: "/admin/streams", label: "Streams" },
   { href: "/glasses", label: "Glasses harness" },
-  { href: "/memory", label: "Memory lab" },
 ];
 
 type Props = {
@@ -28,8 +30,11 @@ type Props = {
 export function SiteHeader({ requireLogin = false }: Props) {
   const { user } = useSession();
   const path = usePathname();
-  const links =
-    user?.role === "admin" ? [...PUBLIC_LINKS, ...ADMIN_LINKS] : PUBLIC_LINKS;
+  const links = [
+    ...PUBLIC_LINKS,
+    ...(user ? USER_LINKS : []),
+    ...(user?.role === "admin" ? ADMIN_LINKS : []),
+  ];
 
   return (
     <header className="site-header">

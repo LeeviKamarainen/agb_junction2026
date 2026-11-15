@@ -5,6 +5,7 @@ import android.app.Activity
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.os.Build
 import android.os.SystemClock
 import android.util.Log
 import android.view.Surface
@@ -13,6 +14,8 @@ import androidx.lifecycle.viewModelScope
 import com.meta.wearable.dat.camera.Camera
 import com.meta.wearable.dat.camera.Stream
 import com.meta.wearable.dat.camera.addCamera
+import com.meta.wearable.dat.camera.types.AudioCodec
+import com.meta.wearable.dat.camera.types.AudioSampleRate
 import com.meta.wearable.dat.camera.types.PhotoData
 import com.meta.wearable.dat.camera.types.StreamConfiguration
 import com.meta.wearable.dat.camera.types.StreamState
@@ -104,6 +107,20 @@ data class UiState(
     val voiceSending: Boolean = false,
     val voiceText: String = "",
     val voiceQuestion: Boolean = false,
+    // Production mode (the default): the app arms memory mode by itself, streams all the time and the glasses'
+    // buttons only start voice messages. Off while the developer options are open.
+    val production: Boolean = true,
+    // Voice from the PCM audio of the glasses' camera stream (beta in Meta's SDK) instead of the Bluetooth
+    // hands-free microphone: better quality, and the video can keep running. Applies when the camera next opens.
+    val cameraAudio: Boolean = true,
+    val productionNote: String = "", // why production is not running yet, or what it is doing about it
+    val productionBlocked: Boolean = false, // the camera permission was refused: waiting for Retry
+    // Demo recording: while on, the stream's frames are stored in the backend under the tag [demoTag] (as a memory
+    // collection) instead of "glasses"; [demoSent] of them were uploaded, [demoStored] stored.
+    val demoTag: String = "", // what is typed in the tag field, remembered across app starts
+    val demoRecording: Boolean = false,
+    val demoSent: Int = 0,
+    val demoStored: Int = 0,
     val photos: List<java.io.File> = emptyList(), // gallery, newest first
     val message: String = "",
 )
@@ -186,6 +203,18 @@ class GlassesViewModel : ViewModel() {
         SegmentSettings.load(context.applicationContext)
         _ui.update { it.copy(segmentGrid = SegmentSettings.useGrid) }
         _ui.update { it.copy(speakReplies = speakRepliesSetting(context.applicationContext)) }
+        _ui.update {
+            it.copy(
+                demoTag = context.applicationContext.getSharedPreferences(PREFS, android.content.Context.MODE_PRIVATE)
+                    .getString(KEY_DEMO_TAG, "").orEmpty(),
+            )
+        }
+        _ui.update {
+            it.copy(
+                cameraAudio = context.applicationContext.getSharedPreferences(PREFS, android.content.Context.MODE_PRIVATE)
+                    .getBoolean(KEY_CAMERA_AUDIO, true),
+            )
+        }
         _ui.update { it.copy(photos = PhotoStore.list(context.applicationContext)) }
         // A second initialize() in the same process returns ALREADY_INITIALIZED; that's fine.
         Wearables.initialize(context)
@@ -280,25 +309,41 @@ class GlassesViewModel : ViewModel() {
     ) {
         if (session != null) return say("Stop the current mode first")
         mode = newMode
-        viewModelScope.launch {
-            val current = Wearables.checkPermissionStatus(Permission.CAMERA)
-                .getOrDefault(PermissionStatus.Denied)
-            if (current != PermissionStatus.Granted &&
-                requestPermission(Permission.CAMERA) != PermissionStatus.Granted
-            ) {
-                say("Camera permission denied")
-                return@launch
-            }
+        viewModelScope.launch { openSessionNow(requestPermission) }
+    }
 
-            Wearables.createSession(AutoDeviceSelector())
-                .onSuccess { s ->
-                    session = s
-                    observeSession(s)
-                    s.start() // returns immediately; connects in the background
-                    say("Connecting to glasses...")
-                }
-                .onFailure { error, _ -> say("Session failed: ${error.description}") }
+    private enum class Opened { YES, DENIED, FAILED }
+
+    /** Asks for the glasses' camera permission if needed and starts a session; says why not (with a message) if it did not. */
+    private suspend fun openSessionNow(requestPermission: suspend (Permission) -> PermissionStatus): Opened {
+        val current = Wearables.checkPermissionStatus(Permission.CAMERA)
+            .getOrDefault(PermissionStatus.Denied)
+        if (current != PermissionStatus.Granted &&
+            requestPermission(Permission.CAMERA) != PermissionStatus.Granted
+        ) {
+            say("Camera permission denied")
+            return Opened.DENIED
         }
+        // The camera stream's audio needs the glasses' own microphone permission, a second sheet in the Meta AI
+        // app. Without it the stream fails with PERMISSIONS_DENIED (and no video either), so ask first, and
+        // without it just do not ask for audio: voice then uses the Bluetooth microphone.
+        glassesMicGranted = !_ui.value.cameraAudio ||
+            Wearables.checkPermissionStatus(Permission.MICROPHONE).getOrDefault(PermissionStatus.Denied) ==
+            PermissionStatus.Granted ||
+            requestPermission(Permission.MICROPHONE) == PermissionStatus.Granted
+        if (!glassesMicGranted) say("Microphone permission for the glasses' camera stream was refused: using the Bluetooth microphone")
+
+        var opened = Opened.FAILED
+        Wearables.createSession(AutoDeviceSelector())
+            .onSuccess { s ->
+                session = s
+                observeSession(s)
+                s.start() // returns immediately; connects in the background
+                say("Connecting to glasses...")
+                opened = Opened.YES
+            }
+            .onFailure { error, _ -> say("Session failed: ${error.description}") }
+        return opened
     }
 
     fun stopStreaming() {
@@ -541,7 +586,7 @@ class GlassesViewModel : ViewModel() {
                                         ui.voiceSending -> icon(IconName.THREE_DOT_SPEECH_BUBBLE)
                                         ui.memoryStreaming -> {
                                             icon(IconName.VIDEO_CAMERA)
-                                            text("REC", style = TextStyle.META)
+                                            text(if (ui.demoRecording) "DEMO" else "REC", style = TextStyle.META)
                                         }
                                         ui.memorySending -> icon(IconName.PAPER_AIRPLANE)
                                         else -> text(" ", style = TextStyle.META)
@@ -596,6 +641,13 @@ class GlassesViewModel : ViewModel() {
             ?.edit()?.putBoolean(KEY_SPEAK_REPLIES, enabled)?.apply()
         _ui.update { it.copy(speakReplies = enabled) }
         if (enabled) speaker() else speaker?.stop()
+    }
+
+    /** Voice from the camera stream's audio on or off, remembered; takes effect the next time the camera opens. */
+    fun setCameraAudio(enabled: Boolean) {
+        appContext?.getSharedPreferences(PREFS, android.content.Context.MODE_PRIVATE)
+            ?.edit()?.putBoolean(KEY_CAMERA_AUDIO, enabled)?.apply()
+        _ui.update { it.copy(cameraAudio = enabled) }
     }
 
     private fun speakRepliesSetting(context: android.content.Context) =
@@ -1126,6 +1178,10 @@ class GlassesViewModel : ViewModel() {
     private var memoryLoop: Job? = null
     private val memoryCameraJobs = mutableListOf<Job>()
     private var memoryStreamId = ""
+    private var lastFrameAtMs = 0L
+    private var glassesMicGranted = false // the Meta AI app's microphone permission for this app (camera stream audio)
+    private var memoryCameraHasAudio = false // the open camera was asked for PCM audio
+    @Volatile private var pcmSink: ((ByteArray) -> Unit)? = null // where the camera's audio goes: set while recording
     private var memorySent = 0
     private var memoryStored = 0
     @Volatile private var singleRequested = false // the next stream frame goes up as a single photo
@@ -1156,14 +1212,34 @@ class GlassesViewModel : ViewModel() {
         }
         memoryChannel.start()
         if (_ui.value.speakReplies) speaker() // warm the engine up: its first start takes a moment
-        say("Memory mode armed. Double tap or double press to stream, tap or press once for one photo, hold to talk.")
+        if (_ui.value.production) {
+            productionNoteClear()
+            startMemoryStream() // production streams all the time
+            say("Production mode running. Press the capture button (or tap the band) to talk.")
+        } else {
+            say("Memory mode armed. Double tap or double press to stream, tap or press once for one photo, hold to talk.")
+        }
     }
 
     private fun handleMemoryInput(event: InputEvent) {
-        // While talking, any press or tap ends the message. The rest of a double press (or a second tap)
-        // that ended it arrives just after, and must not start a stream.
-        if (_ui.value.voiceRecording) return stopVoice()
-        if (SystemClock.elapsedRealtime() - voiceStoppedAtMs < VOICE_STOP_GRACE_MS) return
+        val now = SystemClock.elapsedRealtime()
+        // While talking, any press or tap ends the message. The rest of the press that started it (a hold is
+        // reported after a short press, a double press as two) arrives just after and must not end it at once.
+        if (_ui.value.voiceRecording) {
+            if (now - voiceStartedAtMs < VOICE_START_GRACE_MS) return
+            return stopVoice()
+        }
+        // The rest of a double press (or a second tap) that ended a message must not start a stream or a new one.
+        if (now - voiceStoppedAtMs < VOICE_STOP_GRACE_MS) return
+        if (_ui.value.production) {
+            // Production: the streaming never stops and there are no photos, so every press, hold or tap on the
+            // glasses (capture button, touchpad, Neural Band) starts a voice message.
+            if (event is InputEvent.Capture || event is InputEvent.Select) {
+                pendingShortPress?.cancel()
+                startVoice()
+            }
+            return
+        }
         when (event) {
             is InputEvent.Capture -> when (event.pressType) {
                 // Hold the capture button to talk. A hold may be reported after a short press: drop that.
@@ -1213,6 +1289,7 @@ class GlassesViewModel : ViewModel() {
         if (_ui.value.memoryStreaming) return
         if (!openMemoryCamera(s)) return
         memoryStreamId = java.util.UUID.randomUUID().toString()
+        lastFrameAtMs = SystemClock.elapsedRealtime()
         memorySent = 0
         memoryStored = 0
         _ui.update { it.copy(memoryStreaming = true, memoryStatus = "Streaming, waiting for video...") }
@@ -1234,6 +1311,7 @@ class GlassesViewModel : ViewModel() {
 
     fun stopMemoryStream() {
         if (!_ui.value.memoryStreaming) return
+        videoPausedForVoice = false
         memoryLoop?.cancel()
         memoryLoop = null
         // A photo asked of the stream will not come now; one that opened the camera itself closes it.
@@ -1294,6 +1372,128 @@ class GlassesViewModel : ViewModel() {
         }
     }
 
+    // ------------------------------------------------------------ production
+
+    /*
+     * Production mode is memory mode that runs by itself: [superviseProduction] (called every couple of seconds
+     * by the Activity) opens the session once the glasses are registered, memory mode then streams all the time,
+     * and a session that ends is opened again after a growing delay. The glasses' buttons only start voice
+     * messages (see handleMemoryInput). The developer options turn it off ([setProduction]) so the other modes
+     * can be armed by hand; leaving them turns it on again.
+     */
+    private var productionJob: Job? = null
+    private var productionBlocked = false // the camera permission was refused: wait for Retry
+    private var nextArmAtMs = 0L
+    private var productionBackoffMs = ARM_BACKOFF_MIN_MS
+    private var armedAtMs = 0L
+
+    fun superviseProduction(requestPermission: suspend (Permission) -> PermissionStatus) {
+        val ui = _ui.value
+        if (!ui.production || !ui.initialized || session != null || productionBlocked) return
+        if (productionJob?.isActive == true || SystemClock.elapsedRealtime() < nextArmAtMs) return
+        if (ui.deviceCount == 0 && !ui.mockEnabled) return // not registered yet: the screen offers Register
+        productionJob = viewModelScope.launch {
+            mode = Mode.MEMORY
+            _ui.update { it.copy(productionNote = "Connecting to the glasses...") }
+            armedAtMs = SystemClock.elapsedRealtime()
+            when (openSessionNow(requestPermission)) {
+                Opened.YES -> Unit
+                Opened.DENIED -> {
+                    mode = Mode.NONE
+                    productionBlocked = true
+                    _ui.update {
+                        it.copy(
+                            productionBlocked = true,
+                            productionNote = "The glasses' camera permission was refused. Tap Retry and allow it in the Meta AI app.",
+                        )
+                    }
+                }
+                Opened.FAILED -> {
+                    mode = Mode.NONE
+                    scheduleRearm("Could not reach the glasses")
+                }
+            }
+        }
+    }
+
+    private fun productionNoteClear() {
+        productionBackoffMs = ARM_BACKOFF_MIN_MS
+        _ui.update { it.copy(productionNote = "") }
+    }
+
+    /** Tries again after the camera permission was refused. */
+    fun retryProduction() {
+        productionBlocked = false
+        nextArmAtMs = 0L
+        _ui.update { it.copy(productionBlocked = false, productionNote = "") }
+    }
+
+    /** Production mode on or off. Off (the developer options) disarms whatever runs; on starts again by itself. */
+    fun setProduction(enabled: Boolean) {
+        if (_ui.value.production == enabled) return
+        productionBlocked = false
+        nextArmAtMs = 0L
+        productionBackoffMs = ARM_BACKOFF_MIN_MS
+        _ui.update { it.copy(production = enabled, productionBlocked = false, productionNote = "") }
+        if (!enabled) {
+            productionJob?.cancel()
+            if (session != null) stopStreaming()
+            appContext?.let { ProductionService.stop(it) }
+        } else {
+            appContext?.let { ProductionService.start(it) }
+        }
+    }
+
+    /** Waits before the next attempt: 3 s, doubling up to 30 s while sessions keep failing, back to 3 s after a good run. */
+    private fun scheduleRearm(note: String) {
+        val ranMs = SystemClock.elapsedRealtime() - armedAtMs
+        productionBackoffMs = if (ranMs > ARM_GOOD_RUN_MS) ARM_BACKOFF_MIN_MS
+        else (productionBackoffMs * 2).coerceAtMost(ARM_BACKOFF_MAX_MS)
+        nextArmAtMs = SystemClock.elapsedRealtime() + productionBackoffMs
+        _ui.update { it.copy(productionNote = "$note. Trying again in ${productionBackoffMs / 1000} s...") }
+    }
+
+    // ------------------------------------------------------------------ demo recording
+
+    /** The tag frames are stored under while a demo is being recorded; empty when not (read from the upload loop). */
+    @Volatile private var activeDemo = ""
+
+    /** The tag field: what is typed is remembered across app starts. */
+    fun setDemoTag(text: String) {
+        appContext?.getSharedPreferences(PREFS, android.content.Context.MODE_PRIVATE)
+            ?.edit()?.putString(KEY_DEMO_TAG, text)?.apply()
+        _ui.update { it.copy(demoTag = text) }
+    }
+
+    /**
+     * Starts recording a demo: from now on the frames of the (always running) stream are stored in the backend as
+     * memories whose collection is the cleaned tag, so the demo can be searched and filtered by it. The usual
+     * rule still decides which frames are stored (a changed scene, or every 10 s), not every frame.
+     */
+    fun startDemo() {
+        val ui = _ui.value
+        if (ui.demoRecording) return
+        val tag = cleanDemoTag(ui.demoTag)
+            ?: return say("Type a tag for the demo first (letters, digits, - and _)")
+        if (!ui.memoryArmed || !ui.memoryStreaming) return say("Wait until the stream is running, then record the demo")
+        activeDemo = tag
+        _ui.update { it.copy(demoTag = tag, demoRecording = true, demoSent = 0, demoStored = 0) }
+        setDemoTag(tag) // shows and remembers the cleaned tag
+        feedback?.started()
+        say("Recording demo '$tag'")
+        viewModelScope.launch { renderMemoryOnGlasses?.invoke() }
+    }
+
+    fun stopDemo() {
+        if (!_ui.value.demoRecording) return
+        val tag = activeDemo
+        activeDemo = ""
+        _ui.update { it.copy(demoRecording = false) }
+        feedback?.done()
+        say("Demo '$tag' stopped: ${_ui.value.demoStored} stills stored in the backend")
+        viewModelScope.launch { renderMemoryOnGlasses?.invoke() }
+    }
+
     // ------------------------------------------------------------------ voice
 
     private var voice: VoiceInput? = null
@@ -1301,6 +1501,9 @@ class GlassesViewModel : ViewModel() {
     private var voiceLimit: Job? = null
     private var voiceGeneration = 0 // counts voice messages started, so a reply's auto-listen can tell it is stale
     private var voiceStoppedAtMs = 0L
+    private var voiceStartedAtMs = 0L
+    private var voiceFromPcm = false // this message uses the camera stream's audio
+    @Volatile private var videoPausedForVoice = false // the camera is closed while the microphone is open
     private var lastVoiceRenderMs = 0L
 
     fun toggleVoice() {
@@ -1336,22 +1539,33 @@ class GlassesViewModel : ViewModel() {
                 _ui.update { it.copy(memoryStatus = problem) }
                 stopVoice() // sends whatever was heard before the error
             },
+            onSilence = { stopVoice() }, // VoiceInput.SILENCE_END_MS after the last words
+            onReady = { viaBluetooth -> feedback?.ready(viaBluetooth) }, // the "speak now" beep
         ).also { voice = it }
         messageClearJob?.cancel()
         speaker?.stop() // the microphone must not hear a reply still being read
         voiceGeneration++
+        voiceStartedAtMs = SystemClock.elapsedRealtime()
         _ui.update {
             it.copy(
                 voiceRecording = true, voiceQuestion = asQuestion, voiceText = "", glassesMessage = null,
                 memoryStatus = "Opening the microphone...",
             )
         }
-        feedback?.started()
+        feedback?.pressed() // only a buzz: the beep comes when the microphone is really open
+        // The camera's own audio when the open camera has it: no Bluetooth microphone, and the video keeps running.
+        // Otherwise the hands-free microphone, which shares its Bluetooth link with the video: that is paused.
+        val fromPcm = _ui.value.cameraAudio && memoryCameraHasAudio && stream != null && v.pcmSupported &&
+            !videoPausedForVoice
+        voiceFromPcm = fromPcm
+        if (fromPcm) pcmSink = v::feedPcm else pauseVideoForVoice()
         voiceStart = viewModelScope.launch {
             renderMemoryOnGlasses?.invoke()
-            if (!v.start()) {
+            if (!v.start(fromPcm)) {
                 voiceLimit?.cancel()
+                pcmSink = null
                 _ui.update { it.copy(voiceRecording = false) }
+                resumeVideoAfterVoice()
                 renderMemoryOnGlasses?.invoke()
                 return@launch
             }
@@ -1377,10 +1591,16 @@ class GlassesViewModel : ViewModel() {
                 renderMemoryOnGlasses?.invoke()
                 voiceStart?.join() // a press during the Bluetooth set-up waits for it, so nothing is left open
                 val text = voice?.finish().orEmpty()
+                pcmSink = null
                 _ui.update { it.copy(voiceText = text) }
                 if (text.isBlank()) {
                     feedback?.failed()
-                    _ui.update { it.copy(memoryStatus = "Heard nothing") }
+                    val silent = voiceFromPcm && (voice?.pcmBytes ?: 0L) == 0L
+                    _ui.update {
+                        it.copy(
+                            memoryStatus = if (silent) "No audio came from the glasses' camera stream" else "Heard nothing",
+                        )
+                    }
                     return@launch
                 }
                 _ui.update { it.copy(memoryStatus = "Sending \"$text\"") }
@@ -1404,17 +1624,44 @@ class GlassesViewModel : ViewModel() {
                 }
             } finally {
                 _ui.update { it.copy(voiceSending = false, voiceQuestion = false) }
+                // A reply that asks for a question opens the microphone again at once: keep the video off.
+                if (!listenAgain) resumeVideoAfterVoice()
                 renderMemoryOnGlasses?.invoke()
             }
             // The reply asked for a question about the photos: listen for it straight away, once the reply has
             // been read, or the microphone would hear it.
             if (listenAgain && speaker?.awaitDone() == true) delay(BLUETOOTH_TAIL_MS)
             // Skip it if the wearer started talking themselves while the reply was read.
-            if (listenAgain && _ui.value.memoryArmed && voiceGeneration == generation) startVoice(asQuestion = true)
+            if (listenAgain) {
+                if (_ui.value.memoryArmed && voiceGeneration == generation) startVoice(asQuestion = true)
+                else resumeVideoAfterVoice()
+            }
+        }
+    }
+
+    /**
+     * Closes the camera while the microphone is open. The glasses' microphone and the video both use the same
+     * Bluetooth link, and with the video running the speech came through with words missing. The stream
+     * (and the upload loop, which just waits) carries on after [resumeVideoAfterVoice].
+     */
+    private fun pauseVideoForVoice() {
+        if (!_ui.value.memoryStreaming || videoPausedForVoice) return
+        videoPausedForVoice = true
+        closeMemoryCamera()
+    }
+
+    private fun resumeVideoAfterVoice() {
+        if (!videoPausedForVoice) return
+        videoPausedForVoice = false
+        val s = session
+        if (s != null && _ui.value.memoryStreaming && _ui.value.memoryArmed) {
+            lastFrameAtMs = SystemClock.elapsedRealtime() // the camera needs a moment: not a stuck stream
+            openMemoryCamera(s)
         }
     }
 
     private fun cancelVoice() {
+        pcmSink = null
         voiceStart?.cancel()
         voiceLimit?.cancel()
         voice?.cancel()
@@ -1424,7 +1671,18 @@ class GlassesViewModel : ViewModel() {
     private fun openMemoryCamera(s: DeviceSession): Boolean {
         if (camera != null) return true
         // 504x896 at 2 fps: the lowest frame rate the glasses offer, enough for memories and triggers.
-        val config = StreamConfiguration(videoQuality = VideoQuality.MEDIUM, frameRate = 2, compressVideo = true)
+        val withAudio = _ui.value.cameraAudio && glassesMicGranted && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+        val config = if (withAudio) {
+            // 16 kHz mono PCM next to the video, for the voice messages (see VoiceInput.feedPcm).
+            StreamConfiguration(
+                audioCodec = AudioCodec.PCM(AudioSampleRate.RATE_16000, 1),
+                videoQuality = VideoQuality.MEDIUM,
+                frameRate = 2,
+                compressVideo = true,
+            )
+        } else {
+            StreamConfiguration(videoQuality = VideoQuality.MEDIUM, frameRate = 2, compressVideo = true)
+        }
         var opened = false
         s.addCamera(config).fold(
             onSuccess = { cam ->
@@ -1437,6 +1695,17 @@ class GlassesViewModel : ViewModel() {
                 val generation = synchronized(snapLock) { ++memoryCameraGeneration }
                 memoryCameraJobs += viewModelScope.launch(Dispatchers.Default) {
                     st.videoStream.collect { handleSnapFrame(it) { memoryCameraGeneration == generation } }
+                }
+                memoryCameraHasAudio = withAudio
+                if (withAudio) {
+                    memoryCameraJobs += viewModelScope.launch(Dispatchers.Default) {
+                        st.audioStream.collect { frame ->
+                            // Only while a voice message is being recorded; the rest of the time it is dropped.
+                            val sink = pcmSink ?: return@collect
+                            val buf = frame.buffer.duplicate()
+                            sink(ByteArray(buf.remaining()).also { buf.get(it) })
+                        }
+                    }
                 }
                 st.start().onFailure { error, _ -> say("Stream start failed: ${error.description}") }
                 opened = true
@@ -1453,6 +1722,7 @@ class GlassesViewModel : ViewModel() {
     private fun closeMemoryCamera() {
         memoryCameraJobs.forEach { it.cancel() }
         memoryCameraJobs.clear()
+        memoryCameraHasAudio = false
         stream?.stop()
         camera?.stop()
         stream = null
@@ -1465,9 +1735,11 @@ class GlassesViewModel : ViewModel() {
     }
 
     private suspend fun memoryCycle() {
+        if (videoPausedForVoice) return _ui.update { if (it.voiceRecording) it else it.copy(memoryStatus = "Video paused for voice") }
         val decoder = synchronized(snapLock) { snapDecoder }
-            ?: return _ui.update { it.copy(memoryStatus = "Streaming, waiting for video...") }
-        val jpeg = grabFrame(decoder) ?: return _ui.update { it.copy(memoryStatus = "No video frame") }
+            ?: return noFrame("Streaming, waiting for video...")
+        val jpeg = grabFrame(decoder) ?: return noFrame("No video frame")
+        lastFrameAtMs = SystemClock.elapsedRealtime()
         val single = singleRequested
         singleRequested = false
         try {
@@ -1478,6 +1750,20 @@ class GlassesViewModel : ViewModel() {
                 renderMemoryOnGlasses?.invoke()
             }
         }
+    }
+
+    /**
+     * No frame this cycle. In production a camera that stays silent is closed and opened again: nobody is at
+     * the phone to press a button, and the stream must not stay dead.
+     */
+    private fun noFrame(status: String) {
+        _ui.update { it.copy(memoryStatus = status) }
+        val s = session ?: return
+        if (!_ui.value.production || SystemClock.elapsedRealtime() - lastFrameAtMs < NO_FRAME_RESTART_MS) return
+        lastFrameAtMs = SystemClock.elapsedRealtime()
+        Log.w("GlassesVM", "no video for ${NO_FRAME_RESTART_MS / 1000} s, restarting the camera")
+        closeMemoryCamera()
+        openMemoryCamera(s)
     }
 
     private suspend fun grabFrame(decoder: SnapshotDecoder): ByteArray? =
@@ -1498,8 +1784,12 @@ class GlassesViewModel : ViewModel() {
                 _ui.update { it.copy(photos = PhotoStore.list(ctx)) }
             }
         }
-        when (val out = memoryChannel.send(jpeg, source, if (source == "stream") memoryStreamId else "")) {
+        val demo = activeDemo // read once: a demo can end while the frame is on its way
+        when (val out = memoryChannel.send(jpeg, source, if (source == "stream") memoryStreamId else "", demo)) {
             is FrameOutcome.Ok -> {
+                if (demo.isNotEmpty() && demo == activeDemo) {
+                    _ui.update { it.copy(demoSent = it.demoSent + 1, demoStored = it.demoStored + if (out.stored) 1 else 0) }
+                }
                 if (source == "stream") {
                     memorySent++
                     if (out.stored) memoryStored++
@@ -1522,6 +1812,10 @@ class GlassesViewModel : ViewModel() {
         _ui.update { it.copy(glassesMessage = message) }
         feedback?.done()
         // Not while the microphone is open: the voice message would pick it up, and this one is replaced anyway.
+        Log.d(
+            "GlassesVM",
+            "message ${message.type}: '${message.spoken}' (read aloud: ${_ui.value.speakReplies && !_ui.value.voiceRecording})",
+        )
         if (_ui.value.speakReplies && !_ui.value.voiceRecording) speaker()?.speak(message.spoken)
         renderMemoryOnGlasses?.invoke()
         messageClearJob?.cancel()
@@ -1625,12 +1919,14 @@ class GlassesViewModel : ViewModel() {
         memoryPhotoJob?.cancel()
         memoryPhotoJob = null
         cancelVoice()
+        activeDemo = ""
+        videoPausedForVoice = false
         speaker?.stop()
         singleRequested = false
         renderMemoryOnGlasses = null
         _ui.update {
             it.copy(
-                quickArmed = false, snapArmed = false, liveArmed = false, liveImage = null, liveStatus = "",
+                demoRecording = false, quickArmed = false, snapArmed = false, liveArmed = false, liveImage = null, liveStatus = "",
                 memoryArmed = false, memoryStreaming = false, memorySending = false, glassesMessage = null,
                 voiceRecording = false, voiceSending = false, voiceText = "", voiceQuestion = false,
             )
@@ -1638,6 +1934,8 @@ class GlassesViewModel : ViewModel() {
         camera = null
         stream = null
         session = null // a stopped session can't be restarted; create a new one next time
+        productionJob = null
+        if (_ui.value.production) scheduleRearm("Glasses disconnected")
     }
 
     private fun releaseDecoder() {
@@ -1654,10 +1952,17 @@ class GlassesViewModel : ViewModel() {
 
     private companion object {
         const val MEMORY_FRAME_MS = 500L // 2 frames a second
+        const val NO_FRAME_RESTART_MS = 15_000L // production: no video for this long restarts the camera
+        const val ARM_BACKOFF_MIN_MS = 3_000L // production: delay before opening a session again
+        const val ARM_BACKOFF_MAX_MS = 30_000L
+        const val ARM_GOOD_RUN_MS = 30_000L // a session that lasted this long resets the delay
+        const val VOICE_START_GRACE_MS = 800L // presses this soon after a voice message started are part of it
         const val DOUBLE_TAP_MS = 450L // two taps closer than this are a double tap
         const val SINGLE_WARMUP_MS = 1_200L // after the camera opens, before a single photo is taken
         const val PREFS = "glasses_settings"
         const val KEY_SPEAK_REPLIES = "speak_replies"
+        const val KEY_CAMERA_AUDIO = "camera_audio"
+        const val KEY_DEMO_TAG = "demo_tag"
         const val MESSAGE_MS = 10_000L // how long a trigger message stays on the glasses
         const val VOICE_MAX_MS = 60_000L // a voice message ends by itself after this
         const val BLUETOOTH_TAIL_MS = 300L // after a reply is read, for its last audio to reach the glasses
@@ -1667,6 +1972,8 @@ class GlassesViewModel : ViewModel() {
     }
 
     override fun onCleared() {
+        appContext?.let { ProductionService.stop(it) }
+        _ui.update { it.copy(production = false) } // no new session from the loop while this shuts down
         feedback?.release()
         stopStreaming()
         cleanup()

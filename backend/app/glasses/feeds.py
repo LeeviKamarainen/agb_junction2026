@@ -37,6 +37,7 @@ SUMMARY: set[str] = {"question", "goal", "reminder", "trigger", "warning"}
 IDLE_S = 60.0  # a feed with no frame for this long is dropped
 LIVE_S = 5.0  # a feed whose last frame is newer than this counts as live
 MAX_FEEDS = 64  # beyond this the feed idle longest makes room
+MAX_KNOWN = 512  # feed ids whose owner is remembered after the feed went quiet
 CLIENT_MAX = 40
 EVENTS_S = 1800.0  # how long a user's log keeps an event
 MAX_EVENTS = 300  # events kept per user
@@ -94,6 +95,9 @@ class _Feed:
 _lock = threading.Lock()
 _feeds: dict[tuple, _Feed] = {}
 _events: dict[int, deque] = {}  # owner id -> (time.monotonic(), FeedEvent), oldest first
+# Feed id -> owner id, kept after the feed is dropped, so the admin can still ask about a stream
+# that stopped (its page keeps showing the last frame and log).
+_known: dict[str, int] = {}
 
 
 def note(
@@ -168,6 +172,10 @@ def record(
             digest = hashlib.sha1(repr(key).encode()).hexdigest()[:12]
             feed = _Feed(digest, client, user, kind, stream_id, demo, wall, owner_id)
             _feeds[key] = feed
+            _known.pop(digest, None)
+            _known[digest] = owner_id
+            while len(_known) > MAX_KNOWN:
+                del _known[next(iter(_known))]  # the oldest
         feed.jpeg, feed.last_at, feed.last_seen, feed.demo = jpeg, wall, now, demo
         feed.frames += 1
         feed.recent.append(now)
@@ -237,8 +245,15 @@ def latest(feed_id: str) -> bytes | None:
         return next((feed.jpeg for feed in _feeds.values() if feed.id == feed_id), None)
 
 
+def owner_of(feed_id: str) -> int | None:
+    """Whose feed this is, also for a while after it stopped; None for an unknown id."""
+    with _lock:
+        return _known.get(feed_id)
+
+
 def reset() -> None:
     """Forget every feed (tests)."""
     with _lock:
         _feeds.clear()
         _events.clear()
+        _known.clear()

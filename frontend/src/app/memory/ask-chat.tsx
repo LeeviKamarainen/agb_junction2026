@@ -62,6 +62,8 @@ export function AskChat({
   onDone,
   onAnswer,
   voice = false,
+  endpoint = "/api/ask/stream",
+  onListening,
   ref,
 }: {
   compact?: boolean;
@@ -84,6 +86,10 @@ export function AskChat({
   onAnswer?: (answer: string, question: string) => void;
   /** A hold-to-talk microphone next to Ask: what is said is asked on release. */
   voice?: boolean;
+  /** Where questions go: a route that answers as /api/ask/stream does, one Step per line. */
+  endpoint?: string;
+  /** Its microphone opened or closed. */
+  onListening?: (listening: boolean) => void;
   ref?: Ref<AskChatHandle>;
 } = {}) {
   const [exchanges, setExchanges] = useState<Exchange[]>([]);
@@ -144,7 +150,7 @@ export function AskChat({
         return;
       }
       await beforeAsk?.();
-      const response = await fetch("/api/ask/stream", {
+      const response = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ question: trimmed, collections: active }),
@@ -288,6 +294,7 @@ export function AskChat({
             disabled={busy}
             className="h-10"
             onText={(text) => void ask(text)}
+            onListening={onListening}
           />
         )}
         <Button type="submit" size="lg" disabled={busy || !question.trim()}>
