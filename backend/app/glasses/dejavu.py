@@ -7,10 +7,12 @@ show the same thing. The nearest stills are only the most alike, not the same (m
 memory/notebooks/RECALL-1: a place never visited still scores 0.7 to 0.9), so the model is told
 to be strict, and the wearer hears a plain no when none is.
 
-On the home page the view can play a demo clip instead of a camera (`demo.DemoView`). Its frames
-are demo memories already (app/demo.py), so what is in front of the wearer is the clip's memory at
-the point it is playing, and "before" is only that clip's earlier frames, outside the current
-look. With a camera, "before" is only the wearer's own stills: each looks at one memory.
+On /try the view can play a demo clip instead of a camera (`demo.DemoView`). Its frames are demo
+memories already (app/demo.py), so what is in front of the wearer is the clip's memory at the
+point it is playing, and "before" is only that clip's earlier frames, outside the current look.
+Otherwise "before" is every still the wearer may see: their own and the demo memories (glasses
+demos kept in the repository, the demo clips' frames), or with `mine` only their own, as /try's
+camera asks, whose memory is what the visitor's camera saw.
 """
 
 import json
@@ -25,7 +27,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from app import demo, media, vectors
 from app.auth import Viewer
 from app.llm import Chat
-from app.models import Memory
+from app.models import Memory, Showcase
 from app.search import NEAR_COPY_S, TABLE
 
 FRESH_S = 30.0  # the newest still counts as what the wearer is looking at for this long
@@ -92,18 +94,34 @@ def _aware(moment: datetime) -> datetime:
 
 
 async def recall(
-    session: AsyncSession, chat: Chat, viewer: Viewer, view: demo.DemoView | None = None
+    session: AsyncSession,
+    chat: Chat,
+    viewer: Viewer,
+    view: demo.DemoView | None = None,
+    mine: bool = False,
 ) -> Recall | None:
     """Where the wearer has seen what their newest still shows, or what the demo clip they are
-    watching shows now (`view`). None when there is no such still: none from the last FRESH_S,
-    or the clip is not stored as demo memories (yet). Raises UpstreamError when the chat model
-    fails and ValueError when its answer cannot be read."""
+    watching shows now (`view`); with `mine`, among their own stills only. None when there is
+    no such still: none from the last FRESH_S, or the clip is not stored as demo memories (yet).
+    Raises UpstreamError when the chat model fails and ValueError when its answer cannot be
+    read."""
     now = datetime.now(UTC)
     connection = await session.connection()
+    titles: dict[int, str] = {}
 
-    def label(moment: datetime) -> str:
-        """When it was seen, as the wearer hears it: on the clip's own clock for a demo clip."""
-        return ago(max(0.0, ((now if view is None else current_seen) - moment).total_seconds()))
+    async def label(memory: Memory, moment: datetime) -> str:
+        """When it was seen, as the wearer hears it: on the clip's own clock for the clip they
+        watch, and otherwise a demo clip's frame by the clip's title, since it is dated when the
+        clip was stored."""
+        if view is not None:
+            return ago(max(0.0, (current_seen - moment).total_seconds()))
+        clip = demo.clip_of(memory.source)
+        if clip is None:
+            return ago((now - moment).total_seconds())
+        if clip not in titles:
+            showcase = await session.get(Showcase, clip)
+            titles[clip] = showcase.title if showcase else "another demo"
+        return f"in the demo “{titles[clip]}”"
 
     if view is None:
         current = (
@@ -141,7 +159,6 @@ async def recall(
                 break
             began = min(began, hit.created_at)
         until: datetime | None = began - timedelta(seconds=GAP_S)
-        where: dict = {"kind": "image", "owner": viewer.id}
         before: set[int] | None = None
     else:
         clip = await demo.clip_frames(session, view.clip_id)
@@ -158,10 +175,10 @@ async def recall(
         # The clip's frames before the current look at the thing (`GAP_S` ahead of it).
         before = demo.frames_until(clip, current_at - GAP_S)
         until = None
-        where = {"kind": "image"}
-        if viewer.owners is not None:
-            where["owner"] = viewer.owners
 
+    where: dict = {"kind": "image"}
+    if (owners := viewer.scope(mine)) is not None:
+        where["owner"] = owners
     hits = await vectors.nearest(
         connection, TABLE, vector, SHOWN * 5, until=until, where=where, ids=before
     )
@@ -179,7 +196,8 @@ async def recall(
                 abs((hit.created_at - at).total_seconds()) > NEAR_COPY_S for _, _, at, _ in earlier
             )
         ):
-            earlier.append((hit.id, memory.image_file, hit.created_at, label(hit.created_at)))
+            label_ = await label(memory, hit.created_at)
+            earlier.append((hit.id, memory.image_file, hit.created_at, label_))
     if not earlier:
         return Recall([], "I have nothing from before to compare this with.", None)
 

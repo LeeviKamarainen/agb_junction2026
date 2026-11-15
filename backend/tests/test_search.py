@@ -484,6 +484,8 @@ def test_a_question_on_a_clip_needs_it_published_and_stored(client, db, path):
         {"demo_at_s": 3},
         {"demo_clip_id": 1, "demo_at_s": -1},
         {"demo_clip_id": 1, "demo_at_s": 3, "collections": ["glasses"]},
+        # A clip is demo memory, never the asker's own.
+        {"demo_clip_id": 1, "demo_at_s": 3, "mine": True},
     ],
 )
 def test_a_demo_view_is_a_clip_and_a_time_into_it_alone(client, path, view):

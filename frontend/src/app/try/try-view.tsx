@@ -73,7 +73,8 @@ const CAMERA_EXAMPLES = [
 ];
 const DEJA_VU_EXAMPLE = "Where have I seen this before?";
 // The collection camera frames are stored in (the backend's default for /api/glasses/frames): with
-// the camera on, questions and the map cover only the visitor's own camera memory.
+// the camera on, questions, déjà vu and the map cover only the visitor's own frames in it (`mine`:
+// the admin's own too, who would otherwise see everyone's).
 const CAMERA_SCOPE = ["glasses"];
 
 /** While Gemma searches: the question small, as the answer screen will show it. */
@@ -238,7 +239,7 @@ export function TryView() {
   async function loadCameraTrail() {
     const after = lastFetched.current;
     const { data, error: problem } = await api.GET("/api/memories/vectors", {
-      params: { query: { collection: CAMERA_SCOPE, after_id: after ?? undefined } },
+      params: { query: { collection: CAMERA_SCOPE, mine: true, after_id: after ?? undefined } },
       cache: "no-store",
     });
     if (shownKey.current !== "camera") return; // the visitor moved on meanwhile
@@ -509,14 +510,16 @@ export function TryView() {
     setHistory((list) => [{ id, question: asked }, ...list].slice(0, HISTORY));
     show({ screen: thinkingScreen(asked), evidence: null, seconds: null });
     // The memory being watched, up to now: the clip up to the playhead, or the camera's frames.
-    const scope = clip ? { demo_clip_id: clip.id, demo_at_s: position() } : null;
+    const scope = clip
+      ? { demo_clip_id: clip.id, demo_at_s: position(), mine: false }
+      : { mine: true };
     const seen = generation.current;
     try {
       await ensureSession();
       if (RECALL.test(asked)) {
         // Déjà vu, as the glasses ask it: where what is in view was seen before.
         const { data, error: problem } = await api.POST("/api/glasses/command", {
-          body: { question: asked, ...(scope ?? {}) },
+          body: { question: asked, ...scope },
         });
         if (problem || !data) throw new Error(errorText(problem, "Could not ask the glasses"));
         record(id, { answer: data.speech ?? "" });
@@ -525,7 +528,7 @@ export function TryView() {
         speak(data.speech ?? "");
       } else {
         const { data, error: problem } = await api.POST("/api/ask", {
-          body: { question: asked, ...(scope ?? { collections: CAMERA_SCOPE }) },
+          body: { question: asked, ...scope, collections: clip ? undefined : CAMERA_SCOPE },
         });
         if (problem || !data) throw new Error(errorText(problem, "Could not get an answer"));
         const evidence = toEvidence(data.evidence?.[0]);

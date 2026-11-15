@@ -69,18 +69,19 @@ def _stored_name(name: str) -> str:
         return name
 
 
-def _visible(query, viewer: Viewer):
-    """`query` limited to the memories `viewer` may see."""
-    owners = viewer.owners
+def _visible(query, viewer: Viewer, mine: bool = False):
+    """`query` limited to the memories `viewer` may see, or with `mine` to their own."""
+    owners = viewer.scope(mine)
     return query if owners is None else query.where(col(Memory.owner_id).in_(owners))
 
 
-def _newest(collections: list[str], viewer: Viewer):
-    """Memories `viewer` may see, newest first, only in `collections` unless it is empty."""
+def _newest(collections: list[str], viewer: Viewer, mine: bool = False):
+    """Memories `viewer` may see, or with `mine` their own, newest first, only in `collections`
+    unless it is empty."""
     query = select(Memory).order_by(col(Memory.created_at).desc(), col(Memory.id).desc())
     names = [_stored_name(name) for name in collections if name.strip()]
     query = query.where(col(Memory.collection).in_(names)) if names else query
-    return _visible(query, viewer)
+    return _visible(query, viewer, mine)
 
 
 async def _usernames(session: AsyncSession) -> dict[int, str]:
@@ -141,14 +142,21 @@ async def memory_vectors(
         int | None,
         Query(description="Only memories with a larger id: stored after the ones you have"),
     ] = None,
+    mine: Annotated[
+        bool,
+        Query(description="Only your own: not the demo memories, nor (admin) anyone else's"),
+    ] = False,
 ):
     """The stored embeddings with their memories, for drawing a map: the newest 2000.
 
     Each embedding is base64 of its float32 numbers, little-endian: a third of the size of a
     JSON list. A frame of a published demo clip says which clip it is from (`clip_id`) and how
-    many seconds into the clip it was taken (`clip_at_s`).
+    many seconds into the clip it was taken (`clip_at_s`). A clip is demo memory, so `clip`
+    with `mine` is a 422.
     """
-    query = _newest(collection, viewer)
+    if clip is not None and mine:
+        raise HTTPException(422, "A demo clip is demo memory, never your own: leave out mine")
+    query = _newest(collection, viewer, mine=mine)
     if clip is not None:
         query = query.where(col(Memory.source).startswith(demo.clip_prefix(clip)))
     if after_id is not None:
@@ -353,7 +361,8 @@ async def ask(
     embed: EmbedderDep,
 ):
     """Answer a question from the memories you may see: the chat model searches them, then
-    answers. With demo_clip_id and demo_at_s, only from that clip up to there, at its time."""
+    answers. With mine, only from your own; with demo_clip_id and demo_at_s, only from that clip
+    up to there, at its time."""
     memory_ids, now = await _demo_scope(session, body)
     feeds.note(viewer.id, "question", body.question, "chat")
     try:
@@ -362,7 +371,7 @@ async def ask(
             body.question,
             chat,
             embed,
-            viewer.owners,
+            viewer.scope(body.mine),
             now=now,
             collections=body.collections,
             owner_id=viewer.id,
@@ -391,7 +400,7 @@ async def ask_stream(
 
     # Read now: the request's session closes before the stream ends, and a status code can only
     # be sent before the first line.
-    owners, owner_id = viewer.owners, viewer.id
+    owners, owner_id = viewer.scope(body.mine), viewer.id
     memory_ids, now = await _demo_scope(session, body)
     feeds.note(owner_id, "question", body.question, "chat")
 

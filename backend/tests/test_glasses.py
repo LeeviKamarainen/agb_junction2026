@@ -490,15 +490,54 @@ def test_recall_only_looks_in_the_askers_memories(client, db, guest):
     assert "Not seen before" in texts(reply["screen"])
 
 
-def test_recall_on_the_camera_leaves_the_demo_memories_out(client, db):
+def own_and_demo_stills(db) -> tuple[int, int, int]:
+    """Stills as alike as can be of the admin's own (5 hours ago), of a glasses demo kept as
+    demo memories (3 hours ago, app/demo_bundles.py) and a demo clip's frame. Their ids."""
     (own,) = seen_before(db, [5])
-    seen_before(db, [3], owner=0)  # a demo memory, just as alike and newer
+    (recorded,) = seen_before(db, [3], owner=0)
+    _clip, (frame,) = demo_clip(db, "Kitchen", [(0, 0.1)])
+    return own, recorded, frame
+
+
+def test_recall_on_the_glasses_looks_in_the_demo_memories_too(client, db):
+    own, recorded, frame = own_and_demo_stills(db)
     look(client)
     use_models(chat=says('{"same": [1], "say": "Your mug."}'))
 
     reply = client.post("/api/glasses/command", json={"question": "where do I know this from"})
 
+    screen = reply.json()["screen"]
+    assert sorted(images(screen)) == [f"/api/memories/{id}/image" for id in (own, recorded, frame)]
+    said = texts(screen)
+    assert "5 hours ago" in said and "3 hours ago" in said
+    assert "in the demo “Kitchen”" in said  # dated when the clip was stored, so named instead
+
+
+def test_recall_with_mine_looks_only_in_the_askers_own_stills(client, db):
+    own, _recorded, _frame = own_and_demo_stills(db)
+    look(client)
+    use_models(chat=says('{"same": [1], "say": "Your mug."}'))
+
+    body = {"question": "where do I know this from", "mine": True}
+    reply = client.post("/api/glasses/command", json=body)
+
     assert images(reply.json()["screen"]) == [f"/api/memories/{own}/image"]
+
+
+@pytest.mark.parametrize(
+    "view",
+    [
+        {"demo_clip_id": 1, "demo_at_s": 3, "mine": True},  # a clip is demo memory, never yours
+    ],
+)
+def test_a_command_on_a_clip_is_a_time_into_it_and_never_mine(client, view):
+    use_models(chat=says('{"same": [], "say": "x"}'))
+
+    reply = client.post(
+        "/api/glasses/command", json={"question": "have I seen this before", **view}
+    )
+
+    assert reply.status_code == 422
 
 
 def demo_clip(db, title: str, frames: list[tuple[float, float]]) -> tuple[int, list[int]]:

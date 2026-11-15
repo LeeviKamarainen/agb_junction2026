@@ -213,6 +213,11 @@ class Viewer:
         """The owner ids whose memories this user sees; None for everything (the admin)."""
         return None if self.is_admin else [DEMO_OWNER, self.id]
 
+    def scope(self, mine: bool) -> list[int] | None:
+        """The owner ids a read reaches: those this user sees (`owners`), or with `mine` only
+        their own, not the demo memories nor, for the admin, anyone else's."""
+        return [self.id] if mine else self.owners
+
     def can_see(self, owner_id: int) -> bool:
         return self.is_admin or owner_id in (DEMO_OWNER, self.id)
 

@@ -280,6 +280,22 @@ def test_the_map_shows_only_what_you_see(client, two_guests):
         assert {m["text"] for m in body} == {"demo: keys on the hook", "aino: keys under the mat"}
 
 
+def test_the_map_can_show_only_your_own(client, two_guests):
+    aino, _ = two_guests
+
+    # A guest leaves out the demo memories; the admin, everyone else's too.
+    for headers, own in ((aino, "aino: keys under the mat"), ({}, "admin: private note")):
+        for params in ({"mine": True}, {"mine": True, "collection": "manual"}):
+            body = client.get("/api/memories/vectors", params=params, headers=headers).json()
+            assert [m["text"] for m in body] == [own]
+
+
+def test_the_map_of_a_demo_clip_is_never_your_own(client):
+    reply = client.get("/api/memories/vectors", params={"clip": 1, "mine": True})
+
+    assert reply.status_code == 422
+
+
 def test_collections_count_only_what_you_see(client, two_guests):
     aino, _ = two_guests
 
@@ -358,6 +374,26 @@ def test_the_streamed_answer_is_scoped_too(client, two_guests):
     assert reply.status_code == 200
     assert "ville" not in everything_said(seen)
     assert "ville" not in reply.text
+
+
+def notes_given(client, path: str, body: dict, headers: dict) -> set[str]:
+    """Which of the `two_guests` notes Gemma was given when asked through `path`."""
+    seen: list = []
+    app.dependency_overrides[get_chat] = lambda: searching_model(seen)
+    reply = client.post(path, json=body, headers=headers)
+    assert reply.status_code == 200, reply.text
+    notes = ("demo: keys on the hook", "admin: private note", "aino: keys under", "ville: keys")
+    return {note for note in notes if note in everything_said(seen)}
+
+
+@pytest.mark.parametrize("path", ["/api/ask", "/api/ask/stream"])
+def test_mine_keeps_a_question_to_your_own_memories(client, two_guests, path):
+    aino, _ = two_guests
+    body = {"question": "where are my keys?", "mine": True}
+
+    # A guest leaves out the demo memories; the admin, everyone else's too.
+    assert notes_given(client, path, body, aino) == {"aino: keys under"}
+    assert notes_given(client, path, body, {}) == {"admin: private note"}
 
 
 def test_a_guest_can_end_itself_at_once_and_the_admin_cannot(client, guest):

@@ -57,7 +57,7 @@ export function MemoryLab() {
    * their reply on the glasses view, and gives what they say for the chat. */
   async function recall(question: string): Promise<string> {
     const { data, error } = await api.POST("/api/glasses/command", {
-      body: { question },
+      body: { question, mine: false },
     });
     if (error || !data)
       throw new Error(errorText(error, "Could not ask the glasses"));

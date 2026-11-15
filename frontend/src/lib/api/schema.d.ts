@@ -434,7 +434,8 @@ export interface paths {
          *
          *     Each embedding is base64 of its float32 numbers, little-endian: a third of the size of a
          *     JSON list. A frame of a published demo clip says which clip it is from (`clip_id`) and how
-         *     many seconds into the clip it was taken (`clip_at_s`).
+         *     many seconds into the clip it was taken (`clip_at_s`). A clip is demo memory, so `clip`
+         *     with `mine` is a 422.
          */
         get: operations["memory_vectors_api_memories_vectors_get"];
         put?: never;
@@ -588,7 +589,8 @@ export interface paths {
         /**
          * Ask
          * @description Answer a question from the memories you may see: the chat model searches them, then
-         *     answers. With demo_clip_id and demo_at_s, only from that clip up to there, at its time.
+         *     answers. With mine, only from your own; with demo_clip_id and demo_at_s, only from that clip
+         *     up to there, at its time.
          */
         post: operations["ask_api_ask_post"];
         delete?: never;
@@ -801,6 +803,11 @@ export interface components {
             question: string;
             /** Collections */
             collections?: string[];
+            /**
+             * Mine
+             * @default false
+             */
+            mine: boolean;
             /** Demo Clip Id */
             demo_clip_id?: number | null;
             /** Demo At S */
@@ -905,6 +912,11 @@ export interface components {
             demo_clip_id?: number | null;
             /** Demo At S */
             demo_at_s?: number | null;
+            /**
+             * Mine
+             * @default false
+             */
+            mine: boolean;
         };
         /**
          * Credentials
@@ -2275,6 +2287,8 @@ export interface operations {
                 clip?: number | null;
                 /** @description Only memories with a larger id: stored after the ones you have */
                 after_id?: number | null;
+                /** @description Only your own: not the demo memories, nor (admin) anyone else's */
+                mine?: boolean;
             };
             header?: never;
             path?: never;

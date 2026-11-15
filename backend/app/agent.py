@@ -141,9 +141,12 @@ class AskRequest(BaseModel):
     question: str = Field(min_length=1, max_length=2000)
     # Search only these collections, whatever the model asks for. Empty: the model chooses.
     collections: list[str] = Field(default_factory=list, max_length=10)
+    # Only the asker's own memories, as well: not the demo ones, nor (for the admin) anyone
+    # else's. /try's camera, whose memory is what the visitor's camera saw.
+    mine: bool = False
     # The asker is watching this demo clip, this many seconds in: the answer comes from that clip
     # up to there only, and its time is the clip's (app/demo.py: shown_so_far). Both or neither,
-    # and not with collections, which scope a camera's memories instead.
+    # and not with collections or mine, which scope a camera's memories instead.
     demo_clip_id: int | None = None
     demo_at_s: float | None = Field(default=None, ge=0)
 
@@ -153,6 +156,8 @@ class AskRequest(BaseModel):
             raise ValueError("send demo_clip_id and demo_at_s together, or neither")
         if self.demo_clip_id is not None and self.collections:
             raise ValueError("a demo clip is searched on its own: leave out collections")
+        if self.demo_clip_id is not None and self.mine:
+            raise ValueError("a demo clip is demo memory, never your own: leave out mine")
         return self
 
     def demo_view(self) -> demo.DemoView | None:
