@@ -136,6 +136,7 @@ async def upload_frame(
     source: Annotated[frames.Source, Form()] = "single",
     stream_id: Annotated[str, Form(max_length=100)] = "",
     seen_at: Annotated[datetime | None, Form()] = None,
+    collection: Annotated[str, Form(max_length=40)] = "",
 ):
     """One frame from the glasses, with every face in it blurred first: embedded, stored as a
     memory in the glasses collection, and checked against the triggers.
@@ -143,7 +144,8 @@ async def upload_frame(
     `source` is "stream" for frames of a running stream (twice a second; a frame much like the
     last one stored from the same `stream_id` is not stored again) or "single" for a photo the
     wearer took (always stored). Most answers carry no `message`; when a trigger fires,
-    `message` is what to show on the glasses.
+    `message` is what to show on the glasses. `collection` tags what is stored (one recorded demo,
+    say; a-z, 0-9, _ and -, up to 40), "glasses" when left out.
     """
     return await actions.memory_frame(
         session,
@@ -154,6 +156,7 @@ async def upload_frame(
         source,
         stream_id,
         seen_at,
+        collection,
     )
 
 

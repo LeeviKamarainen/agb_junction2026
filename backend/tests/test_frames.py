@@ -509,6 +509,42 @@ def test_socket_memory_frame_errors_do_not_close_the_connection(client, scene, d
         assert send_socket(ws, id=2)["result"]["stored"]
 
 
+def test_a_frame_can_be_tagged_with_a_collection(client, scene):
+    tagged = client.post(
+        "/api/glasses/frames",
+        files={"frame": ("f.jpg", jpeg(), "image/jpeg")},
+        data={"collection": " Demo-Kitchen "},
+    )
+    plain = client.post(
+        "/api/glasses/frames", files={"frame": ("f.jpg", jpeg("blue"), "image/jpeg")}
+    )
+    assert tagged.status_code == 200 and plain.status_code == 200
+
+    stored = {m["id"]: m["collection"] for m in client.get("/api/memories").json()}
+    assert stored[tagged.json()["memory_id"]] == "demo-kitchen"  # cleaned like any collection
+    assert stored[plain.json()["memory_id"]] == "glasses"  # without a tag it is as before
+
+
+def test_a_frame_with_a_bad_collection_is_refused(client, scene):
+    reply = client.post(
+        "/api/glasses/frames",
+        files={"frame": ("f.jpg", jpeg(), "image/jpeg")},
+        data={"collection": "not allowed!"},
+    )
+    assert reply.status_code == 422
+    assert client.get("/api/memories").json() == []
+
+
+def test_socket_memory_frames_can_be_tagged(client, scene):
+    with client.websocket_connect("/api/glasses/ws") as ws:
+        tagged = send_socket(ws, collection="demo-kitchen")
+        bad = send_socket(ws, id=2, collection="no spaces")
+        assert tagged["result"]["stored"]
+        assert bad["type"] == "error" and bad["status"] == 422 and bad["id"] == 2
+    memory = client.get("/api/memories").json()[0]
+    assert memory["collection"] == "demo-kitchen"
+
+
 def test_socket_memory_frame_needs_an_embedder(client, scene):
     app.dependency_overrides[optional_embedder] = lambda: None
     with client.websocket_connect("/api/glasses/ws") as ws:

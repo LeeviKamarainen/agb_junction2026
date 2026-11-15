@@ -20,6 +20,7 @@ from app.auth import Viewer
 from app.glasses import dejavu, frames, reminders, screens
 from app.glasses.layout import GlassesReply
 from app.llm import Chat, Embedder, UpstreamError
+from app.search import clean_collection
 
 log = logging.getLogger(__name__)
 
@@ -36,9 +37,15 @@ async def memory_frame(
     source: frames.Source = "single",
     stream_id: str = "",
     seen_at: datetime | None = None,
+    collection: str = "",
 ) -> frames.FrameReply:
     """The memory-mode upload, shared by HTTP and the Android socket. Every face in the frame is
-    blurred first, so nothing stores, embeds or shows one."""
+    blurred first, so nothing stores, embeds or shows one. `collection` tags what is stored (a
+    recorded demo, say); blank is the usual glasses collection."""
+    try:
+        tag = clean_collection(collection) if collection.strip() else frames.COLLECTION
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
     if embed is None:
         raise HTTPException(503, "No embedding model configured: set EMBED_URL")
     if len(data) > MAX_FRAME:
@@ -46,7 +53,9 @@ async def memory_frame(
     when = seen_at if seen_at is None or seen_at.tzinfo else seen_at.replace(tzinfo=UTC)
     try:
         data = await anyio.to_thread.run_sync(faces.anonymise, data)
-        return await frames.receive(session, data, embed, chat, source, stream_id, when, viewer.id)
+        return await frames.receive(
+            session, data, embed, chat, source, stream_id, when, viewer.id, tag
+        )
     except ValueError as error:
         raise HTTPException(415, str(error)) from error
     except UpstreamError as error:
