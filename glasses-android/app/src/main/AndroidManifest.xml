@@ -8,6 +8,11 @@
     <!-- Voice messages: the glasses' microphone (a Bluetooth headset) into Android's speech recognizer -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <!-- Production mode keeps running with the phone locked: a foreground service and its notification -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <!-- Lets SpeechRecognizer and TextToSpeech find the phone's recognition and speech services (package
          visibility, Android 11+) -->
@@ -36,6 +41,11 @@
         <meta-data
             android:name="com.meta.wearable.mwdat.CLIENT_TOKEN"
             android:value="@string/mwdat_client_token" />
+
+        <service
+            android:name=".ProductionService"
+            android:exported="false"
+            android:foregroundServiceType="microphone|connectedDevice" />
 
         <activity
             android:name=".MainActivity"
