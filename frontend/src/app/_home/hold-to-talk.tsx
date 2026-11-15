@@ -17,8 +17,11 @@ export function HoldToTalk({
   disabled = false,
   className = "",
   label = "Hold to talk",
+  onListening,
 }: {
   onText: (text: string) => void;
+  /** The microphone opened or closed, e.g. for the glasses' recording light. */
+  onListening?: (listening: boolean) => void;
   disabled?: boolean;
   className?: string;
   label?: string;
@@ -63,6 +66,7 @@ export function HoldToTalk({
     listener.onend = () => {
       recognition.current = null;
       setListening(false);
+      onListening?.(false);
       setHeard("");
       const text = final.current.trim();
       if (text) onText(text);
@@ -71,6 +75,7 @@ export function HoldToTalk({
     setError(null);
     setHeard("");
     setListening(true);
+    onListening?.(true);
     listener.start();
   }
 

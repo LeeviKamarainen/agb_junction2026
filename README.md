@@ -22,7 +22,7 @@ Meta glasses ──► Android app ──WebSocket──► backend (FastAPI + S
 | Folder | What it is |
 |---|---|
 | `backend/` | FastAPI backend (SQLModel on SQLite, vector search with sqlite-vec). Stores memories, runs the ask loop, checks frames against triggers, decides what the glasses display. All routes are under `/api`. |
-| `frontend/` | Next.js web app: the **live view** (`/`), **Demos** (`/demos`), and for the admin the **Memory lab** (`/memory`) and the **glasses harness** (`/glasses`), plus the login pages. |
+| `frontend/` | Next.js web app: the **live view** (`/`), **Demos** (`/demos`), the **Memory lab** (`/memory`) for anyone logged in (a guest sees the demo memories and its own), and for the admin the **stream wall** (`/admin/streams`) and the **glasses harness** (`/glasses`), plus the login pages. |
 | `glasses-android/` | The real glasses client: an Android app that streams the Meta glasses' camera and sends frames, photos and voice to the backend; see [its README](glasses-android/README.md). |
 | `memory/` | The visual memory service that runs on the Gemma server: embeds frames, serves the embeddings and chat, and draws the memory map; see [its README](memory/README.md). Its own uv project (about 6 GB with torch). |
 | `my-glasses-app/` | A small web app for the glasses' display (React, Meta's UI toolkit), see below. |
@@ -59,7 +59,7 @@ Open http://localhost:3000 and start a **guest**: a generated name, no password,
 
 ### The live view and curated demos
 
-The home page is what the glasses see: it plays the published demo clips, or your own camera (on a phone, front or back). **Stream** sends 2 frames a second, as the glasses do, and each is checked against your triggers; a trigger's message appears on the view. Beside it, ask about the day by typing or holding **Talk**: answers are spoken and shown on the view too. Ask Gemma to warn you about something ("warn me when I see a bicycle") and the triggers for it appear below. **Fullscreen** fills the screen with the view and its controls (on an iPhone, the window). Double-tap the view to start or stop the stream.
+The home page is what the glasses see: it plays the published demo clips, or your own camera (on a phone, front or back). **Stream** sends 2 frames a second, as the glasses do, and each is checked against your triggers; a trigger's message appears on the view. Beside it, ask about the day by typing or holding **Talk**: answers are spoken and shown on the view too. Ask Gemma to warn you about something ("warn me when I see a bicycle") and the triggers for it appear below. **Glasses display** draws the glasses' own display over the video, so you see exactly what the wearer would when a trigger fires or an answer comes back. **Fullscreen** fills the screen with the view and its controls (on an iPhone, the window). Double-tap the view to start or stop the stream.
 
 Nobody needs an account: the first question or stream starts a 60-minute guest, which sees the demo memories and its own. Demo clips are only checked against the triggers; camera frames are also stored as the guest's memories.
 

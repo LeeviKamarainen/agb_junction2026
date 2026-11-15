@@ -176,7 +176,13 @@ class GlassesChannel(
         onStatus("Disconnected")
     }
 
-    suspend fun send(jpeg: ByteArray, source: String, streamId: String = ""): FrameOutcome = uploadLock.withLock {
+    /** [collection] tags what the backend stores (a recorded demo, see DemoTag.kt); blank: its usual "glasses". */
+    suspend fun send(
+        jpeg: ByteArray,
+        source: String,
+        streamId: String = "",
+        collection: String = "",
+    ): FrameOutcome = uploadLock.withLock {
         if (!configured) return@withLock FrameOutcome.Fail("Set glasses.api in local.properties")
         require(source == "single" || source == "stream")
         if (jpeg.size > 10 * 1024 * 1024) return@withLock FrameOutcome.Fail("Frame is larger than 10 MB")
@@ -186,6 +192,7 @@ class GlassesChannel(
         val result = CompletableDeferred<FrameOutcome>()
         val header = JSONObject().put("type", "memory_frame").put("id", id)
             .put("source", source).put("stream_id", streamId).put("seen_at", Instant.now().toString())
+        if (collection.isNotBlank()) header.put("collection", collection)
         try {
             synchronized(sendLock) {
                 pending[id] = result

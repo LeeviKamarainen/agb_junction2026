@@ -80,6 +80,15 @@ class GlassesChannelTest {
         ws.send("""{"type":"memory_result","id":$id,"result":{"stored":true,"message":{"type":"trigger","title":"Keys","text":"Take your keys"}}}""")
     }
 
+    @Test fun `a tagged frame carries its collection and an untagged one none`() = runBlocking {
+        socket()
+        connect()
+        withTimeout(5_000) { channel.send(byteArrayOf(1), "stream", "s", "demo-kitchen") }
+        assertEquals("demo-kitchen", headers.poll(5, TimeUnit.SECONDS)!!.getString("collection"))
+        withTimeout(5_000) { channel.send(byteArrayOf(2), "stream", "s") }
+        assertFalse(headers.poll(5, TimeUnit.SECONDS)!!.has("collection"))
+    }
+
     @Test fun `sends authenticated paired header and jpeg and parses trigger result`() = runBlocking {
         socket()
         connect()

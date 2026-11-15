@@ -23,6 +23,7 @@ from app.auth import Viewer
 from app.glasses import dejavu, feeds, frames, screens, triggers
 from app.glasses.layout import GlassesReply
 from app.llm import Chat, Embedder, UpstreamError
+from app.search import clean_collection
 
 log = logging.getLogger(__name__)
 
@@ -40,11 +41,17 @@ async def memory_frame(
     seen_at: datetime | None = None,
     store: bool = True,
     client: str = "web",
+    collection: str = "",
 ) -> frames.FrameReply:
     """The memory-mode upload, shared by HTTP and the Android socket. Every face in the frame is
     blurred first, so nothing stores, embeds or shows one. The blurred frame also becomes the
     newest of its client's feed on the admin's stream wall (feeds.py), even when it cannot be
-    embedded."""
+    embedded. `collection` tags what is stored (a recorded demo, say); blank is the usual glasses
+    collection."""
+    try:
+        tag = clean_collection(collection) if collection.strip() else frames.COLLECTION
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
     if len(data) > MAX_FRAME:
         raise HTTPException(413, "frame is larger than 10 MB")
     when = seen_at if seen_at is None or seen_at.tzinfo else seen_at.replace(tzinfo=UTC)
@@ -60,7 +67,7 @@ async def memory_frame(
     started = time.perf_counter()
     try:
         reply = await frames.receive(
-            session, data, embed, chat, source, stream_id, when, viewer.id, store
+            session, data, embed, chat, source, stream_id, when, viewer.id, store, tag
         )
     except (ValueError, UpstreamError) as error:
         feeds.frame_result(key, str(error), kind="error")

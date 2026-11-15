@@ -20,6 +20,26 @@ class CaptureFeedback(context: Context) {
         null
     }
 
+    // The same beep on the call stream, which is the one that follows the Bluetooth hands-free route to the
+    // glasses while their microphone is in use (the notification stream plays from the phone).
+    private val callTone: ToneGenerator? = try {
+        ToneGenerator(AudioManager.STREAM_VOICE_CALL, 100)
+    } catch (_: Exception) {
+        null
+    }
+
+    /** A press on the glasses was understood: a short buzz on the phone, no sound (the beep says "speak now"). */
+    fun pressed() = buzz(40)
+
+    /**
+     * The microphone is open: speak now. A beep (through the glasses when [viaBluetooth], their microphone being
+     * in use) and a buzz. The caller waits [READY_BEEP_MS] before listening so the beep is not heard as speech.
+     */
+    fun ready(viaBluetooth: Boolean) {
+        buzz(60)
+        (if (viaBluetooth) callTone else tone)?.startTone(ToneGenerator.TONE_PROP_BEEP2, READY_BEEP_MS.toInt())
+    }
+
     fun started() {
         buzz(60)
         tone?.startTone(ToneGenerator.TONE_PROP_BEEP, 80)
@@ -37,6 +57,12 @@ class CaptureFeedback(context: Context) {
 
     fun release() {
         tone?.release()
+        callTone?.release()
+    }
+
+    companion object {
+        /** How long the "speak now" beep lasts. */
+        const val READY_BEEP_MS = 150L
     }
 
     private fun buzz(ms: Long) {

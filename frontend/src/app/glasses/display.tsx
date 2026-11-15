@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  Bell,
   Brain,
   Camera,
   Check,
@@ -27,6 +28,7 @@ import type { FlexBoxNode, LayoutNode } from "./types";
 // Icon names the backend uses (backend/app/glasses/screens.py). The Android app keeps its own map.
 const icons: Record<string, LucideIcon> = {
   alert: CircleExclamationPoint,
+  bell: Bell,
   brain: Brain,
   camera: Camera,
   check: Check,

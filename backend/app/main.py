@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import APIRouter, FastAPI
 
-from app import auth, demo, faces
+from app import auth, demo, demo_bundles, faces
 from app.db import get_engine, init_db, new_session
 from app.llm import get_embedder
 from app.routes import auth as auth_routes
@@ -23,6 +23,8 @@ async def lifespan(_app: FastAPI):
     async with new_session() as session:
         await auth.ensure_admin(session)
         await auth.purge_expired_guests(session)
+    async with new_session() as session:
+        await demo_bundles.load(session)  # recorded demos kept in the repository
     sweeper = asyncio.create_task(_sweep_guests())
     loader = asyncio.create_task(_load_demo())
     yield
