@@ -25,7 +25,7 @@ from pydantic import BaseModel, Field, ValidationError
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app import media
-from app.glasses import triggers
+from app.glasses import feeds, triggers
 from app.llm import Chat, Embedder
 from app.models import Goal, Memory
 from app.search import (
@@ -113,6 +113,15 @@ STOP_WATCHING_TOOL: dict[str, Any] = {
 }
 
 
+LIVE = """
+
+The person asking is an operator watching this user's live camera stream, on the user's behalf: \
+treat their requests to watch out for something, or to stop, as the user's own. The image sent \
+with the question is the stream's newest frame, from just now. When the question is about what \
+is in view right now, answer from that frame without searching; search the memories for anything \
+earlier."""
+
+
 class AskRequest(BaseModel):
     question: str = Field(min_length=1, max_length=2000)
     # Search only these collections, whatever the model asks for. Empty: the model chooses.
@@ -176,6 +185,33 @@ def error_line(message: str) -> str:
     return Step(type="error", round=0, elapsed_ms=0, content=message).model_dump_json() + "\n"
 
 
+def _log_step(owner_id: int, step: Step) -> None:
+    """The steps worth seeing on the admin's stream wall (app/glasses/feeds.py): the searches,
+    what they found, the answer and what failed."""
+    if step.type == "tool_call":
+        args = step.arguments if isinstance(step.arguments, dict) else {}
+        what = args.get("user_query") or args.get("text") or args.get("goal_id") or ""
+        detail = {"name": step.name, "arguments": step.arguments, "round": step.round}
+        feeds.note(owner_id, "search", f"{step.name}({what})", "chat", detail, step.elapsed_ms)
+    elif step.type == "tool_result":
+        found = [
+            {"id": r.id, "kind": r.kind, "text": r.text[:120], "score": round(r.score, 4)}
+            for r in step.results or []
+        ]
+        text = (
+            f"{len(found)} result{'' if len(found) == 1 else 's'}"
+            if step.results is not None
+            else (step.content or "")
+        )
+        feeds.note(owner_id, "search", f"→ {text}", "chat", {"results": found}, step.elapsed_ms)
+    elif step.type == "answer":
+        feeds.note(
+            owner_id, "answer", step.content or "(empty answer)", "chat", None, step.elapsed_ms
+        )
+    elif step.type in ("error", "tool_error"):
+        feeds.note(owner_id, "error", step.content or step.type, "chat", None, step.elapsed_ms)
+
+
 async def run(
     session: AsyncSession,
     question: str,
@@ -185,6 +221,28 @@ async def run(
     now: datetime | None = None,
     collections: list[str] | None = None,
     owner_id: int | None = None,
+    live_frame: str | None = None,
+) -> AsyncIterator[Step]:
+    """Answer `question`, yielding each step; the last one is the answer. Each step worth seeing
+    also goes to the asker's log on the admin's stream wall."""
+    async for step in _run(
+        session, question, chat, embed, owners, now, collections, owner_id, live_frame
+    ):
+        if owner_id is not None:
+            _log_step(owner_id, step)
+        yield step
+
+
+async def _run(
+    session: AsyncSession,
+    question: str,
+    chat: Chat,
+    embed: Embedder,
+    owners: list[int] | None,
+    now: datetime | None = None,
+    collections: list[str] | None = None,
+    owner_id: int | None = None,
+    live_frame: str | None = None,
 ) -> AsyncIterator[Step]:
     """Answer `question`, yielding each step; the last one is the answer.
 
@@ -192,7 +250,9 @@ async def run(
     vector_search it makes is limited to them, and only their stills are attached. With
     `collections`, every search is limited to them too, whatever the model asks for. `owner_id`
     is the account asking: the model is told that account's goals, may remove one of them, and
-    may add one, for which it writes the triggers (app/glasses/triggers.py).
+    may add one, for which it writes the triggers (app/glasses/triggers.py). `live_frame` (a
+    JPEG data URL) is the newest frame of a stream the admin is watching: it goes with the
+    question, and the model is told an operator asks on the user's behalf.
 
     Raises UpstreamError when a model server fails.
     """
@@ -206,6 +266,15 @@ async def run(
     if watched:
         tools.append(STOP_WATCHING_TOOL)
     about_watching = (CAN_WATCH if owner_id is not None else "") + (watching if watched else "")
+    if live_frame is not None:
+        about_watching += LIVE
+    asked: str | list[dict[str, Any]] = question
+    if live_frame is not None:
+        asked = [
+            {"type": "text", "text": question},
+            {"type": "text", "text": f"The stream's newest frame, at {local(now)}:"},
+            {"type": "image_url", "image_url": {"url": live_frame}},
+        ]
     messages: list[dict[str, Any]] = [
         {
             "role": "system",
@@ -213,12 +282,12 @@ async def run(
                 now=local(now), zone=LOCAL_TIMEZONE.key, watching=about_watching
             ),
         },
-        {"role": "user", "content": question},
+        {"role": "user", "content": asked},
     ]
     shown: set[int] = set()
     stopped: set[str] = set()  # the goals stop_watching removed during this answer
     started_goals: set[str] = set()  # what start_watching added during this answer
-    images_pending = 0
+    images_pending = 1 if live_frame is not None else 0
 
     def step(type, round, **fields) -> Step:
         elapsed = int((time.monotonic() - started) * 1000)
@@ -275,6 +344,7 @@ async def run(
                         yield step("tool_error", round, call_id=call_id, content=str(error))
                     else:
                         await triggers.add(session, owner_id, goal_text, drafts)
+                        feeds.note(owner_id, "goal", goal_text, "chat")
                         started_goals.add(goal_text.lower())
                         names = [draft.name for draft in drafts]
                         content = json.dumps({"now_watching": goal_text, "triggers": names})

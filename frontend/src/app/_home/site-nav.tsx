@@ -11,15 +11,17 @@ export function SiteNav() {
       aria-label="Main navigation"
       className="flex flex-wrap items-center justify-end gap-x-4 gap-y-2 text-sm"
     >
-      <Link href="/">Ask your day</Link>
+      <Link href="/">Live</Link>
       <Link href="/demos">Demos</Link>
-      {user ? (
+      {/* The developer views: the glasses harness and the Memory lab, for the admin. */}
+      {user?.role === "admin" ? (
         <>
-          <Link href="/glasses">Open camera</Link>
+          <Link href="/admin">Manage demos</Link>
+          <Link href="/admin/streams">Streams</Link>
+          <Link href="/glasses">Glasses harness</Link>
           <Link href="/memory">Memory lab</Link>
         </>
       ) : null}
-      {user?.role === "admin" ? <Link href="/admin">Manage demos</Link> : null}
       <UserMenu />
     </nav>
   );

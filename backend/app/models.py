@@ -19,6 +19,9 @@ class Memory(SQLModel, table=True):
     # into memory_embedding as `owner`, so searches (and so the chat model) only reach what the
     # asking user may see; app/auth.py.
     owner_id: int = Field(default=0, index=True)
+    # What made it, when something other than a person did: "clip:<id>:<digest>" for a frame of a
+    # published demo clip (app/demo.py), which replaces it when the clip changes.
+    source: str = Field(default="", index=True)
 
 
 class MemoryPublic(SQLModel):
@@ -183,6 +186,8 @@ class Showcase(ShowcaseFields, table=True):
     id: int | None = Field(default=None, primary_key=True)
     # Only the upload endpoint writes this list of random file names and original labels.
     assets_json: str = "[]"
+    # What the wearer says during the clip (routes/showcases.py: ShowcaseCue), ordered by time.
+    cues_json: str = "[]"
 
 
 class GoalCreate(SQLModel):

@@ -187,3 +187,21 @@ def test_video_duration_is_updated_only_with_successful_media_upload(client, mon
     current = next(c for c in client.get("/api/demo/manage").json() if c["id"] == item["id"])
     assert current["duration_s"] == 4
     assert current["assets"] == response.json()["assets"]
+
+
+def test_cues_are_saved_in_time_order_and_kept_when_left_out(client):
+    item = draft(client, kind="video")
+    assert item["cues"] == []
+    cues = [
+        {"id": "b", "at_s": 9, "text": "Stop watching", "stays": False, "stops": "a"},
+        {"id": "a", "at_s": 2.5, "text": "Tell me when my bus comes"},
+    ]
+    url = f"/api/demo/clips/{item['id']}"
+    saved = client.put(url, json={**item, "cues": cues})
+    assert saved.status_code == 200, saved.text
+    assert [c["id"] for c in saved.json()["cues"]] == ["a", "b"]
+    assert saved.json()["cues"][0] == {**cues[1], "stays": True, "stops": None}
+    without = {k: v for k, v in item.items() if k != "cues"}
+    assert client.put(url, json=without).json()["cues"] == saved.json()["cues"]
+    assert client.put(url, json={**item, "cues": [cues[0], cues[0]]}).status_code == 422
+    assert client.put(url, json={**item, "cues": [{**cues[0], "text": ""}]}).status_code == 422

@@ -174,7 +174,7 @@ export function TriggerEditor({
           ))}
         </article>
       ))}
-      {goals?.length === 0 && (
+      {!error && (goals ?? []).length === 0 && (
         <p className="text-sm text-muted-foreground">
           Nothing is being watched for yet.
         </p>

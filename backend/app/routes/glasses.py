@@ -13,7 +13,7 @@ from sqlmodel import col, select
 
 from app.auth import Viewer, ViewerDep
 from app.db import SessionDep
-from app.glasses import actions, channel, frames, reminders, screens, triggers
+from app.glasses import actions, channel, feeds, frames, reminders, screens, triggers
 from app.glasses.actions import Command, WatchResult
 from app.glasses.layout import GlassesReply
 from app.llm import Chat, Embedder, UpstreamError, get_chat, get_embedder
@@ -84,6 +84,7 @@ async def add_reminder(body: ReminderCreate, session: SessionDep, viewer: Viewer
     reminder = await reminders.add(session, body.text, chat, viewer.id)
     if reminder is None:
         raise HTTPException(422, "no object to watch for in that text")
+    feeds.note(viewer.id, "reminder", body.text, "panel")
     return reminder
 
 
@@ -122,8 +123,10 @@ async def watch(
     session: SessionDep,
     viewer: ViewerDep,
     chat: ChatDep,
+    client: Annotated[str, Form(max_length=100)] = "",
 ):
-    return await actions.watch(session, viewer, await photo.read(actions.MAX_FRAME + 1), chat)
+    data = await photo.read(actions.MAX_FRAME + 1)
+    return await actions.watch(session, viewer, data, chat, feeds.clean_client(client, "web"))
 
 
 @router.post("/frames", response_model=frames.FrameReply)
@@ -136,6 +139,8 @@ async def upload_frame(
     source: Annotated[frames.Source, Form()] = "single",
     stream_id: Annotated[str, Form(max_length=100)] = "",
     seen_at: Annotated[datetime | None, Form()] = None,
+    store: Annotated[bool, Form()] = True,
+    client: Annotated[str, Form(max_length=100)] = "",
 ):
     """One frame from the glasses, with every face in it blurred first: embedded, stored as a
     memory in the glasses collection, and checked against the triggers.
@@ -144,6 +149,10 @@ async def upload_frame(
     last one stored from the same `stream_id` is not stored again) or "single" for a photo the
     wearer took (always stored). Most answers carry no `message`; when a trigger fires,
     `message` is what to show on the glasses.
+
+    `store=false` only checks the frame against the triggers: the home page sends the demo clips
+    this way, since they are stored as demo memories already. `client` names the app sending it
+    ("live", "harness", ...) for the admin's stream wall.
     """
     return await actions.memory_frame(
         session,
@@ -154,6 +163,8 @@ async def upload_frame(
         source,
         stream_id,
         seen_at,
+        store,
+        feeds.clean_client(client, "web"),
     )
 
 
@@ -184,6 +195,7 @@ async def create_goal(body: GoalCreate, session: SessionDep, viewer: ViewerDep, 
         except (UpstreamError, ValueError) as error:
             raise HTTPException(502, str(error)) from error
     goal = await triggers.add(session, viewer.id, body.text, drafts)
+    feeds.note(viewer.id, "goal", body.text, "panel")
     return next(g for g in await triggers.of(session, viewer.id) if g.id == goal.id)
 
 

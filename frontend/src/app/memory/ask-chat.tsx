@@ -10,9 +10,19 @@ import {
   SendHorizontal,
   Sparkles,
 } from "lucide-react";
-import { type FormEvent, useEffect, useId, useRef, useState } from "react";
+import {
+  type FormEvent,
+  type Ref,
+  useEffect,
+  useId,
+  useImperativeHandle,
+  useRef,
+  useState,
+} from "react";
 
 import { Button } from "@/components/ui/button";
+
+import { HoldToTalk } from "../_home/hold-to-talk";
 
 import { CollectionFilter } from "./collections";
 import {
@@ -29,6 +39,9 @@ type Exchange = {
   steps: Step[];
   done: boolean;
 };
+
+/** What a page holding the chat can do with it: ask a question as if it were typed. */
+export type AskChatHandle = { ask: (question: string) => void };
 
 const EXAMPLES = [
   "Where did I leave my keys?",
@@ -47,6 +60,10 @@ export function AskChat({
   className = "min-h-[70vh]",
   special,
   onDone,
+  onAnswer,
+  voice = false,
+  endpoint = "/api/ask/stream",
+  ref,
 }: {
   compact?: boolean;
   beforeAsk?: () => Promise<void>;
@@ -64,6 +81,13 @@ export function AskChat({
   special?: (question: string) => Promise<string> | null;
   /** An exchange ended, in an answer or an error. */
   onDone?: () => void;
+  /** An answer came, e.g. to say it aloud or show it on the glasses view. */
+  onAnswer?: (answer: string, question: string) => void;
+  /** A hold-to-talk microphone next to Ask: what is said is asked on release. */
+  voice?: boolean;
+  /** Where questions go: a route that answers as /api/ask/stream does, one Step per line. */
+  endpoint?: string;
+  ref?: Ref<AskChatHandle>;
 } = {}) {
   const [exchanges, setExchanges] = useState<Exchange[]>([]);
   const [searchIn, setSearchIn] = useState<string[]>([]);
@@ -77,6 +101,7 @@ export function AskChat({
   const [busy, setBusy] = useState(false);
   const bottom = useRef<HTMLDivElement>(null);
   const ids = useId(); // the page may hold more than one chat
+  useImperativeHandle(ref, () => ({ ask: (text) => void ask(text) }));
 
   useEffect(() => {
     if (exchanges.length) bottom.current?.scrollIntoView({ behavior: "smooth", block: "end" });
@@ -118,10 +143,11 @@ export function AskChat({
         const content = await own;
         const elapsed_ms = Math.round(performance.now() - started);
         addStep(id, { type: "answer", round: 0, elapsed_ms, content }, true);
+        onAnswer?.(content, trimmed);
         return;
       }
       await beforeAsk?.();
-      const response = await fetch("/api/ask/stream", {
+      const response = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ question: trimmed, collections: active }),
@@ -147,6 +173,8 @@ export function AskChat({
           if (!line.trim()) continue;
           const step = JSON.parse(line) as Step;
           finished ||= step.type === "answer" || step.type === "error";
+          if (step.type === "answer" && step.content)
+            onAnswer?.(step.content, trimmed);
           const fresh = (step.results ?? [])
             .map((result) => result.id)
             .filter((resultId) => !found.includes(resultId));
@@ -257,6 +285,14 @@ export function AskChat({
           className="flex-1 resize-none rounded-md border border-border bg-background px-3 py-2 text-sm outline-none focus-visible:border-primary"
           disabled={busy}
         />
+        {voice && (
+          <HoldToTalk
+            label="Talk"
+            disabled={busy}
+            className="h-10"
+            onText={(text) => void ask(text)}
+          />
+        )}
         <Button type="submit" size="lg" disabled={busy || !question.trim()}>
           {busy ? (
             <LoaderCircle className="animate-spin" aria-hidden="true" />
