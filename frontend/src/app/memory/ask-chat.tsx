@@ -22,7 +22,7 @@ import {
 
 import { Button } from "@/components/ui/button";
 
-import { HoldToTalk } from "../_home/hold-to-talk";
+import { HoldToTalk } from "@/components/hold-to-talk";
 
 import { CollectionFilter } from "./collections";
 import {

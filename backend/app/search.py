@@ -15,7 +15,7 @@ import math
 import operator
 import re
 from collections import defaultdict
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from datetime import UTC, datetime
 from typing import Any, Literal
 from zoneinfo import ZoneInfo
@@ -176,7 +176,7 @@ def clean_collection(name: str | None) -> str:
 
 
 def image_url(memory: Memory) -> str | None:
-    """Versioned by the image's file name: the disposable database reuses ids after a wipe, and a
+    """Versioned by the image's file name: a wiped database (make reset-db) reuses ids, and a
     bare /api/memories/{id}/image would let a browser show the old memory's cached picture."""
     if not memory.image_file:
         return None
@@ -255,9 +255,14 @@ def _collections(args: VectorSearchArgs) -> list[str]:
 
 
 async def _keyword_ranking(
-    session: AsyncSession, args: VectorSearchArgs, candidates: int, owners: list[int] | None
+    session: AsyncSession,
+    args: VectorSearchArgs,
+    candidates: int,
+    owners: list[int] | None,
+    memory_ids: Collection[int] | None = None,
 ) -> tuple[list[int], dict[int, list[str]]]:
-    """Ids of memories whose text holds a keyword, most keywords first, then newest first."""
+    """Ids of memories whose text holds a keyword, most keywords first, then newest first; only
+    among `memory_ids` when given."""
     keywords = list(dict.fromkeys(k.strip() for k in args.keywords if k.strip()))
     if not keywords:
         return [], {}
@@ -271,6 +276,8 @@ async def _keyword_ranking(
     )
     if owners is not None:
         query = query.where(col(Memory.owner_id).in_(owners))
+    if memory_ids is not None:
+        query = query.where(col(Memory.id).in_(memory_ids))
     if args.kinds:
         query = query.where(col(Memory.kind).in_(args.kinds))
     if collections := _collections(args):
@@ -297,18 +304,24 @@ def width_error(got: int) -> str | None:
         return None
     return (
         f"The embedding model gives {got} numbers per input, but {TABLE} holds {width}: "
-        f"set its width in app/vectors.py to match (the database rebuilds)"
+        f"set its width in app/vectors.py to match; the next start then stops until the stored "
+        f"vectors are wiped, since another model's vectors cannot be compared with them"
     )
 
 
 async def vector_search(
-    session: AsyncSession, args: VectorSearchArgs, embed: Embedder, owners: list[int] | None
+    session: AsyncSession,
+    args: VectorSearchArgs,
+    embed: Embedder,
+    owners: list[int] | None,
+    memory_ids: Collection[int] | None = None,
 ) -> list[SearchResult]:
     """Run one vector_search call: the best `args.limit` memories, best first.
 
     `owners` limits it to memories of those owner ids (a guest: the demo ones and their own);
     None searches every memory, for the admin. It is not optional on purpose: every caller says
-    whose memories it may reach.
+    whose memories it may reach. `memory_ids`, when given, limits it further to those memories:
+    the frames of the demo clip the asker is watching, up to where it plays (agent.run).
     """
     candidates = args.limit * CANDIDATES_PER_LIST
     queries = list(dict.fromkeys(q.strip() for q in [args.user_query, *args.alternative_queries]))
@@ -329,12 +342,17 @@ async def vector_search(
     for vector in await embed(queries) if queries else []:
         if problem := width_error(len(vector)):
             raise UpstreamError(problem)
-        hits = await vectors.nearest(connection, TABLE, vector, candidates, since, until, where)
+        # memory_ids goes into the KNN query itself: sqlite-vec takes the k nearest among those
+        # ids, with every other filter, so the list keeps `candidates` and the distances stay
+        # sqlite-vec's own. A clip has at most demo.MAX_FRAMES (1200) video frames to list.
+        hits = await vectors.nearest(
+            connection, TABLE, vector, candidates, since, until, where, memory_ids
+        )
         rankings.append([hit.id for hit in hits])
         for hit in hits:
             best_distance[hit.id] = min(hit.distance, best_distance.get(hit.id, hit.distance))
 
-    keyword_ids, matched = await _keyword_ranking(session, args, candidates, owners)
+    keyword_ids, matched = await _keyword_ranking(session, args, candidates, owners, memory_ids)
     rankings.append(keyword_ids)
 
     scores: dict[int, float] = defaultdict(float)

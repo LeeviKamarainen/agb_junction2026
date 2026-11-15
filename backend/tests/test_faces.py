@@ -7,6 +7,7 @@ import io
 import json
 from pathlib import Path
 
+import cv2
 import numpy as np
 import pytest
 from PIL import Image
@@ -271,25 +272,58 @@ def test_uploaded_demo_images_have_their_faces_blurred(client):
     assert face_blurred(picture(client.get(uploaded.json()["assets"][0]["url"]).content))
 
 
-def test_demo_video_frames_are_stored_with_their_faces_blurred(client, models, db, tmp_path):
-    """Demo videos are kept as uploaded, so their frames are blurred when stored as memories."""
-    import cv2
-
-    from app import demo
-
+def portrait_video(folder: Path) -> Path:
+    """The portrait as a 1 s video, two frames at 2 fps, as uploaded: not blurred."""
     still = cv2.imdecode(np.frombuffer(PORTRAIT, np.uint8), cv2.IMREAD_COLOR)
-    path = tmp_path / "portrait.mp4"
+    path = folder / "portrait.mp4"
     height, width = still.shape[:2]
     writer = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"mp4v"), 2, (width, height))
     for _ in range(2):
         writer.write(still)
     writer.release()
+    return path
+
+
+def video_frames(path: Path) -> list[Image.Image]:
+    video = cv2.VideoCapture(str(path))
+    frames = []
+    while (read := video.read())[0]:
+        frames.append(Image.fromarray(cv2.cvtColor(read[1], cv2.COLOR_BGR2RGB)))
+    video.release()
+    return frames
+
+
+def test_a_face_in_an_uploaded_demo_video_is_blurred_in_the_video(client, converted, tmp_path):
+    """Demo videos are played to anyone, so every frame has its faces blurred, by the detector
+    and blur every image gets, before the video can be played (app/showcase.py)."""
+    path = portrait_video(tmp_path)
+    assert not any(face_blurred(frame) for frame in video_frames(path))  # else this proves nothing
     clip = client.post("/api/demo/clips", json={"title": "Portrait", "kind": "video"}).json()
     files = {"files": ("portrait.mp4", path.read_bytes(), "video/mp4")}
-    assert client.post(f"/api/demo/clips/{clip['id']}/media", files=files).status_code == 200
-    client.put(f"/api/demo/clips/{clip['id']}", json={**clip, "published": True})
+    uploaded = client.post(f"/api/demo/clips/{clip['id']}/media", files=files)
+    assert uploaded.status_code == 200, uploaded.text
+    converted(clip["id"])
+
+    served = tmp_path / "served.mp4"
+    served.write_bytes(client.get(uploaded.json()["assets"][0]["url"]).content)
+
+    frames = video_frames(served)
+    assert frames and all(face_blurred(frame) for frame in frames)
+
+
+def test_demo_video_frames_are_stored_with_their_faces_blurred(client, models, db, tmp_path):
+    """A demo video stored before videos were re-encoded still has its faces, and a clip's frames
+    may be stored while its new video is re-encoded: so each frame is blurred as it is stored."""
+    from app import demo, showcase
+    from app.models import Showcase
+
+    path = portrait_video(tmp_path)
+    path.rename(showcase.folder() / path.name)  # as it was stored before
 
     async def work(session):
+        assets = json.dumps([{"name": path.name, "label": path.name, "content_type": "video/mp4"}])
+        session.add(Showcase(title="Portrait", kind="video", published=True, assets_json=assets))
+        await session.commit()
         return await demo.sync(session, models.embed)
 
     assert db(work) == 1

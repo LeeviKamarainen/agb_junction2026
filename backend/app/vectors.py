@@ -4,13 +4,15 @@ Each vector table is a vec0 virtual table: `id` is the primary key of the row it
 `embedding` is a float32 vector and every row carries metadata that a search can filter on: a
 `created_at` timestamp on every table, plus any extra columns the table declares. Add a table by
 adding it to VECTOR_TABLES; init_db creates it next to the model tables, and the fingerprint
-covers it, so changing a dimension or a column rebuilds the database like any other schema change
-(docs/adr/0001-disposable-database.md).
+covers it, so changing a column carries the rows over like any other schema change, while
+changing a dimension stops the start: vectors of another model cannot be compared with the
+stored ones (docs/adr/0003-carry-rows-over.md).
 
 Search is exact (brute force over every vector that passes the filters), which is fine up to some
 hundreds of thousands of vectors: a 768-wide float32 vector is 3 KB.
 """
 
+import json
 import struct
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -43,9 +45,9 @@ class Hit:
 VECTOR_TABLES: dict[str, VectorTable] = {
     "note_embedding": VectorTable(768),
     # One row per Memory (app/models.py), same id. The width must be EMBED_MODEL's: if the model
-    # changes, change it here and the database rebuilds. kind, collection and owner (Memory's
-    # owner_id) are copied here so a search can filter on them; owner keeps users apart
-    # (app/auth.py).
+    # changes, change it here; the next start stops until the old vectors are wiped. kind,
+    # collection and owner (Memory's owner_id) are copied here so a search can filter on them;
+    # owner keeps users apart (app/auth.py).
     "memory_embedding": VectorTable(
         768, {"kind": "TEXT", "collection": "TEXT", "owner": "INTEGER"}
     ),
@@ -152,16 +154,27 @@ async def nearest(
     since: datetime | None = None,
     until: datetime | None = None,
     where: Mapping[str, Any] | None = None,
+    ids: Collection[int] | None = None,
 ) -> list[Hit]:
     """The k closest rows, closest first, among those that pass the filters.
 
     `since` and `until` bound created_at (since inclusive, until exclusive, both timezone-aware);
     `where` keeps only rows whose extra metadata columns equal the given values. A list, tuple or
-    set as a value keeps rows equal to any of them (an empty one keeps none).
+    set as a value keeps rows equal to any of them (an empty one keeps none). `ids` keeps only
+    those rows (an empty one keeps none): sqlite-vec picks the k closest among them, rather than
+    dropping the others from the k closest.
     """
     blob = _serialize(table, vector)
     extra_columns = list(_table(table).metadata)
     conditions, params = ["embedding MATCH ?", "k = ?"], [blob, k]
+    if ids is not None:
+        if not ids:
+            return []
+        # A subquery, not a list: SQLite turns `id IN (?)` with one value into `id = ?`, which
+        # sqlite-vec (0.1.9) applies only after taking the k closest, where an IN goes into the
+        # search itself.
+        conditions.append("id IN (SELECT value FROM json_each(?))")
+        params.append(json.dumps(list(ids)))
     if since is not None:
         conditions.append("created_at >= ?")
         params.append(_to_unix(since))

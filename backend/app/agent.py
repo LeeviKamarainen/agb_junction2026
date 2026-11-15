@@ -15,16 +15,17 @@ parser that matches the model (memory/docs/backend-requirements.md).
 """
 
 import json
+import re
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Collection
 from datetime import UTC, datetime
-from typing import Any, Literal
+from typing import Any, Literal, Self
 
 import anyio
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, model_validator
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from app import media
+from app import demo, media
 from app.glasses import feeds, triggers
 from app.llm import Chat, Embedder
 from app.models import Goal, Memory
@@ -51,7 +52,8 @@ when the question names a time ("this morning", "yesterday"). If the results do 
 question, search again with other wording or a wider timespan.
 
 Answer from the memories only, briefly, and say when you saw it. If nothing relevant was found, \
-say so instead of guessing.
+say so instead of guessing. When the answer rests on particular memories, end it with the id of \
+the one that shows it best, written like [Memory 12].
 
 The current time is {now}, the user's local time ({zone}). Every time you read or write is \
 local time: write times in tool calls as ISO 8601 with the offset, like the current \
@@ -122,10 +124,59 @@ is in view right now, answer from that frame without searching; search the memor
 earlier."""
 
 
+# How an answer cites the memories it rests on: SYSTEM asks for [Memory 12], the way the stills
+# it was shown are labelled ("Memory 12, seen at …"), and Gemma also writes "(Memories 285, 273,
+# 241)", "[Memory 12, 14]" or "[Memory 12, seen at 09:12]". So a citation is a bracket or
+# parenthesis that opens with Memory or Memories and one id or several, apart by commas or
+# "and"; an id after the first counts only when a comma, "and" or the closing bracket follows,
+# so that a time written after the ids ("[Memory 12, 09:12]") is not taken for one. Whatever else
+# is inside goes with it, and so does the space before it, so that removing it leaves no gap.
+# Other brackets stay as they are.
+_CITATION = re.compile(
+    r"""\s*[\[(]\s*memor(?:y|ies)\s*
+    (?P<ids>\d+(?:(?:\s*,\s*(?:and\s+)?|\s+and\s+)\d+(?=\s*(?:,|and\b|[\])])))*)
+    [^\[\]()]*[\])]""",
+    re.IGNORECASE | re.VERBOSE,
+)
+
+
+def _cited(text: str, found: dict[int, SearchResult]) -> tuple[str, list[SearchResult]]:
+    """The answer without its citations, and the memories it cites in the order first cited:
+    only those this answer's searches returned, since the model was shown no other."""
+    cited = (
+        int(id) for match in _CITATION.finditer(text) for id in re.findall(r"\d+", match["ids"])
+    )
+    ids = dict.fromkeys(cited)
+    return _CITATION.sub("", text).strip(), [found[id] for id in ids if id in found]
+
+
 class AskRequest(BaseModel):
     question: str = Field(min_length=1, max_length=2000)
     # Search only these collections, whatever the model asks for. Empty: the model chooses.
     collections: list[str] = Field(default_factory=list, max_length=10)
+    # Only the asker's own memories, as well: not the demo ones, nor (for the admin) anyone
+    # else's. /try's camera, whose memory is what the visitor's camera saw.
+    mine: bool = False
+    # The asker is watching this demo clip, this many seconds in: the answer comes from that clip
+    # up to there only, and its time is the clip's (app/demo.py: shown_so_far). Both or neither,
+    # and not with collections or mine, which scope a camera's memories instead.
+    demo_clip_id: int | None = None
+    demo_at_s: float | None = Field(default=None, ge=0, le=demo.LONGEST_CLIP_S, allow_inf_nan=False)
+
+    @model_validator(mode="after")
+    def one_scope(self) -> Self:
+        if (self.demo_clip_id is None) != (self.demo_at_s is None):
+            raise ValueError("send demo_clip_id and demo_at_s together, or neither")
+        if self.demo_clip_id is not None and self.collections:
+            raise ValueError("a demo clip is searched on its own: leave out collections")
+        if self.demo_clip_id is not None and self.mine:
+            raise ValueError("a demo clip is demo memory, never your own: leave out mine")
+        return self
+
+    def demo_view(self) -> demo.DemoView | None:
+        if self.demo_clip_id is None or self.demo_at_s is None:
+            return None
+        return demo.DemoView(self.demo_clip_id, self.demo_at_s)
 
 
 def _pinned(args: VectorSearchArgs, collections: list[str] | None) -> VectorSearchArgs:
@@ -149,10 +200,14 @@ class Step(BaseModel):
     name: str | None = None  # tool_call: the tool the model called
     arguments: Any = None  # tool_call: the arguments as the model sent them
     results: list[SearchResult] | None = None  # tool_result
+    # answer: the memories it cites, in the order cited ([] when it cites none); its content
+    # comes without the citations
+    evidence: list[SearchResult] | None = None
 
 
 class Answer(BaseModel):
-    answer: str
+    answer: str  # without its citations
+    evidence: list[SearchResult]  # the memories the answer cites, in the order cited
     searches: list[VectorSearchArgs]  # every vector_search call the model made, in order
     sources: list[SearchResult]  # every memory those calls returned, first seen first
     steps: list[Step]
@@ -222,11 +277,12 @@ async def run(
     collections: list[str] | None = None,
     owner_id: int | None = None,
     live_frame: str | None = None,
+    memory_ids: Collection[int] | None = None,
 ) -> AsyncIterator[Step]:
     """Answer `question`, yielding each step; the last one is the answer. Each step worth seeing
     also goes to the asker's log on the admin's stream wall."""
     async for step in _run(
-        session, question, chat, embed, owners, now, collections, owner_id, live_frame
+        session, question, chat, embed, owners, now, collections, owner_id, live_frame, memory_ids
     ):
         if owner_id is not None:
             _log_step(owner_id, step)
@@ -243,8 +299,10 @@ async def _run(
     collections: list[str] | None = None,
     owner_id: int | None = None,
     live_frame: str | None = None,
+    memory_ids: Collection[int] | None = None,
 ) -> AsyncIterator[Step]:
-    """Answer `question`, yielding each step; the last one is the answer.
+    """Answer `question`, yielding each step; the last one is the answer, without the citations
+    the model ends it with, which become its evidence.
 
     `owners` is whose memories the model may reach (app.auth.Viewer.owners; None for all): every
     vector_search it makes is limited to them, and only their stills are attached. With
@@ -252,7 +310,9 @@ async def _run(
     is the account asking: the model is told that account's goals, may remove one of them, and
     may add one, for which it writes the triggers (app/glasses/triggers.py). `live_frame` (a
     JPEG data URL) is the newest frame of a stream the admin is watching: it goes with the
-    question, and the model is told an operator asks on the user's behalf.
+    question, and the model is told an operator asks on the user's behalf. `memory_ids`, when
+    given, is all that its searches may return: the frames of the demo clip the asker watches, up
+    to where it plays, with `now` the moment it shows (app/demo.py: shown_so_far).
 
     Raises UpstreamError when a model server fails.
     """
@@ -285,6 +345,7 @@ async def _run(
         {"role": "user", "content": asked},
     ]
     shown: set[int] = set()
+    found: dict[int, SearchResult] = {}  # every memory a search returned: what it may cite
     stopped: set[str] = set()  # the goals stop_watching removed during this answer
     started_goals: set[str] = set()  # what start_watching added during this answer
     images_pending = 1 if live_frame is not None else 0
@@ -300,7 +361,8 @@ async def _run(
         calls = message.get("tool_calls") or []
         text = (message.get("content") or "").strip()
         if not calls or last:
-            yield step("answer", round, content=text)
+            content, evidence = _cited(text, found)
+            yield step("answer", round, content=content, evidence=evidence)
             return
 
         if text:
@@ -362,9 +424,10 @@ async def _run(
                     content = json.dumps({"error": problems}, default=str)
                     yield step("tool_error", round, call_id=call_id, content=content)
                 else:
-                    results = await vector_search(session, args, embed, owners)
+                    results = await vector_search(session, args, embed, owners, memory_ids)
                     yield step("tool_result", round, call_id=call_id, results=results)
                     for result in results:
+                        found.setdefault(result.id, result)
                         if result.image_url and result.id not in shown:
                             if len(shown) < MAX_IMAGES:
                                 shown.add(result.id)
@@ -399,9 +462,21 @@ async def answer(
     now: datetime | None = None,
     collections: list[str] | None = None,
     owner_id: int | None = None,
+    memory_ids: Collection[int] | None = None,
 ) -> Answer:
     steps = [
-        s async for s in run(session, question, chat, embed, owners, now, collections, owner_id)
+        s
+        async for s in run(
+            session,
+            question,
+            chat,
+            embed,
+            owners,
+            now,
+            collections,
+            owner_id,
+            memory_ids=memory_ids,
+        )
     ]
     searches: list[VectorSearchArgs] = []
     sources: dict[int, SearchResult] = {}
@@ -413,5 +488,11 @@ async def answer(
                 pass
         for result in step.results or []:
             sources.setdefault(result.id, result)
-    final = (steps[-1].content or "") if steps and steps[-1].type == "answer" else ""
-    return Answer(answer=final, searches=searches, sources=list(sources.values()), steps=steps)
+    final = steps[-1] if steps and steps[-1].type == "answer" else None
+    return Answer(
+        answer=(final.content or "") if final else "",
+        evidence=(final.evidence or []) if final else [],
+        searches=searches,
+        sources=list(sources.values()),
+        steps=steps,
+    )

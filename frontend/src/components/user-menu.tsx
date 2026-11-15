@@ -1,7 +1,6 @@
 "use client";
 
-import { LogIn, LogOut, ShieldCheck, UserRound } from "lucide-react";
-import Link from "next/link";
+import { LogOut, ShieldCheck, UserRound } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
@@ -18,7 +17,7 @@ type Props = {
   className?: string;
 };
 
-/** Who is logged in, with Log out; or Log in and Try as guest links. */
+/** Who is logged in, with Log out. */
 export function UserMenu({ requireLogin = false, className = "" }: Props) {
   const { user } = useSession();
   const router = useRouter();
@@ -43,28 +42,8 @@ export function UserMenu({ requireLogin = false, className = "" }: Props) {
     }, 2000);
   }
 
-  if (user === undefined)
-    return (
-      <span className={`text-sm text-muted-foreground ${className}`}>…</span>
-    );
-
-  if (user === null)
-    return (
-      <span className={`inline-flex items-center gap-3 text-sm ${className}`}>
-        <Link
-          href="/login"
-          className="inline-flex items-center gap-1.5 text-muted-foreground hover:text-foreground"
-        >
-          <LogIn size={15} aria-hidden="true" /> Log in
-        </Link>
-        <Link
-          href="/guest"
-          className="text-muted-foreground hover:text-foreground"
-        >
-          Try as guest
-        </Link>
-      </span>
-    );
+  // Visitors need no login (/try starts a guest) and the admin logs in on /admin: nothing to offer.
+  if (!user) return null;
 
   const admin = user.role === "admin";
   return (
@@ -80,15 +59,15 @@ export function UserMenu({ requireLogin = false, className = "" }: Props) {
         {admin ? (
           <ShieldCheck size={15} className="text-primary" aria-hidden="true" />
         ) : (
-          <UserRound size={15} aria-hidden="true" />
+          <UserRound size={15} aria-hidden="true" className="max-sm:hidden" />
         )}
         <span
-          className="select-all font-medium"
+          className="select-all font-medium max-sm:hidden"
           title={admin ? undefined : "Save this username to return to your temporary account"}
         >
           {user.username}
         </span>
-        <span className="rounded-full border border-border px-1.5 text-xs text-muted-foreground">
+        <span className="rounded-full border border-border px-1.5 text-xs text-muted-foreground max-sm:hidden">
           {admin ? "admin" : "guest"}
         </span>
         {user.expires_at ? <TimeLeft until={user.expires_at} /> : null}
@@ -100,7 +79,8 @@ export function UserMenu({ requireLogin = false, className = "" }: Props) {
   );
 }
 
-/** A guest's minutes left; at zero the page goes to /login, since the account is gone. */
+/** A guest's minutes left; at zero every page hears that nobody is logged in: the account is
+ * gone. */
 function TimeLeft({ until }: { until: string }) {
   const end = new Date(until).getTime();
   const [now, setNow] = useState(() => Date.now());
@@ -112,7 +92,8 @@ function TimeLeft({ until }: { until: string }) {
 
   const minutes = Math.max(0, Math.ceil((end - now) / 60_000));
   useEffect(() => {
-    if (minutes === 0) window.location.replace("/login");
+    // The account is gone: every page hears it, and one that needs a login sends the visitor on.
+    if (minutes === 0) loggedOut();
   }, [minutes]);
 
   return (

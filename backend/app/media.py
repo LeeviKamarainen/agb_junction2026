@@ -1,7 +1,7 @@
 """Image files for memories: uploads are shrunk to JPEG and kept next to the database.
 
-Files are named by a random UUID, not the memory id: the database is disposable and reuses ids
-after a rebuild, while the media folder is kept.
+Files are named by a random UUID, not the memory id: a wiped database (make reset-db) reuses ids,
+while the media folder is kept.
 """
 
 import base64

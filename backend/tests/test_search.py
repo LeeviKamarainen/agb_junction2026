@@ -1,20 +1,29 @@
 import io
 import json
+import math
 from datetime import UTC, datetime, timedelta
 
 import pytest
 from PIL import Image
+from pydantic import ValidationError
+from sqlmodel import col, select
+from sqlmodel.ext.asyncio.session import AsyncSession
 
-from app import agent, media, vectors
+from app import agent, demo, media, vectors
+from app.db import new_session
 from app.llm import UpstreamError, get_chat, get_embedder
 from app.main import app
+from app.models import Memory, Showcase
 from app.search import (
+    CANDIDATES_PER_LIST,
+    DEMO_OWNER,
     TABLE,
     VECTOR_SEARCH_TOOL,
     Timespan,
     VectorSearchArgs,
     _keyword_ranking,
     add_memory,
+    local,
     vector_search,
 )
 
@@ -276,6 +285,318 @@ def test_ask_stream_sends_one_step_per_line(client, memories):
     assert steps[-1]["content"] == "With Aino at 11:00."
 
 
+def asking(client, gemma, path="/api/ask", headers=None, **body) -> list[dict]:
+    """Ask through `path` with the fake models; the steps, from /api/ask or /api/ask/stream."""
+    app.dependency_overrides[get_embedder] = lambda: fake_embed
+    app.dependency_overrides[get_chat] = lambda: gemma
+    try:
+        reply = client.post(
+            path, json={"question": "Where are my keys?", **body}, headers=headers or {}
+        )
+    finally:
+        app.dependency_overrides.clear()
+    assert reply.status_code == 200, reply.text
+    if path == "/api/ask/stream":
+        return [json.loads(line) for line in reply.text.splitlines()]
+    return reply.json()["steps"]
+
+
+@pytest.mark.parametrize(
+    ("said", "text", "cited"),
+    [
+        # The usual: the best one at the end.
+        ("On the table, at 09:00. [Memory {keys}]", "On the table, at 09:00.", ["keys"]),
+        # Any case and spacing, several, mid-sentence: in the order cited, no space left over.
+        (
+            "Rex [memory{rex}] sniffed the keys [ MEMORY {keys} ].",
+            "Rex sniffed the keys.",
+            ["rex", "keys"],
+        ),
+        # A memory the searches did not return (the dog), or none at all: no evidence.
+        ("Rex was there. [Memory {dog}] [Memory 999]", "Rex was there.", []),
+        ("On the table, at 09:00.", "On the table, at 09:00.", []),
+        # Gemma's own ways (a recorded answer ended "(Memories 285, 273, 241)"): parentheses,
+        # Memories, several ids with commas or "and", more said inside the bracket.
+        ("On the hook (Memories {keys}, {rex}, {dog}).", "On the hook.", ["keys", "rex"]),
+        ("On the hook [Memory {rex}, {keys}].", "On the hook.", ["rex", "keys"]),
+        ("On the hook [Memory {keys}, seen at 09:12].", "On the hook.", ["keys"]),
+        ("On the hook (memories {rex} and {keys}).", "On the hook.", ["rex", "keys"]),
+        ("On the hook [Memories {keys}, {dog}, and {rex}]", "On the hook", ["keys", "rex"]),
+        # Cited twice: once, where first cited.
+        (
+            "Rex (Memory {rex}) sniffed them [Memory {keys}, {rex}].",
+            "Rex sniffed them.",
+            ["rex", "keys"],
+        ),
+        # A time after the id is not taken for another id, though "04:00" starts like one.
+        ("On the hook [Memory {keys}, 0{rex}:00].", "On the hook.", ["keys"]),
+        # Ordinary parentheses and brackets stay, numbers in them too.
+        (
+            "Both keys (2 of them) [see above] are on the hook (Memory {keys}).",
+            "Both keys (2 of them) [see above] are on the hook.",
+            ["keys"],
+        ),
+    ],
+)
+def test_an_answer_cites_only_memories_its_searches_returned(client, memories, said, text, cited):
+    ids = {"keys": memories[0], "dog": memories[1], "rex": memories[3]}
+    gemma = FakeGemma(
+        # Returns the keys and Rex sniffing them, not the dog.
+        {"content": None, "tool_calls": [tool_call("a", user_query="keys", limit=2)]},
+        {"content": said.format(**ids)},
+    )
+    app.dependency_overrides[get_embedder] = lambda: fake_embed
+    app.dependency_overrides[get_chat] = lambda: gemma
+    try:
+        body = client.post("/api/ask", json={"question": "Where are my keys?"}).json()
+    finally:
+        app.dependency_overrides.clear()
+
+    assert [r["id"] for r in body["steps"][2]["results"]] == [ids["keys"], ids["rex"]]
+    answer = body["steps"][-1]
+    assert body["answer"] == answer["content"] == text
+    assert [m["id"] for m in body["evidence"]] == [ids[name] for name in cited]
+    assert answer["evidence"] == body["evidence"]
+
+
+def demo_clip(
+    db, title: str, times: list[float], end: datetime | None = None, published: bool = True
+) -> tuple[int, list[int]]:
+    """A demo clip with its frames as app/demo.py stores them: one per time into the clip, the
+    last one at `end` (now when not given), stills captioned with the title, all pointing like
+    "keys". Its id and the frames' ids, in order."""
+
+    async def add(session):
+        clip = Showcase(title=title, published=published)
+        session.add(clip)
+        await session.flush()
+        last = end or datetime.now(UTC)
+        ids = []
+        for at in times:
+            memory = await add_memory(
+                session,
+                "image",
+                unit(0),
+                last - timedelta(seconds=times[-1] - at),
+                title,
+                media.save_image(jpeg()),
+                collection="demo",
+                owner_id=DEMO_OWNER,
+            )
+            memory.source = f"{demo.clip_prefix(clip.id)}abc"
+            session.add(memory)
+            ids.append(memory.id)
+        await session.commit()
+        return clip.id, ids
+
+    return db(add)
+
+
+def own_memories(db) -> tuple[int, int]:
+    """The admin's own note and camera still, both matching "keys": its glasses and manual."""
+
+    async def add(session):
+        still = await add_memory(
+            session, "image", unit(0), NOON, "keys", media.save_image(jpeg()), "glasses", 1
+        )
+        note = await add_memory(session, "text", unit(0), NOON, "keys on the hook", owner_id=1)
+        await session.commit()
+        return still.id, note.id
+
+    return db(add)
+
+
+def searched(steps: list[dict]) -> list[int]:
+    """The ids the (first) search returned, in its order."""
+    return [r["id"] for r in next(s for s in steps if s["type"] == "tool_result")["results"]]
+
+
+def test_a_search_limited_to_some_memories_finds_only_those(client, db, memories):
+    _keys, dog, coffee, _rex = memories
+
+    async def decoys(session):
+        # Nearer "keys" than the dog, and holding both keywords where it holds one.
+        for _ in range(10):
+            await add_memory(session, "text", unit(0), NOON, "keys and Rex")
+        await session.commit()
+
+    db(decoys)
+    # With limit 2 each ranking takes 8 candidates, all of them decoys when nothing is left out
+    # first: restricting them afterwards would leave nothing. No keywords in the vector search,
+    # so only its vector ranking can find the dog. One allowed id as well as several: SQLite
+    # writes a list of one differently (app/vectors.py: nearest).
+    near = VectorSearchArgs(user_query="keys", limit=2)
+    worded = VectorSearchArgs(user_query="keys", keywords=["keys", "rex"], limit=2)
+    candidates = worded.limit * CANDIDATES_PER_LIST
+
+    def found(ids: set[int]) -> set[int]:
+        hits = db(lambda session: vector_search(session, near, fake_embed, None, ids))
+        return {hit.id for hit in hits}
+
+    by_keyword, _ = db(
+        lambda session: _keyword_ranking(session, worded, candidates, None, {dog, coffee})
+    )
+
+    assert found({dog}) == {dog}
+    assert found({dog, coffee}) == {dog, coffee}
+    assert by_keyword == [dog]
+
+
+@pytest.mark.parametrize("path", ["/api/ask", "/api/ask/stream"])
+def test_a_question_on_a_playing_clip_searches_only_that_clip_so_far(client, db, path):
+    walk, (start, middle, _later) = demo_clip(db, "Walk", [0, 3, 6])
+    demo_clip(db, "Kitchen", [0, 6])
+    own_memories(db)  # the asker's, the admin's
+    # Both the query and the keywords match every memory there is.
+    search = tool_call("a", user_query="keys", keywords=["walk", "kitchen", "keys"], limit=20)
+    gemma = FakeGemma({"content": None, "tool_calls": [search]}, {"content": "Not yet."})
+
+    steps = asking(client, gemma, path, demo_clip_id=walk, demo_at_s=3)
+
+    assert sorted(searched(steps)) == [start, middle]
+    messages, _tools = gemma.calls[1]
+    told, images = messages[-2], messages[-1]
+    assert sorted(m["id"] for m in json.loads(told["content"])) == [start, middle]
+    labels = [part["text"] for part in images["content"] if part["type"] == "text"]
+    assert sorted(int(label.split()[1].rstrip(",")) for label in labels[1:]) == [start, middle]
+
+
+def test_a_question_on_a_playing_clip_is_asked_at_the_clips_time(client, db):
+    walk, _frames = demo_clip(db, "Walk", [0, 3, 6], end=NOON)  # it starts 6 s before noon
+    gemma = FakeGemma({"content": "Not yet."})
+
+    asking(client, gemma, demo_clip_id=walk, demo_at_s=4.5)
+
+    system = gemma.calls[0][0][0]["content"]
+    assert f"The current time is {local(NOON - timedelta(seconds=1.5))}," in system
+
+
+def test_pinning_the_glasses_collection_keeps_the_rest_out_of_both_rankings(client, db):
+    demo_clip(db, "Walk to the keys", [0, 3])
+    still, _note = own_memories(db)
+    search = tool_call("a", user_query="keys", keywords=["keys", "walk"], limit=20)
+    gemma = FakeGemma({"content": None, "tool_calls": [search]}, {"content": "Here."})
+
+    steps = asking(client, gemma, collections=["glasses"])
+
+    assert searched(steps) == [still]
+
+
+@pytest.mark.parametrize("path", ["/api/ask", "/api/ask/stream"])
+def test_a_question_on_a_clip_needs_it_published_and_stored(client, db, path):
+    stored, _ = demo_clip(db, "Walk", [0, 3])
+    draft, _ = demo_clip(db, "Draft", [0, 3], published=False)
+    empty, _ = demo_clip(db, "Not stored yet", [])
+    app.dependency_overrides[get_embedder] = lambda: fake_embed
+    app.dependency_overrides[get_chat] = lambda: FakeGemma({"content": "Not yet."})
+    try:
+        statuses = {
+            name: client.post(
+                path, json={"question": "What next?", "demo_clip_id": clip, "demo_at_s": 1}
+            ).status_code
+            for name, clip in (("stored", stored), ("draft", draft), ("gone", 99), ("empty", empty))
+        }
+    finally:
+        app.dependency_overrides.clear()
+
+    assert statuses == {"stored": 200, "draft": 404, "gone": 404, "empty": 409}
+
+
+@pytest.mark.parametrize("path", ["/api/ask", "/api/ask/stream"])
+@pytest.mark.parametrize(
+    "view",
+    [
+        {"demo_clip_id": 1},
+        {"demo_at_s": 3},
+        {"demo_clip_id": 1, "demo_at_s": -1},
+        {"demo_clip_id": 1, "demo_at_s": 3, "collections": ["glasses"]},
+        # A clip is demo memory, never the asker's own.
+        {"demo_clip_id": 1, "demo_at_s": 3, "mine": True},
+    ],
+)
+def test_a_demo_view_is_a_clip_and_a_time_into_it_alone(client, path, view):
+    app.dependency_overrides[get_embedder] = lambda: fake_embed
+    app.dependency_overrides[get_chat] = lambda: FakeGemma({"content": "Unreachable."})
+    try:
+        reply = client.post(path, json={"question": "What happens next?", **view})
+    finally:
+        app.dependency_overrides.clear()
+
+    assert reply.status_code == 422
+
+
+@pytest.mark.parametrize("path", ["/api/ask", "/api/ask/stream"])
+@pytest.mark.parametrize(
+    ("at_s", "status"),
+    [
+        (1e12, 422),  # past any date there is: refused rather than overflowing the clip's time
+        (demo.LONGEST_CLIP_S, 200),  # the end of the longest clip there can be is a time in it
+    ],
+)
+def test_a_time_into_a_clip_is_at_most_the_longest_clip(client, db, path, at_s, status):
+    walk, _ = demo_clip(db, "Walk", [0, 3])
+    body = {"question": "What next?", "demo_clip_id": walk, "demo_at_s": at_s}
+    app.dependency_overrides[get_embedder] = lambda: fake_embed
+    app.dependency_overrides[get_chat] = lambda: FakeGemma({"content": "Not yet."})
+    try:
+        reply = client.post(path, json=body)
+    finally:
+        app.dependency_overrides.clear()
+
+    assert reply.status_code == status, reply.text
+
+
+@pytest.mark.parametrize("at_s", [1e12, math.inf, math.nan])
+def test_a_time_into_a_clip_is_a_number_up_to_the_longest_clip(at_s):
+    # Python's JSON reads Infinity and NaN in a body; only the first overflows the clip's time
+    # without a bound, NaN was refused already (by ge=0).
+    with pytest.raises(ValidationError):
+        agent.AskRequest(question="What next?", demo_clip_id=1, demo_at_s=at_s)
+
+
+def test_a_question_on_an_image_sequence_reaches_the_image_on_screen(client, db):
+    # Each image shown for 0.3 s, stored as app/demo.py stores them, to the microsecond: the
+    # fourth one 0.9 s in. The page's playhead while it shows is 3 × 0.3, a hair less.
+    steps_clip, frames = demo_clip(db, "Steps", [i * 0.3 for i in range(5)])
+    at_s = 3 * 0.3
+    assert at_s < 0.9
+    search = tool_call("a", user_query="keys", limit=20)
+    gemma = FakeGemma({"content": None, "tool_calls": [search]}, {"content": "Not yet."})
+
+    steps = asking(client, gemma, demo_clip_id=steps_clip, demo_at_s=at_s)
+
+    assert sorted(searched(steps)) == frames[:4]
+
+
+def test_the_map_survives_a_clip_replaced_while_it_reads(client, db, monkeypatch):
+    walk, frames = demo_clip(db, "Walk", [0, 3, 6])
+    original = AsyncSession.exec
+    replaced = []
+
+    async def exec_then_replace(self, statement, *args, **kwargs):
+        """Right after the request's first read of memories, demo.sync replaces the clip: none
+        of its frames carries the source that read gave them any more."""
+        result = await original(self, statement, *args, **kwargs)
+        described = getattr(statement, "column_descriptions", None) or [{}]
+        if not replaced and described[0].get("entity") is Memory:
+            replaced.append(statement)
+            async with new_session() as other:
+                query = select(Memory).where(col(Memory.id).in_(frames))
+                for memory in await original(other, query):
+                    memory.source = f"{demo.clip_prefix(walk)}new-media"
+                    other.add(memory)
+                await other.commit()
+        return result
+
+    monkeypatch.setattr(AsyncSession, "exec", exec_then_replace)
+    reply = client.get("/api/memories/vectors", params={"clip": walk})
+
+    assert replaced
+    assert reply.status_code == 200, reply.text
+    # The frames and their clip's start as they were when read together.
+    assert [m["clip_at_s"] for m in reply.json()] == [6, 3, 0]
+
+
 def test_ask_stream_reports_a_failing_model_server(client, memories):
     async def broken(messages, tools):
         raise UpstreamError("The chat model answered 400: tool choice not enabled")
@@ -314,7 +635,7 @@ def test_upload_list_fetch_and_delete_an_image(client):
     assert image.headers["content-type"] == "image/jpeg"
     assert max(Image.open(io.BytesIO(image.content)).size) == media.MAX_SIDE
     # Versioned by file name, so it can be cached for good; a bare id is asked about every time,
-    # since the disposable database hands the same id to a different image after a wipe.
+    # since a wiped database hands the same id to a different image.
     assert "immutable" in image.headers["cache-control"]
     bare = client.get(f"/api/memories/{memory['id']}/image")
     assert bare.headers["cache-control"] == "private, no-cache"
@@ -505,6 +826,20 @@ def test_vectors_endpoint_sends_the_stored_embeddings(client, memories):
     vector = struct.unpack(f"<{WIDTH}f", base64.b64decode(body[-1]["embedding"]))
     assert list(vector) == pytest.approx(unit(0))
     assert texts == []
+
+
+def test_vectors_endpoint_sends_only_memories_stored_after_one(client, db, memories):
+    async def add(session):
+        # Stored after all the others, though seen before any of them.
+        memory = await add_memory(session, "text", unit(2), NOON - timedelta(days=1), "Late")
+        await session.commit()
+        return memory.id
+
+    late = db(add)
+
+    body = client.get("/api/memories/vectors", params={"after_id": memories[1]}).json()
+
+    assert [m["id"] for m in body] == [memories[3], memories[2], late]  # newest seen first
 
 
 def test_ask_can_pin_the_collections_searched(client, memories):

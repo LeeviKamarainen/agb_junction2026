@@ -43,7 +43,7 @@ const FRAME_EVERY_MS = 500; // each tile asks for its newest frame at most this 
 /** The apps that send frames, as they name themselves (backend/app/glasses/feeds.py). */
 const CLIENTS: Record<string, { label: string; Icon: typeof Glasses }> = {
   glasses: { label: "Meta glasses app", Icon: Glasses },
-  live: { label: "Live page", Icon: Smartphone },
+  live: { label: "Try it page", Icon: Smartphone },
   harness: { label: "Glasses harness", Icon: MonitorPlay },
 };
 export const clientInfo = (name: string) => CLIENTS[name] ?? { label: name, Icon: Radio };

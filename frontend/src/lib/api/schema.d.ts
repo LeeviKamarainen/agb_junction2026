@@ -433,7 +433,9 @@ export interface paths {
          * @description The stored embeddings with their memories, for drawing a map: the newest 2000.
          *
          *     Each embedding is base64 of its float32 numbers, little-endian: a third of the size of a
-         *     JSON list.
+         *     JSON list. A frame of a published demo clip says which clip it is from (`clip_id`) and how
+         *     many seconds into the clip it was taken (`clip_at_s`). A clip is demo memory, so `clip`
+         *     with `mine` is a 422.
          */
         get: operations["memory_vectors_api_memories_vectors_get"];
         put?: never;
@@ -587,7 +589,8 @@ export interface paths {
         /**
          * Ask
          * @description Answer a question from the memories you may see: the chat model searches them, then
-         *     answers.
+         *     answers. With mine, only from your own; with demo_clip_id and demo_at_s, only from that clip
+         *     up to there, at its time.
          */
         post: operations["ask_api_ask_post"];
         delete?: never;
@@ -671,7 +674,7 @@ export interface paths {
          *     wearer took (always stored). Most answers carry no `message`; when a trigger fires,
          *     `message` is what to show on the glasses.
          *
-         *     `store=false` only checks the frame against the triggers: the home page sends the demo clips
+         *     `store=false` only checks the frame against the triggers: /try sends a demo clip's frames
          *     this way, since they are stored as demo memories already. `client` names the app sending it
          *     ("live", "harness", ...) for the admin's stream wall. `collection` tags what is stored (one
          *     recorded demo, say; a-z, 0-9, _ and -, up to 40), "glasses" when left out.
@@ -785,6 +788,8 @@ export interface components {
         Answer: {
             /** Answer */
             answer: string;
+            /** Evidence */
+            evidence: components["schemas"]["SearchResult"][];
             /** Searches */
             searches: components["schemas"]["VectorSearchArgs"][];
             /** Sources */
@@ -798,6 +803,15 @@ export interface components {
             question: string;
             /** Collections */
             collections?: string[];
+            /**
+             * Mine
+             * @default false
+             */
+            mine: boolean;
+            /** Demo Clip Id */
+            demo_clip_id?: number | null;
+            /** Demo At S */
+            demo_at_s?: number | null;
         };
         /** Body_add_image_api_memories_image_post */
         Body_add_image_api_memories_image_post: {
@@ -898,6 +912,11 @@ export interface components {
             demo_clip_id?: number | null;
             /** Demo At S */
             demo_at_s?: number | null;
+            /**
+             * Mine
+             * @default false
+             */
+            mine: boolean;
         };
         /**
          * Credentials
@@ -1225,6 +1244,10 @@ export interface components {
             owner?: string | null;
             /** Embedding */
             embedding: string;
+            /** Clip Id */
+            clip_id: number | null;
+            /** Clip At S */
+            clip_at_s: number | null;
         };
         /** SearchResult */
         SearchResult: {
@@ -1343,6 +1366,13 @@ export interface components {
             assets: components["schemas"]["ShowcaseAsset"][];
             /** Cues */
             cues: components["schemas"]["ShowcaseCue"][];
+            /**
+             * Converting
+             * @default false
+             */
+            converting: boolean;
+            /** Conversion Error */
+            conversion_error?: string | null;
         };
         /** ShowcaseWrite */
         ShowcaseWrite: {
@@ -1412,6 +1442,8 @@ export interface components {
             arguments?: unknown;
             /** Results */
             results?: components["schemas"]["SearchResult"][] | null;
+            /** Evidence */
+            evidence?: components["schemas"]["SearchResult"][] | null;
         };
         /** Text */
         Text: {
@@ -2251,6 +2283,12 @@ export interface operations {
             query?: {
                 /** @description Only these collections; leave out for every one */
                 collection?: string[];
+                /** @description Only the frames of this demo clip */
+                clip?: number | null;
+                /** @description Only memories with a larger id: stored after the ones you have */
+                after_id?: number | null;
+                /** @description Only your own: not the demo memories, nor (admin) anyone else's */
+                mine?: boolean;
             };
             header?: never;
             path?: never;

@@ -18,7 +18,7 @@ from fastapi import HTTPException
 from pydantic import BaseModel, Field, model_validator
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from app import agent, faces
+from app import agent, demo, faces
 from app.auth import Viewer
 from app.glasses import dejavu, feeds, frames, screens, triggers
 from app.glasses.layout import GlassesReply
@@ -122,15 +122,20 @@ class Command(BaseModel):
 
     action: str | None = Field(default=None, max_length=100)
     question: str | None = Field(default=None, max_length=500)
-    # The home page plays a demo clip instead of a camera: which, and how many seconds into it.
-    # Déjà vu then asks about the clip's frame there (dejavu.DemoView).
+    # /try plays a demo clip instead of a camera: which, and how many seconds into it. Déjà vu
+    # then asks about the clip's frame there (demo.DemoView).
     demo_clip_id: int | None = None
-    demo_at_s: float | None = Field(default=None, ge=0)
+    demo_at_s: float | None = Field(default=None, ge=0, le=demo.LONGEST_CLIP_S, allow_inf_nan=False)
+    # Only the wearer's own memories: not the demo ones, nor (for the admin) anyone else's.
+    # /try's camera, whose memory is what the visitor's camera saw. Not with a demo clip.
+    mine: bool = False
 
     @model_validator(mode="after")
     def one_of(self) -> Self:
         if (self.action is None) == (self.question is None):
             raise ValueError("send exactly one of action or question")
+        if self.demo_clip_id is not None and self.mine:
+            raise ValueError("a demo clip is demo memory, never your own: leave out mine")
         return self
 
 
@@ -150,12 +155,12 @@ async def command(
     feeds.note(viewer.id, "question", question, "glasses")
     if dejavu.is_recall(question):
         view = (
-            dejavu.DemoView(body.demo_clip_id, body.demo_at_s or 0.0)
+            demo.DemoView(body.demo_clip_id, body.demo_at_s or 0.0)
             if body.demo_clip_id is not None
             else None
         )
-        return await _recall(session, question, chat, viewer, view)
-    return await _ask(session, question, chat, embed, viewer)
+        return await _recall(session, question, chat, viewer, view, body.mine)
+    return await _ask(session, question, chat, embed, viewer, body.mine)
 
 
 async def _watch_for(
@@ -180,13 +185,14 @@ async def _recall(
     question: str,
     chat: Chat | None,
     viewer: Viewer,
-    view: dejavu.DemoView | None = None,
+    view: demo.DemoView | None = None,
+    mine: bool = False,
 ) -> GlassesReply:
     """Déjà vu (dejavu.py): where the wearer has seen what is in front of them."""
     if chat is None:
         return screens.memory_problem(question, "Memory search isn’t set up yet.")
     try:
-        found = await dejavu.recall(session, chat, viewer, view)
+        found = await dejavu.recall(session, chat, viewer, view, mine)
     except (UpstreamError, ValueError) as error:
         log.warning("Déjà vu failed: %s", error)
         return screens.memory_problem(question, "I can’t reach the memory right now.")
@@ -196,13 +202,18 @@ async def _recall(
 
 
 async def _ask(
-    session: AsyncSession, question: str, chat: Chat | None, embed: Embedder | None, viewer: Viewer
+    session: AsyncSession,
+    question: str,
+    chat: Chat | None,
+    embed: Embedder | None,
+    viewer: Viewer,
+    mine: bool = False,
 ) -> GlassesReply:
     if chat is None or embed is None:
         return screens.memory_problem(question, "Memory search isn’t set up yet.")
     try:
         answer = await agent.answer(
-            session, question, chat, embed, viewer.owners, owner_id=viewer.id
+            session, question, chat, embed, viewer.scope(mine), owner_id=viewer.id
         )
     except UpstreamError as error:
         log.warning("Memory question failed: %s", error)

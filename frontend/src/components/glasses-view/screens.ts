@@ -1,6 +1,6 @@
 import type { components } from "@/lib/api/schema";
 
-import type { FlexBoxNode, LayoutNode } from "../glasses/types";
+import type { FlexBoxNode, LayoutNode } from "@/app/glasses/types";
 
 type Message = components["schemas"]["GlassesMessage"];
 

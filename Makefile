@@ -50,7 +50,7 @@ api-types: frontend/node_modules
 
 reset-db:
 	rm -f backend/data/dev.db backend/data/dev.db-wal backend/data/dev.db-shm
-	@echo "Local database deleted; restart the backend to rebuild and re-seed it."
+	@echo "Local database deleted; the next backend start creates an empty one."
 
 # --- Production VM -----------------------------------------------------------
 
@@ -60,7 +60,8 @@ prod-ssh:
 prod-logs:
 	ssh $(VM) 'cd $(DEPLOY_DIR) && docker compose logs --follow --tail 200'
 
-# Wipes production data; the backend rebuilds the database from seed.py on start.
+# Wipes production data on purpose, for good: only a schema change that was carried over leaves a
+# backup (app.db.*.bak, which stay). The backend starts again with an empty database.
 prod-reset-db:
 	ssh $(VM) 'cd $(DEPLOY_DIR) && docker compose stop backend \
 		&& docker compose run --rm --no-deps --entrypoint sh backend -c "rm -f /data/app.db /data/app.db-wal /data/app.db-shm" \

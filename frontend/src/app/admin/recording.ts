@@ -8,7 +8,7 @@ import {
   useState,
 } from "react";
 import type { components } from "@/lib/api/schema";
-import type { Cue } from "../demos/cues";
+import type { Cue } from "@/components/glasses-view/cues";
 import { errorText } from "../memory/types";
 
 type FrameReply = components["schemas"]["FrameReply"];

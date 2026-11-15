@@ -42,6 +42,10 @@ class CollectionCount(SQLModel):
 
 class MemoryVector(MemoryPublic):
     embedding: str  # base64 of the little-endian float32 vector, 768 numbers
+    # For a frame of a published demo clip (app/demo.py): the clip, and how many seconds into it
+    # the frame was taken, so a map can grow as the clip plays. None for every other memory.
+    clip_id: int | None
+    clip_at_s: float | None
 
 
 class TextMemoryCreate(SQLModel):
@@ -147,12 +151,18 @@ class TriggerPublic(TriggerBase):
     level: float | None
 
 
+# The longest a demo clip's video may play, and the longest one image of an image sequence may
+# show, in seconds: a demo is short, and these are well past what any needs.
+MAX_VIDEO_S = 3600
+MAX_IMAGE_S = 60
+
+
 class ShowcaseFields(SQLModel):
     title: str = Field(min_length=1, max_length=100)
     description: str = Field(default="", max_length=1000)
     kind: str = "images"
-    duration_s: float = Field(default=30, gt=0, le=3600)
-    image_seconds: float = Field(default=3, ge=0.25, le=60)
+    duration_s: float = Field(default=30, gt=0, le=MAX_VIDEO_S)
+    image_seconds: float = Field(default=3, ge=0.25, le=MAX_IMAGE_S)
     position: int = Field(default=0, ge=0, le=10000)
     published: bool = False
 

@@ -14,17 +14,18 @@ whenever the admin changes a clip (`request_sync`), since embedding a video take
 import asyncio
 import hashlib
 import logging
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 import anyio
 import cv2
-from sqlmodel import col, select
+from sqlmodel import col, func, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app import faces, media, showcase, vectors
 from app.glasses.frames import SCENE_CHANGE, STORE_EVERY_S, cosine_distance
 from app.llm import Embedder, UpstreamError
-from app.models import Memory, Showcase
+from app.models import MAX_IMAGE_S, MAX_VIDEO_S, Memory, Showcase
 from app.search import DEMO_OWNER, TABLE, add_memory, width_error
 
 log = logging.getLogger(__name__)
@@ -34,6 +35,16 @@ FPS = 2  # as the glasses stream
 MAX_FRAMES = 1200  # ten minutes of video at FPS; the rest of a longer video is left out
 BATCH = 8  # images per call to the embedding model
 _PREFIX = "clip:"
+# How far into a clip anyone can be watching, in seconds: the longest video, or the longest image
+# sequence, showcase.MAX_ASSETS images each shown for as long as one may be. A request naming a
+# point further in is refused, rather than overflowing the clip's time.
+LONGEST_CLIP_S = float(max(MAX_VIDEO_S, showcase.MAX_ASSETS * MAX_IMAGE_S))
+# How far past a point in a clip a frame may be and still count as shown by then, in seconds. A
+# frame's time into its clip comes from times stored to the microsecond, while the browser
+# counts an image sequence's playhead as image index × image_seconds in floating point (3 × 0.3
+# is 0.8999999999999999 where 0.9 is stored). A millisecond is far above that rounding and far
+# below the shortest an image shows (ShowcaseFields.image_seconds, 0.25 s).
+AT_TOLERANCE_S = 0.001
 
 # Made by the running worker (`worker`), so it belongs to the app's event loop.
 _wanted: asyncio.Event | None = None
@@ -69,6 +80,83 @@ async def worker(session_factory, embed: Embedder, retry_s: float) -> None:
 def clip_prefix(clip_id: int) -> str:
     """How the `source` of every memory of a clip starts, whatever its media."""
     return f"{_PREFIX}{clip_id}:"
+
+
+def clip_of(source: str) -> int | None:
+    """The clip a memory with this `source` is a frame of; None for any other memory."""
+    if not source.startswith(_PREFIX):
+        return None
+    clip_id, _digest = source.removeprefix(_PREFIX).split(":")
+    return int(clip_id)
+
+
+def _aware(moment: datetime) -> datetime:
+    # SQLite gives times back without their offset; every time stored here is UTC.
+    return moment if moment.tzinfo else moment.replace(tzinfo=UTC)
+
+
+def clip_starts():
+    """When each clip starts, by its memories' `source`: its earliest frame, as `_store_clip`
+    always keeps a clip's first frame. Over all of a clip's frames, for a reader that has only
+    some of them (a limit or a filter cut the rest). A subquery (`source`, `start`) to join in
+    the statement that reads the frames, so that both see the same clips: a second read could
+    miss a clip that `sync` replaced in between."""
+    return (
+        select(col(Memory.source).label("source"), func.min(col(Memory.created_at)).label("start"))
+        .where(Memory.owner_id == DEMO_OWNER, col(Memory.source).startswith(_PREFIX))
+        .group_by(col(Memory.source))
+        .subquery()
+    )
+
+
+def frame_at_s(frame: Memory, start: datetime) -> float:
+    """How many seconds into its clip a clip frame was taken, the clip starting at `start`."""
+    return (_aware(frame.created_at) - _aware(start)).total_seconds()
+
+
+async def clip_frames(session: AsyncSession, clip_id: int) -> list[tuple[float, Memory]]:
+    """A clip's frames, oldest first, each with how many seconds into the clip it was taken."""
+    frames = list(
+        await session.exec(
+            select(Memory)
+            .where(Memory.owner_id == DEMO_OWNER)
+            .where(col(Memory.source).startswith(clip_prefix(clip_id)))
+            .order_by(col(Memory.created_at), col(Memory.id))
+        )
+    )
+    # All of the clip's frames are here, oldest first: the first of a source is its start, with
+    # no second read that a clip being replaced meanwhile could leave without it.
+    starts: dict[str, datetime] = {}
+    for frame in frames:
+        starts.setdefault(frame.source, _aware(frame.created_at))
+    return [(frame_at_s(frame, starts[frame.source]), frame) for frame in frames]
+
+
+def frames_until(frames: list[tuple[float, Memory]], at_s: float) -> set[int]:
+    """The ids of those of a clip's frames (`clip_frames`) taken at most `at_s` seconds in, as
+    far as AT_TOLERANCE_S tells them apart."""
+    return {
+        frame.id for at, frame in frames if at <= at_s + AT_TOLERANCE_S and frame.id is not None
+    }
+
+
+@dataclass(frozen=True)
+class DemoView:
+    """Someone watches a demo clip instead of a camera: which, and how far into it, in seconds."""
+
+    clip_id: int
+    at_s: float
+
+
+async def shown_so_far(session: AsyncSession, view: DemoView) -> tuple[set[int], datetime] | None:
+    """What someone watching `view` has seen of the clip: the ids of its frames up to the point
+    it plays, and the moment that point shows (the clip's first frame plus `view.at_s`). None
+    while the clip has no frames stored."""
+    frames = await clip_frames(session, view.clip_id)
+    if not frames:
+        return None
+    start = _aware(frames[0][1].created_at)  # the oldest frame, 0 s in
+    return frames_until(frames, view.at_s), start + timedelta(seconds=view.at_s)
 
 
 def source(clip: Showcase) -> str:

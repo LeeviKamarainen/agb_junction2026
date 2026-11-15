@@ -10,7 +10,7 @@ from fastapi.responses import FileResponse, Response, StreamingResponse
 from sqlmodel import col, func, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from app import agent, demo_bundles, faces, media, vectors
+from app import agent, demo, demo_bundles, faces, media, vectors
 from app.auth import DEMO_OWNER, Viewer, ViewerDep
 from app.db import SessionDep, new_session
 from app.glasses import feeds
@@ -20,6 +20,7 @@ from app.models import (
     Memory,
     MemoryPublic,
     MemoryVector,
+    Showcase,
     TextMemoryCreate,
     User,
 )
@@ -68,18 +69,20 @@ def _stored_name(name: str) -> str:
         return name
 
 
-def _visible(query, viewer: Viewer):
-    """`query` limited to the memories `viewer` may see."""
-    owners = viewer.owners
+def _visible(query, viewer: Viewer, mine: bool = False):
+    """`query` limited to the memories `viewer` may see, or with `mine` to their own."""
+    owners = viewer.scope(mine)
     return query if owners is None else query.where(col(Memory.owner_id).in_(owners))
 
 
-def _newest(collections: list[str], viewer: Viewer):
-    """Memories `viewer` may see, newest first, only in `collections` unless it is empty."""
-    query = select(Memory).order_by(col(Memory.created_at).desc(), col(Memory.id).desc())
+def _newest(collections: list[str], viewer: Viewer, query=None, mine: bool = False):
+    """`query` (of memories when not given) limited to those `viewer` may see, or with `mine` to
+    their own, newest first, only in `collections` unless it is empty."""
+    query = select(Memory) if query is None else query
+    query = query.order_by(col(Memory.created_at).desc(), col(Memory.id).desc())
     names = [_stored_name(name) for name in collections if name.strip()]
     query = query.where(col(Memory.collection).in_(names)) if names else query
-    return _visible(query, viewer)
+    return _visible(query, viewer, mine)
 
 
 async def _usernames(session: AsyncSession) -> dict[int, str]:
@@ -130,22 +133,46 @@ async def memory_vectors(
     session: SessionDep,
     viewer: ViewerDep,
     collection: CollectionsQuery = [],  # noqa: B006
+    clip: Annotated[int | None, Query(description="Only the frames of this demo clip")] = None,
+    after_id: Annotated[
+        int | None,
+        Query(description="Only memories with a larger id: stored after the ones you have"),
+    ] = None,
+    mine: Annotated[
+        bool,
+        Query(description="Only your own: not the demo memories, nor (admin) anyone else's"),
+    ] = False,
 ):
     """The stored embeddings with their memories, for drawing a map: the newest 2000.
 
     Each embedding is base64 of its float32 numbers, little-endian: a third of the size of a
-    JSON list.
+    JSON list. A frame of a published demo clip says which clip it is from (`clip_id`) and how
+    many seconds into the clip it was taken (`clip_at_s`). A clip is demo memory, so `clip`
+    with `mine` is a 422.
     """
-    memories = (await session.exec(_newest(collection, viewer).limit(MAX_VECTORS))).all()
-    ids = {m.id for m in memories if m.id}
+    if clip is not None and mine:
+        raise HTTPException(422, "A demo clip is demo memory, never your own: leave out mine")
+    # The frames with their clips' starts, in one statement: read apart, a clip that demo.sync
+    # replaced in between would leave a frame without its start.
+    starts = demo.clip_starts()
+    joined = select(Memory, starts.c.start).outerjoin(starts, starts.c.source == Memory.source)
+    query = _newest(collection, viewer, joined, mine)
+    if clip is not None:
+        query = query.where(col(Memory.source).startswith(demo.clip_prefix(clip)))
+    if after_id is not None:
+        query = query.where(col(Memory.id) > after_id)
+    rows = (await session.exec(query.limit(MAX_VECTORS))).all()
+    ids = {memory.id for memory, _start in rows if memory.id}
     stored = await vectors.stored(await session.connection(), TABLE, ids)
     names = await _usernames(session)
     return [
         MemoryVector(
             **public(memory, names).model_dump(),
             embedding=base64.b64encode(struct.pack(f"<{len(vector)}f", *vector)).decode(),
+            clip_id=demo.clip_of(memory.source),
+            clip_at_s=None if start is None else demo.frame_at_s(memory, start),
         )
-        for memory in memories
+        for memory, start in rows
         if (vector := stored.get(memory.id or 0)) is not None
     ]
 
@@ -306,6 +333,24 @@ async def search(
         raise HTTPException(502, str(error)) from error
 
 
+async def _demo_scope(
+    session: AsyncSession, body: agent.AskRequest
+) -> tuple[set[int] | None, datetime | None]:
+    """What a question asked while a demo clip plays may search, and the moment it is then
+    (agent.run's `memory_ids` and `now`); both None without a demo clip. 404 for a clip that
+    is not published, 409 while its frames are not stored yet (app/demo.py stores them)."""
+    view = body.demo_view()
+    if view is None:
+        return None, None
+    clip = await session.get(Showcase, view.clip_id)
+    if clip is None or not clip.published:
+        raise HTTPException(404, f"No published demo clip {view.clip_id}")
+    shown = await demo.shown_so_far(session, view)
+    if shown is None:
+        raise HTTPException(409, f"Demo clip {view.clip_id} is not stored as memories yet")
+    return shown
+
+
 @router.post("/ask", response_model=agent.Answer)
 async def ask(
     body: agent.AskRequest,
@@ -315,7 +360,9 @@ async def ask(
     embed: EmbedderDep,
 ):
     """Answer a question from the memories you may see: the chat model searches them, then
-    answers."""
+    answers. With mine, only from your own; with demo_clip_id and demo_at_s, only from that clip
+    up to there, at its time."""
+    memory_ids, now = await _demo_scope(session, body)
     feeds.note(viewer.id, "question", body.question, "chat")
     try:
         return await agent.answer(
@@ -323,9 +370,11 @@ async def ask(
             body.question,
             chat,
             embed,
-            viewer.owners,
+            viewer.scope(body.mine),
+            now=now,
             collections=body.collections,
             owner_id=viewer.id,
+            memory_ids=memory_ids,
         )
     except UpstreamError as error:
         raise HTTPException(502, str(error)) from error
@@ -336,14 +385,22 @@ async def ask(
     response_class=StreamingResponse,
     responses={200: {"content": {"application/x-ndjson": {}}}},
 )
-async def ask_stream(body: agent.AskRequest, viewer: ViewerDep, chat: ChatDep, embed: EmbedderDep):
+async def ask_stream(
+    body: agent.AskRequest,
+    session: SessionDep,
+    viewer: ViewerDep,
+    chat: ChatDep,
+    embed: EmbedderDep,
+):
     """The same as /ask, as newline-delimited JSON: one Step per line as it happens.
 
     A failure after the first line arrives as {"type": "error", "content": "..."}.
     """
 
-    # Read now: the request's session closes before the stream ends.
-    owners, owner_id = viewer.owners, viewer.id
+    # Read now: the request's session closes before the stream ends, and a status code can only
+    # be sent before the first line.
+    owners, owner_id = viewer.scope(body.mine), viewer.id
+    memory_ids, now = await _demo_scope(session, body)
     feeds.note(owner_id, "question", body.question, "chat")
 
     async def lines() -> AsyncIterator[str]:
@@ -356,8 +413,10 @@ async def ask_stream(body: agent.AskRequest, viewer: ViewerDep, chat: ChatDep, e
                     chat,
                     embed,
                     owners,
+                    now=now,
                     collections=body.collections,
                     owner_id=owner_id,
+                    memory_ids=memory_ids,
                 ):
                     yield step.model_dump_json() + "\n"
             except UpstreamError as error:

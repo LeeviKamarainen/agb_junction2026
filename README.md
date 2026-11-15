@@ -14,7 +14,7 @@ Meta glasses ──► Android app ──WebSocket──► backend (FastAPI + S
  camera, mic,     (glasses-android)           memories, triggers, accounts                EmbeddingGemma 2 + Gemma (vLLM)
  Neural Band,                                           ▲
  display  ◄───────── messages and warnings ─────────────┤
-                                        Next.js web app: live view, demos, Memory lab
+                                        Next.js web app: demos, Try it, admin tools
 ```
 
 ## What's in this repo
@@ -22,7 +22,7 @@ Meta glasses ──► Android app ──WebSocket──► backend (FastAPI + S
 | Folder | What it is |
 |---|---|
 | `backend/` | FastAPI backend (SQLModel on SQLite, vector search with sqlite-vec). Stores memories, runs the ask loop, checks frames against triggers, decides what the glasses display. All routes are under `/api`. |
-| `frontend/` | Next.js web app: the **live view** (`/`), **Demos** (`/demos`), the **Memory lab** (`/memory`) for anyone logged in (a guest sees the demo memories and its own), and for the admin the **stream wall** (`/admin/streams`) and the **glasses harness** (`/glasses`), plus the login pages. |
+| `frontend/` | Next.js web app: the **home page** (`/`) plays the demo clips through the glasses, **Try it** (`/try`) runs a clip or your camera live, with questions and the memory growing as a map; for the admin, demo management (`/admin`), the **stream wall** (`/admin/streams`), the **Memory lab** (`/memory`) and the **glasses harness** (`/glasses`). |
 | `glasses-android/` | The real glasses client: an Android app that streams the Meta glasses' camera and sends frames, photos and voice to the backend; see [its README](glasses-android/README.md). |
 | `memory/` | The visual memory service that runs on the Gemma server: embeds frames, serves the embeddings and chat, and draws the memory map; see [its README](memory/README.md). Its own uv project (about 6 GB with torch). |
 | `my-glasses-app/` | A small web app for the glasses' display (React, Meta's UI toolkit), see below. |
@@ -49,29 +49,29 @@ EMBED_API_KEY=...
 ADMIN_PASSWORD=...   # optional: otherwise a random admin password is printed in the backend log
 ```
 
-`LLM_URL` and `EMBED_URL` can both point to the memory API on the Gemma server (`https://<vm2-ip-with-dashes>.sslip.io`) with its token. `make reset-db` deletes the local database; it is rebuilt and re-seeded on the next start.
+`LLM_URL` and `EMBED_URL` can both point to the memory API on the Gemma server (`https://<vm2-ip-with-dashes>.sslip.io`) with its token. `make reset-db` deletes the local database; an empty one is created on the next start.
 
 ## How to use it
 
 ### Log in
 
-Open http://localhost:3000 and start a **guest**: a generated name, no password, valid for 60 minutes, which sees the demo memories and the ones it adds. The admin sees every memory and logs in at `/admin` with `ADMIN_PASSWORD`, reached through the small settings icon on the login form. See [AGENTS.md](AGENTS.md) for how accounts and scoping work.
+Open http://localhost:3000. Visitors never log in: **Try it** starts a **guest** when they press Start, a generated name, no password, valid for 60 minutes, which sees the demo memories and the ones it adds. The admin sees every memory and logs in at `/admin` with `ADMIN_PASSWORD`; the admin pages are not linked for anyone else. See [AGENTS.md](AGENTS.md) for how accounts and scoping work.
 
-### The live view and curated demos
+### The home page and Try it
 
-The home page is what the glasses see: it plays the published demo clips, or your own camera (on a phone, front or back). **Stream** sends 2 frames a second, as the glasses do, and each is checked against your triggers; a trigger's message appears on the view. Beside it, ask about the day by typing or holding **Talk**: answers are spoken and shown on the view too. Ask Gemma to warn you about something ("warn me when I see a bicycle") and the triggers for it appear below. **Glasses display** draws the glasses' own display over the video, so you see exactly what the wearer would when a trigger fires or an answer comes back. **Fullscreen** fills the screen with the view and its controls (on an iPhone, the window). Double-tap the view to start or stop the stream.
+The home page plays one of the published demo clips as the wearer sees it: the whole picture through a drawn glasses frame, with the glasses' display in the right lens showing what was said and answered in that clip (its prompts, set at `/admin`). Pick another clip under it; the sound button plays the clip's audio and reads the display aloud. **Try it out** opens `/try` with that clip.
 
-Nobody needs an account: the first question or stream starts a 60-minute guest, which sees the demo memories and its own. Demo clips are only checked against the triggers; camera frames are also stored as the guest's memories.
+`/try` is the same view, live. **Start** plays the clip, or your camera (on a phone, front or back), and sends 2 frames a second as the glasses do, each checked against your goals. Ask by typing or holding **Hold to ask**: the answer appears in the right lens with the frame it rests on, and is spoken. While a demo clip plays, only the part already shown can be found, so the answers never run ahead of the video. Say "warn me when I see a door" and the goal appears under the view; its message shows in the lens when it fires. On the right, the memory grows as a map: one point per remembered frame, similar frames close together; point at one to see it, and the frame an answer rests on is ringed.
 
-Watch `/demos` without logging in. Published videos and ordered image sequences share one timeline, with chapter navigation, seeking, pause and mute controls.
+Nobody needs an account: **Start** (or the first question) starts a 60-minute guest, which sees the demo memories and its own. Demo clips are only checked against the goals; camera frames are also stored as the guest's memories.
 
 At `/admin`, add a draft, upload one MP4/WebM video (up to 200 MB) or a batch of images (up to 100, 15 MB each, 200 MB per upload), then publish. Adjust image dwell time, reorder images and move demos earlier or later. Video length is detected in the browser and can be adjusted. Published media is public; drafts are visible only to the admin. Publishing a demo also makes it searchable: the backend stores a video's frames at 2 fps (skipping near-duplicates) and each image of a sequence as demo memories that everyone can ask about, faces blurred, and replaces or removes them when the demo changes or is unpublished. That needs the embedding model (`EMBED_URL`) and takes a while for a long video.
 
-At `/admin/streams` the admin sees every client streaming right now (the live page, the glasses harness, the glasses app), each with its newest frame refreshing about twice a second and, under it, a log of the questions its user asked, the goals they set, and the triggers that fired. Click a stream to open it in full, with fullscreen and a verbose backend log: every frame's result and trigger scores, Gemma's searches and answers, and errors, each with its JSON.
+At `/admin/streams` the admin sees every client streaming right now (the Try it page, the glasses harness, the glasses app), each with its newest frame refreshing about twice a second and, under it, a log of the questions its user asked, the goals they set, and the triggers that fired. Click a stream to open it in full, with fullscreen and a verbose backend log: every frame's result and trigger scores, Gemma's searches and answers, and errors, each with its JSON.
 
-Media files live in `showcase-media/` beside the database. Schema or seed changes rebuild the disposable database and remove demo configurations; old files are not reassigned to new demos. The database starts empty; upload your own memories and curated media after a rebuild.
+Media files live in `showcase-media/` beside the database. A change to the models keeps the data: the next start carries the rows over to the new tables, or stops with a message that says what to do when it cannot ([ADR 0003](docs/adr/0003-carry-rows-over.md)).
 
-### Memory lab (`/memory`)
+### Memory lab (`/memory`, admin only)
 
 - **Library:** add memories by uploading images, taking a webcam picture, or writing a note; group them into collections. Browse stable thumbnails in pages of 24, search captions/collections, and tap a memory to inspect the full image.
 - **Ask tab:** ask Gemma a question and watch it search the memories step by step.

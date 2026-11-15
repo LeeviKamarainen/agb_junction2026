@@ -5,9 +5,9 @@ description: Build a feature end-to-end in this repo, from data model through /a
 
 # Add a feature
 
-The example Note feature is the pattern to copy: `backend/app/models.py`, `backend/app/routes/notes.py`, `frontend/src/app/page.tsx`, `frontend/src/app/note-form.tsx`. Once the first real feature exists, delete Note everywhere: model, route, seed rows, page, form, `backend/tests/test_notes.py`.
+The example Note feature is the pattern to copy: `backend/app/models.py`, `backend/app/routes/notes.py`, `frontend/src/app/page.tsx`, `frontend/src/app/note-form.tsx`. Once the first real feature exists, delete Note everywhere: model, route, page, form, `backend/tests/test_notes.py`.
 
-1. **Model**: in `backend/app/models.py`, add a table model plus `<Name>Create` and `<Name>Public` schemas, as Note does. Put demo rows in `backend/app/seed.py`. The next backend start rebuilds the database because the models changed.
+1. **Model**: in `backend/app/models.py`, add a table model plus `<Name>Create` and `<Name>Public` schemas, as Note does. Give every new column a default or make it optional (`| None`): the next backend start carries the existing rows over to the changed schema, and stops if it cannot fill a new column (`docs/adr/0003-carry-rows-over.md`).
 2. **Endpoint**: add `backend/app/routes/<feature>.py` with an `APIRouter` (paths are relative to `/api`) and register it in `backend/app/main.py` with `api.include_router(...)`.
 3. **Test**: add `backend/tests/test_<feature>.py` using the `client` fixture, covering the behaviour the demo relies on. Done when `make check-backend` passes.
 4. **Types**: run `make api-types`, then confirm the new paths appear in `frontend/src/lib/api/schema.d.ts`.

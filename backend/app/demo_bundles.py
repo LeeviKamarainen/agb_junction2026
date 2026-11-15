@@ -1,9 +1,9 @@
-"""Recorded demos that live in the repository, so a rebuilt database does not lose them.
+"""Recorded demos that live in the repository, so even a wiped database does not lose them.
 
-The database is disposable (docs/adr/0001-disposable-database.md): a changed model wipes it,
-memories and all. A demo recorded with the glasses app (frames stored under a tag, as a memory
-collection) is therefore downloaded as a bundle, committed under `backend/demo-data/<tag>/`, and
-loaded again by every start as demo memories that every user sees:
+The database keeps its rows when the schema changes (docs/adr/0003-carry-rows-over.md), but not
+through a deliberate wipe or a lost volume. A demo recorded with the glasses app (frames stored
+under a tag, as a memory collection) is therefore downloaded as a bundle, committed under
+`backend/demo-data/<tag>/`, and loaded again by every start as demo memories that every user sees:
 
 - `pack` makes the zip that `GET /api/memories/export?collection=<tag>` sends: `manifest.json` and
   the stills as `0001.jpg`, `0002.jpg`... in time order. The stills already have their faces
@@ -11,8 +11,6 @@ loaded again by every start as demo memories that every user sees:
 - `load` (called at startup, after the database is ready) adds every bundle that is not in the
   database yet. A bundle is skipped, with a warning, when it was made with another embedding model
   than the configured one or with vectors of another width: record it again.
-
-This is not seed.py on purpose: changing seed.py wipes the database, adding a bundle must not.
 """
 
 import base64
