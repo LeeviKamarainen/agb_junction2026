@@ -1,6 +1,7 @@
-/* GlassesView: the picture through the glasses' frame, with the glasses' display in the right
+/* GlassesView: the picture inside the glasses' lenses, with the glasses' display in the right
    lens. Everything is prefixed gv-. Positions inside the stage are in container units (cqw, cqh)
-   of the stage, so the view looks the same at any size. */
+   of the stage, so the view looks the same at any size. The frame's shapes, and the picture's
+   box inside them, are in glasses-frame.ts. */
 
 .gv {
   container: gv / inline-size;
@@ -8,10 +9,11 @@
 }
 
 .gv-stage {
+  --gv-ratio: 1.6; /* 16:10, the shape glasses-frame.ts draws WIDE for */
   container: gv-stage / size;
   position: relative;
   width: 100%;
-  aspect-ratio: 16 / 10;
+  aspect-ratio: var(--gv-ratio);
   overflow: hidden;
   isolation: isolate;
   border-radius: 18px;
@@ -22,10 +24,11 @@
     0 24px 60px -20px rgb(0 0 0 / 0.6);
 }
 
-/* A phone or a narrow column: a taller stage, which suits portrait video and phone cameras. */
+/* A phone or a narrow column: a taller stage, which suits portrait video and phone cameras
+   (4:5, the shape glasses-frame.ts draws TALL for). */
 @container gv (width < 640px) {
   .gv-stage {
-    aspect-ratio: 4 / 5;
+    --gv-ratio: 0.8;
   }
 }
 
@@ -41,8 +44,11 @@
   filter: blur(22px) brightness(0.4) saturate(1.3);
 }
 
-/* The picture; anything else given instead (a placeholder line, say) is centred. */
-.gv-picture {
+/* The picture fills the stage, under the frame (glasses-frame.ts), which hides only its edges.
+   Anything given instead of a picture (a placeholder line, say) is centred, and so is the
+   overlay. */
+.gv-picture,
+.gv-overlay {
   position: absolute;
   inset: 0;
   display: grid;
@@ -68,34 +74,8 @@
   pointer-events: none;
 }
 
-.gv-frame-body {
-  fill: rgb(4 6 9 / 0.74);
-}
-
-.gv-frame-rim {
-  fill: none;
-  stroke: rgb(223 231 242 / 0.16);
-  stroke-width: 2;
-  vector-effect: non-scaling-stroke;
-}
-
 .gv-frame-tall {
   display: none;
-  border-radius: inherit;
-  box-shadow:
-    inset 0 0 0 1px rgb(223 231 242 / 0.1),
-    inset 0 0 26px 6px rgb(4 6 9 / 0.7);
-}
-
-/* The bridge, at the top between the eyes. */
-.gv-frame-tall::before {
-  content: "";
-  position: absolute;
-  top: 0;
-  left: 35%;
-  width: 30%;
-  height: 9%;
-  background: radial-gradient(50% 100% at 50% 0%, rgb(4 6 9 / 0.74) 40%, transparent);
 }
 
 @container gv-stage (orientation: portrait) {
@@ -109,26 +89,27 @@
 
 /* --- The display, in the right lens --------------------------------------------------------- */
 
-/* --gv-size: the square display's side, about a third of a wide stage, centred in the right
-   lens near its bottom; at most 600px, the display's own size. Evidence stacks under it and
-   lifts it. */
+/* --gv-size: the square display's side, about a third of a wide stage, in the right lens near
+   its bottom, inside its rim (glasses-frame.ts WIDE); at most 600px, the display's own size.
+   Evidence stacks under it and lifts it. */
 .gv-lens {
-  --gv-size: min(32cqw, 56cqh, 600px);
+  --gv-size: min(30cqw, 52cqh, 600px);
   position: absolute;
-  left: calc(77cqw - var(--gv-size) / 2);
-  bottom: 12cqh;
+  left: calc(76cqw - var(--gv-size) / 2);
+  bottom: 13cqh;
   display: flex;
   flex-direction: column;
   width: var(--gv-size);
   pointer-events: none;
 }
 
-/* A tall stage: the display across the lower part of the view. */
+/* A tall stage shows the right lens alone (glasses-frame.ts TALL): the display across its lower
+   part, inside the rim. */
 @container gv-stage (orientation: portrait) {
   .gv-lens {
-    --gv-size: min(88cqw, 58cqh, 600px);
-    left: calc(50cqw - var(--gv-size) / 2);
-    bottom: 4cqh;
+    --gv-size: min(72cqw, 50cqh, 600px);
+    left: calc(52cqw - var(--gv-size) / 2);
+    bottom: 12cqh;
   }
 }
 
@@ -239,15 +220,16 @@
 
 /* --- Labels, overlay and the fullscreen button ------------------------------------------------ */
 
+/* In the left lens, above the picture. */
 .gv-status {
   position: absolute;
   top: 11cqh;
-  left: 5cqw;
+  left: 8cqw;
   display: flex;
   flex-direction: column;
   align-items: flex-start;
   gap: 6px;
-  max-width: 50cqw;
+  max-width: 40cqw;
   pointer-events: none;
 }
 
@@ -281,19 +263,17 @@
   text-overflow: ellipsis;
 }
 
+/* A tall stage's picture fills its lens: the labels go in one line on the frame above it. */
 @container gv-stage (orientation: portrait) {
   .gv-status {
-    top: 14px;
-    left: 14px;
-    max-width: calc(100cqw - 76px);
+    top: 4px;
+    left: 14cqw;
+    flex-direction: row;
+    max-width: calc(86cqw - 48px);
   }
 }
 
 .gv-overlay {
-  position: absolute;
-  inset: 0;
-  display: grid;
-  place-items: center;
   padding: 24px;
   pointer-events: none;
 }
@@ -333,10 +313,24 @@
   height: 17px;
 }
 
+/* On a tall stage's frame, clear of the lens's angled corner. */
+@container gv-stage (orientation: portrait) {
+  .gv-full {
+    top: 6px;
+    right: 6px;
+    width: 32px;
+    height: 32px;
+  }
+}
+
 /* --- Fullscreen ---------------------------------------------------------------------------- */
 
+/* The stage keeps its shape, so the frame does too, and sits in the middle of the screen; the
+   black around it meets the black frame. */
 .gv:fullscreen,
 .gv[data-full] {
+  display: grid;
+  place-items: center;
   background: #000;
 }
 
@@ -353,9 +347,7 @@
 
 .gv:fullscreen .gv-stage,
 .gv[data-full] .gv-stage {
-  width: 100%;
-  height: 100%;
-  aspect-ratio: auto;
+  width: min(100%, 100dvh * var(--gv-ratio));
   border-radius: 0;
   box-shadow: none;
 }

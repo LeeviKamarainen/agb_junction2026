@@ -16,6 +16,7 @@ import { Display } from "@/app/glasses/display";
 import "@/app/glasses/glasses.css";
 import type { FlexBoxNode } from "@/app/glasses/types";
 
+import { type FrameShape, TALL, WIDE } from "./glasses-frame";
 import "./glasses-view.css";
 
 export type Evidence = { src: string; alt: string; caption?: string };
@@ -50,8 +51,8 @@ const hasContent = (screen: FlexBoxNode | null): screen is FlexBoxNode =>
 
 /**
  * What the wearer sees: the picture through the glasses' frame, and the glasses' display in the
- * right lens, drawn from the same layout the real glasses get. A blurred copy of the picture
- * fills the stage around it, so a portrait video is shown whole without bars.
+ * right lens, drawn from the same layout the real glasses get. The picture sits inside the
+ * lenses, never under the frame; a blurred copy of it fills the lenses around it.
  */
 export function GlassesView({
   children,
@@ -142,6 +143,19 @@ export function GlassesView({
     return () => clearInterval(timer);
   }, [media]);
 
+  // Next keeps a page it navigates away from, hidden, with its effects cleaned up (React's
+  // <Activity>; see preserving-ui-state.md in Next's docs): a hidden video would play on, sound
+  // and all, and speech would carry over to the next page. Stop both as the view hides, which a
+  // layout effect's cleanup does before it is hidden; the page's own effects start them again.
+  useLayoutEffect(
+    () => () => {
+      const element = media?.current;
+      if (element instanceof HTMLVideoElement) element.pause();
+      if ("speechSynthesis" in window) window.speechSynthesis.cancel();
+    },
+    [media],
+  );
+
   // Fullscreen: the browser's own where it can; an iPhone only lets a <video> go fullscreen, so
   // there the view fills the window instead.
   const [native, setNative] = useState(false);
@@ -189,7 +203,9 @@ export function GlassesView({
       <div className="gv-stage" role="region" aria-label="The view through the glasses">
         <canvas ref={fillRef} className="gv-fill" aria-hidden="true" />
         <div className="gv-picture">{children}</div>
-        <Frame id={id} />
+        {/* Over the picture, as real rims are: they hide its edges, never its middle. */}
+        <Frame id={`${id}-wide`} shape={WIDE} className="gv-frame-wide" />
+        <Frame id={`${id}-tall`} shape={TALL} className="gv-frame-tall" />
         <div className="gv-lens" data-on={on} style={{ "--gv-scale": scale } as CSSProperties}>
           <div ref={squareRef} className="gv-square">
             <div
@@ -253,44 +269,71 @@ function frameOf(element: HTMLVideoElement | HTMLImageElement) {
   return { width: element.naturalWidth, height: element.naturalHeight, frame: element.currentSrc };
 }
 
-// The lenses' outline in a 1600x1000 box (the wide stage's 16:10): two lenses under a bridge at
-// the top, open between them below it and nearly to the bottom edge, so the frame never covers
-// the middle or the bottom of the picture.
-const LENSES =
-  "M 800 986 C 980 986, 1240 984, 1380 972 C 1480 962, 1535 920, 1546 840 " +
-  "C 1556 700, 1554 420, 1538 240 C 1528 140, 1482 98, 1400 92 C 1240 80, 1040 80, 945 88 " +
-  "C 880 94, 856 180, 800 180 C 744 180, 720 94, 655 88 C 560 80, 360 80, 200 92 " +
-  "C 118 98, 72 140, 62 240 C 46 420, 44 700, 54 840 C 65 920, 120 962, 220 972 " +
-  "C 360 984, 620 986, 800 986 Z";
-
-/** The glasses' frame seen from behind: dark, translucent and feathered, so it frames the
- * picture without hiding it. A tall stage gets a plain vignette with a bridge instead. */
-function Frame({ id }: { id: string }) {
+/** The glasses' frame seen from behind: solid black acetate around the lenses, lit from above (a
+ * sheen along its top, a bright bevel on its inner edges) and shading the lenses next to it. */
+function Frame({ id, shape, className }: { id: string; shape: FrameShape; className: string }) {
+  const { width, height, lenses } = shape;
+  const body = `M 0 0 H ${width} V ${height} H 0 Z ${lenses}`;
   return (
-    <>
-      <svg
-        className="gv-frame gv-frame-wide"
-        viewBox="0 0 1600 1000"
-        preserveAspectRatio="none"
-        aria-hidden="true"
-        focusable="false"
-      >
-        <defs>
-          <filter id={`${id}-feather`} x="-10%" y="-10%" width="120%" height="120%">
-            <feGaussianBlur stdDeviation="16" />
-          </filter>
-          <filter id={`${id}-rim`} x="-10%" y="-10%" width="120%" height="120%">
-            <feGaussianBlur stdDeviation="2" />
-          </filter>
-          <mask id={`${id}-lenses`} maskUnits="userSpaceOnUse" x="0" y="0" width="1600" height="1000">
-            <rect width="1600" height="1000" fill="#fff" />
-            <path d={LENSES} fill="#000" filter={`url(#${id}-feather)`} />
-          </mask>
-        </defs>
-        <rect className="gv-frame-body" width="1600" height="1000" mask={`url(#${id}-lenses)`} />
-        <path className="gv-frame-rim" d={LENSES} filter={`url(#${id}-rim)`} />
-      </svg>
-      <div className="gv-frame gv-frame-tall" aria-hidden="true" />
-    </>
+    <svg
+      className={`gv-frame ${className}`}
+      viewBox={`0 0 ${width} ${height}`}
+      preserveAspectRatio="none"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <defs>
+        <linearGradient id={`${id}-acetate`} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stopColor="#202226" />
+          <stop offset="0.18" stopColor="#0e0f11" />
+          <stop offset="0.7" stopColor="#08090a" />
+          <stop offset="1" stopColor="#121316" />
+        </linearGradient>
+        <linearGradient id={`${id}-bevel`} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stopColor="#fff" stopOpacity="0.34" />
+          <stop offset="0.3" stopColor="#fff" stopOpacity="0.12" />
+          <stop offset="1" stopColor="#fff" stopOpacity="0.05" />
+        </linearGradient>
+        <radialGradient id={`${id}-gloss`}>
+          <stop offset="0" stopColor="#fff" stopOpacity="0.16" />
+          <stop offset="1" stopColor="#fff" stopOpacity="0" />
+        </radialGradient>
+        <filter id={`${id}-shade`} x="-5%" y="-5%" width="110%" height="110%">
+          <feGaussianBlur stdDeviation="9" />
+        </filter>
+        <filter id={`${id}-soft`} x="-5%" y="-5%" width="110%" height="110%">
+          <feGaussianBlur stdDeviation="0.8" />
+        </filter>
+        <clipPath id={`${id}-lenses`}>
+          <path d={lenses} />
+        </clipPath>
+        <clipPath id={`${id}-body`}>
+          <path d={body} clipRule="evenodd" />
+        </clipPath>
+      </defs>
+      <g clipPath={`url(#${id}-lenses)`}>
+        <path
+          d={lenses}
+          fill="none"
+          stroke="#000"
+          strokeOpacity="0.6"
+          strokeWidth="30"
+          filter={`url(#${id}-shade)`}
+        />
+      </g>
+      <path d={body} fillRule="evenodd" fill={`url(#${id}-acetate)`} />
+      <g clipPath={`url(#${id}-body)`}>
+        {shape.gloss.map((spot) => (
+          <ellipse key={`${spot.cx} ${spot.cy}`} {...spot} fill={`url(#${id}-gloss)`} />
+        ))}
+      </g>
+      <path
+        d={lenses}
+        fill="none"
+        stroke={`url(#${id}-bevel)`}
+        strokeWidth="3"
+        filter={`url(#${id}-soft)`}
+      />
+    </svg>
   );
 }
