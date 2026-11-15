@@ -194,14 +194,49 @@ def test_cues_are_saved_in_time_order_and_kept_when_left_out(client):
     assert item["cues"] == []
     cues = [
         {"id": "b", "at_s": 9, "text": "Stop watching", "stays": False, "stops": "a"},
-        {"id": "a", "at_s": 2.5, "text": "Tell me when my bus comes"},
+        {"id": "a", "at_s": 2.5, "text": "Tell me when my bus comes", "until_s": 8, "answer": "Ok"},
     ]
     url = f"/api/demo/clips/{item['id']}"
     saved = client.put(url, json={**item, "cues": cues})
     assert saved.status_code == 200, saved.text
     assert [c["id"] for c in saved.json()["cues"]] == ["a", "b"]
-    assert saved.json()["cues"][0] == {**cues[1], "stays": True, "stops": None}
+    assert saved.json()["cues"][0] == {
+        **cues[1],
+        "stays": True,
+        "stops": None,
+        "kind": "prompt",
+    }
+    assert saved.json()["cues"][1] == {
+        **cues[0],
+        "until_s": None,
+        "answer": "",
+        "kind": "prompt",
+    }
     without = {k: v for k, v in item.items() if k != "cues"}
     assert client.put(url, json=without).json()["cues"] == saved.json()["cues"]
     assert client.put(url, json={**item, "cues": [cues[0], cues[0]]}).status_code == 422
     assert client.put(url, json={**item, "cues": [{**cues[0], "text": ""}]}).status_code == 422
+
+
+def test_demos_come_back_from_the_manifest_after_a_database_rebuild(client, db):
+    from sqlmodel import delete
+
+    from app.models import Showcase
+
+    item = upload(client, draft(client, title="Kept")["id"]).json()
+    cue = {"id": "a", "at_s": 1, "text": "Where are my keys?", "answer": "On the table."}
+    saved = client.put(f"/api/demo/clips/{item['id']}", json={**item, "cues": [cue]}).json()
+
+    async def rebuilt(session):  # what a wipe leaves: no rows, the files and the manifest
+        await session.exec(delete(Showcase))
+        await session.commit()
+        return await showcase.restore(session)
+
+    assert client.get("/api/demo/manage").json() == [saved]
+    assert db(rebuilt) == 1
+    assert client.get("/api/demo/manage").json() == [saved]
+    assert client.get(saved["assets"][0]["url"]).status_code == 200
+    # Deleting the last demo empties the manifest, so it does not come back.
+    assert client.delete(f"/api/demo/clips/{item['id']}").status_code == 204
+    assert db(showcase.restore) == 0
+    assert client.get("/api/demo/manage").json() == []

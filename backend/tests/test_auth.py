@@ -356,3 +356,12 @@ def test_glasses_reminders_are_per_user(client, guest):
     client.post("/api/glasses/reminders", json={"text": "warn me about the stool"}, headers=aino)
     assert client.get("/api/glasses/reminders", headers=ville).json() == []
     assert len(client.get("/api/glasses/reminders", headers=aino).json()) == 1
+
+
+def test_a_guest_can_end_itself_at_once_and_the_admin_cannot(client, guest):
+    token = guest()
+    assert client.get("/api/auth/me", headers=token).json()["role"] == "guest"
+    assert client.delete("/api/auth/guest", headers=token).status_code == 204
+    assert client.get("/api/auth/me", headers=token).status_code == 401
+    assert client.delete("/api/auth/guest").status_code == 403
+    assert client.get("/api/auth/me").json()["role"] == "admin"

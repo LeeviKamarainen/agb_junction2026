@@ -36,7 +36,13 @@ export interface paths {
          *     it adds are deleted after 60 minutes (auth.GUEST_MINUTES).
          */
         post: operations["guest_api_auth_guest_post"];
-        delete?: never;
+        /**
+         * End Guest
+         * @description Delete the guest that calls this now, with everything it added (memories and their
+         *     images, goals, reminders), instead of at its expiry. For a client that made a guest for one
+         *     job, as the demo editor's recording does. 403 for the admin.
+         */
+        delete: operations["end_guest_api_auth_guest_delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -1373,9 +1379,12 @@ export interface components {
         };
         /**
          * ShowcaseCue
-         * @description Something the wearer says at `at_s` seconds into the clip. One that `stays` is shown as
-         *     active (a trigger, say) from then on, until a later cue `stops` it: by its id, or "*" for
-         *     every cue before it.
+         * @description Something the wearer says at `at_s` seconds into the clip, and the `answer` Gemma gave,
+         *     recorded beforehand. One that `stays` is shown as active (a trigger, say) from then on, until
+         *     `until_s` or until a later cue `stops` it: by its id, or "*" for every cue before it.
+         *
+         *     The admin's editor records the answers, and the triggers that fired, by playing the clip to
+         *     the backend as a throwaway guest (frontend: admin/recording.ts); playback only shows them.
          */
         ShowcaseCue: {
             /** Id */
@@ -1391,6 +1400,19 @@ export interface components {
             stays: boolean;
             /** Stops */
             stops?: string | null;
+            /** Until S */
+            until_s?: number | null;
+            /**
+             * Answer
+             * @default
+             */
+            answer: string;
+            /**
+             * Kind
+             * @default prompt
+             * @enum {string}
+             */
+            kind: "prompt" | "trigger";
         };
         /** ShowcaseOrder */
         ShowcaseOrder: {
@@ -1707,6 +1729,24 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["LoginResult"];
                 };
+            };
+        };
+    };
+    end_guest_api_auth_guest_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

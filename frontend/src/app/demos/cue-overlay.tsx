@@ -1,13 +1,16 @@
-import { Eye, Mic } from "lucide-react";
+import { Bot, Eye, Mic } from "lucide-react";
 import { type Cue, cueState } from "./cues";
 
-/** Over a demo's media (a `relative` box): what is being watched for, and a caption. */
+/** Over a demo's media (a `relative` box): what is being watched for, what was just said and
+ * Gemma's answer to it. */
 export function Overlay({
   active,
   caption,
+  answer,
 }: {
   active: { id: string | number; text: string }[];
   caption?: string | null;
+  answer?: string | null;
 }) {
   return (
     <div
@@ -25,11 +28,21 @@ export function Overlay({
           </li>
         ))}
       </ul>
-      {caption ? (
-        <p className="mb-10 flex items-center gap-2 self-center rounded-lg bg-black/75 px-3 py-2">
-          <Mic size={14} aria-hidden="true" className="shrink-0" />
-          {caption}
-        </p>
+      {caption || answer ? (
+        <div className="mb-10 flex max-w-full flex-col gap-1.5 self-center rounded-lg bg-black/75 px-3 py-2">
+          {caption ? (
+            <p className="flex items-center gap-2">
+              <Mic size={14} aria-hidden="true" className="shrink-0" />
+              {caption}
+            </p>
+          ) : null}
+          {answer ? (
+            <p className="flex items-start gap-2">
+              <Bot size={14} aria-hidden="true" className="mt-0.5 shrink-0" />
+              {answer}
+            </p>
+          ) : null}
+        </div>
       ) : null}
     </div>
   );
@@ -39,6 +52,10 @@ export function Overlay({
 export function CueOverlay({ cues, at }: { cues: Cue[]; at: number }) {
   const { active, spoken } = cueState(cues, at);
   return (
-    <Overlay active={active} caption={spoken ? `“${spoken.text}”` : null} />
+    <Overlay
+      active={active}
+      caption={spoken && spoken.kind !== "trigger" ? `“${spoken.text}”` : null}
+      answer={spoken?.kind === "trigger" ? spoken.text : spoken?.answer}
+    />
   );
 }
