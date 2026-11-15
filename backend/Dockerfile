@@ -2,6 +2,11 @@ FROM python:3.13-slim
 
 COPY --from=ghcr.io/astral-sh/uv:0.11.26 /uv /bin/uv
 
+# ffmpeg re-encodes the demo videos with their faces blurred (app/showcase.py).
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy UV_NO_DEV=1
 

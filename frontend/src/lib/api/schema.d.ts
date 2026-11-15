@@ -1354,6 +1354,13 @@ export interface components {
             assets: components["schemas"]["ShowcaseAsset"][];
             /** Cues */
             cues: components["schemas"]["ShowcaseCue"][];
+            /**
+             * Converting
+             * @default false
+             */
+            converting: boolean;
+            /** Conversion Error */
+            conversion_error?: string | null;
         };
         /** ShowcaseWrite */
         ShowcaseWrite: {

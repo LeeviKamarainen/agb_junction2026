@@ -1,3 +1,5 @@
+import time
+
 import anyio
 import pytest
 from fastapi.testclient import TestClient
@@ -7,6 +9,9 @@ from app.main import app
 from app.settings import get_settings
 
 ADMIN_PASSWORD = "admin-password"
+# A test's video is re-encoded in well under a second; this only stops a stuck worker from
+# hanging the test run.
+CONVERSION_TIMEOUT_S = 60
 
 
 @pytest.fixture
@@ -60,6 +65,24 @@ def guest(anonymous):
         return {"Authorization": f"Bearer {reply.json()['token']}"}
 
     return start
+
+
+@pytest.fixture
+def converted(client):
+    """converted(clip_id) waits until the background worker has re-encoded the clip's uploaded
+    video (app/showcase.py), and returns the clip as the admin's list shows it then."""
+
+    def wait(clip_id: int) -> dict:
+        deadline = time.monotonic() + CONVERSION_TIMEOUT_S
+        while True:
+            clips = client.get("/api/demo/manage").json()
+            clip = next(clip for clip in clips if clip["id"] == clip_id)
+            if not clip["converting"]:
+                return clip
+            assert time.monotonic() < deadline, f"clip {clip_id} is still being converted"
+            time.sleep(0.05)
+
+    return wait
 
 
 @pytest.fixture

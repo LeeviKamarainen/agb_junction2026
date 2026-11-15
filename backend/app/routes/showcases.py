@@ -60,9 +60,15 @@ class ShowcasePublic(ShowcaseFields):
     id: int
     assets: list[ShowcaseAsset]
     cues: list[ShowcaseCue]
+    # An uploaded video is re-encoded with its faces blurred in the background (app/showcase.py),
+    # in about as long as it plays; until then it is neither played nor published.
+    converting: bool = False
+    conversion_error: str | None = None  # why the video could not be re-encoded
 
 
 def public(item: Showcase) -> ShowcasePublic:
+    videos = [a["name"] for a in showcase.assets(item)] if item.kind == "video" else []
+    errors = [error for name in videos if (error := showcase.failure(name))]
     return ShowcasePublic(
         **item.model_dump(exclude={"assets_json", "cues_json"}),
         cues=json.loads(item.cues_json),
@@ -70,7 +76,14 @@ def public(item: Showcase) -> ShowcasePublic:
             ShowcaseAsset(**a, url=f"/api/demo/clips/{item.id}/media/{a['name']}")
             for a in showcase.assets(item)
         ],
+        converting=not errors and not all(showcase.playable(name) for name in videos),
+        conversion_error=errors[0] if errors else None,
     )
+
+
+def playable(item: Showcase) -> bool:
+    """Whether a clip's media may be played: a video only once it is re-encoded."""
+    return item.kind != "video" or all(showcase.playable(a["name"]) for a in showcase.assets(item))
 
 
 def admin(viewer):
@@ -90,7 +103,8 @@ async def list_public(session: SessionDep):
     rows = await session.exec(
         select(Showcase).where(Showcase.published).order_by(Showcase.position, Showcase.id)
     )
-    return [public(row) for row in rows]
+    # A published clip whose new video is being re-encoded is left out until it is done.
+    return [public(row) for row in rows if playable(row)]
 
 
 @router.get("/manage", response_model=list[ShowcasePublic])
@@ -122,6 +136,13 @@ async def update(id: int, body: ShowcaseWrite, session: SessionDep, viewer: View
         raise HTTPException(422, "Create a new demo to change media type")
     if body.published and not current:
         raise HTTPException(422, "Upload media before publishing")
+    if body.published and not item.published and not playable(item):
+        described = public(item)
+        if described.conversion_error:
+            raise HTTPException(
+                422, f"The video could not be converted: {described.conversion_error}"
+            )
+        raise HTTPException(422, "The video is still being converted; publish it when it is done")
     if body.asset_order is not None:
         names = [a["name"] for a in current]
         if sorted(names) != sorted(body.asset_order):
@@ -165,6 +186,8 @@ async def upload(
                 name, mime = await anyio.to_thread.run_sync(showcase.save, data, item.kind)
             except ValueError as error:
                 raise HTTPException(415, str(error)) from error
+            except showcase.ConversionError as error:
+                raise HTTPException(422, f"The video cannot be read: {error}") from error
             added.append(
                 {"name": name, "label": (file.filename or "Media")[:200], "content_type": mime}
             )
@@ -179,6 +202,7 @@ async def upload(
             await anyio.to_thread.run_sync(showcase.delete, [a["name"] for a in added])
         raise
     if item.kind == "video":
+        showcase.request_conversion()  # in the background: it takes about as long as the video
         await anyio.to_thread.run_sync(showcase.delete, [a["name"] for a in current])
     demo.request_sync()
     return public(item)
@@ -192,6 +216,8 @@ async def get_media(id: int, name: str, session: SessionDep, viewer: OptionalVie
     asset = next((a for a in showcase.assets(item) if a["name"] == name), None)
     if asset is None:
         raise HTTPException(404, "No such media")
+    if item.kind == "video" and not showcase.playable(name):
+        raise HTTPException(404, "The video is not ready yet")  # its faces are not blurred yet
     path = showcase.folder() / asset["name"]
     if not path.is_file():
         raise HTTPException(404, "No such media")

@@ -14,6 +14,7 @@ from app.settings import get_settings
 log = logging.getLogger(__name__)
 SWEEP_EVERY_S = 300
 DEMO_RETRY_S = 60
+VIDEO_RETRY_S = 60  # as for the demo clips: a failure such as a full disk may pass meanwhile
 
 
 @asynccontextmanager
@@ -28,11 +29,15 @@ async def lifespan(_app: FastAPI):
         await demo_bundles.load(session)  # recorded demos kept in the repository
     sweeper = asyncio.create_task(_sweep_guests())
     loader = asyncio.create_task(_load_demo())
+    # Re-encodes the demo videos with their faces blurred (app/showcase.py), in the background:
+    # each takes about as long as it plays. On the way down, one being re-encoded is finished.
+    converter = asyncio.create_task(showcase.worker(VIDEO_RETRY_S))
     yield
     sweeper.cancel()
     loader.cancel()
-    # Let both stop before the engine goes, so neither is mid-write when it closes.
-    await asyncio.gather(sweeper, loader, return_exceptions=True)
+    converter.cancel()
+    # Let them stop before the engine goes, so none is mid-write when it closes.
+    await asyncio.gather(sweeper, loader, converter, return_exceptions=True)
     await get_engine().dispose()
 
 

@@ -71,10 +71,11 @@ def published_images(client, title="Kitchen", count=3):
     return clip
 
 
-def published_video(client, seconds: float, title="Walk"):
+def published_video(client, converted, seconds: float, title="Walk"):
     clip = client.post("/api/demo/clips", json={"title": title, "kind": "video"}).json()
     files = {"files": ("walk.mp4", video(seconds), "video/mp4")}
     assert client.post(f"/api/demo/clips/{clip['id']}/media", files=files).status_code == 200
+    converted(clip["id"])  # only a re-encoded video can be published
     body = {**clip, "published": True}
     assert client.put(f"/api/demo/clips/{clip['id']}", json=body).status_code == 200
     return clip
@@ -126,13 +127,13 @@ def test_a_published_image_sequence_becomes_demo_memories_everyone_sees(client, 
     assert sync(db) == 0  # nothing changed: nothing stored again
 
 
-def test_a_video_is_stored_at_two_frames_a_second_skipping_a_still_scene(client, db):
-    published_video(client, 3)
+def test_a_video_is_stored_at_two_frames_a_second_skipping_a_still_scene(client, converted, db):
+    published_video(client, converted, 3)
 
     sync(db)
     assert len(demo_memories(db)) == 6  # every frame differs
 
-    published_video(client, 3, title="Still")
+    published_video(client, converted, 3, title="Still")
     sync(db, same)
     # The same picture throughout: only the first of the new clip's frames is kept.
     assert len(demo_memories(db)) == 7
