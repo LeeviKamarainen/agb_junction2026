@@ -55,10 +55,12 @@ DECODE = [  # ffmpeg's output options, from the upload to the frames whose faces
     "0:v:0",
     # start_time=0 keeps the frames in step with the sound, which is timed from 0 too. At most
     # 1280 px on the long side: the view shows a clip at most about 600 px tall, 1200 pixels on
-    # a 2x screen. Never enlarged; even sides, as yuv420p needs.
+    # a 2x screen. Never enlarged; even sides, as yuv420p needs. One byte a colour, whatever
+    # came in: ffmpeg would hand a 10-bit video's frames over with two (an iPhone records HDR
+    # video as 10-bit HEVC).
     "-vf",
     f"fps={RATE}:start_time=0,scale='min(1280,iw)':'min(1280,ih)'"
-    ":force_original_aspect_ratio=decrease:force_divisible_by=2",
+    ":force_original_aspect_ratio=decrease:force_divisible_by=2,format=rgb24",
     # Each frame as an uncompressed RGB image with its size (PPM), so nothing is lost before the
     # encode.
     *("-f", "image2pipe", "-c:v", "ppm", "pipe:1"),
@@ -159,7 +161,13 @@ def encode(source: Path, target: Path, form: str) -> int | None:
         encoder = None
         try:
             seen = blurred = b""
+            shape = None
             for width, height, frame in _frames(decoder.stdout):
+                # The encoder takes one size of frame, so a video whose picture changes size
+                # part-way (a browser's recording can) cannot be re-encoded in one go.
+                if shape not in (None, (width, height)):
+                    raise ConversionError("Its picture changes size part-way through")
+                shape = (width, height)
                 if encoder is None:
                     raw = ["-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{width}x{height}"]
                     encoder = subprocess.Popen(
@@ -204,7 +212,9 @@ def _frames(stream: IO[bytes]) -> Iterator[tuple[int, int, bytes]]:
         if header != b"P6\n":
             raise ConversionError(f"ffmpeg sent {header[:20]!r} where a frame should start")
         width, height = map(int, stream.readline().split())
-        stream.readline()  # the largest value of a colour: 255
+        largest = stream.readline()  # of a colour: 255 for one byte each, as DECODE asks
+        if largest != b"255\n":
+            raise ConversionError(f"ffmpeg sent colours up to {largest[:10]!r}, not one byte each")
         frame = stream.read(width * height * 3)
         if len(frame) < width * height * 3:
             return  # ffmpeg stopped within the frame; its exit status says why
@@ -328,6 +338,13 @@ async def convert_stored() -> list[str]:
             continue
         except ConversionError as error:
             _fail(path, error)
+            continue
+        except Exception as error:
+            # Something unforeseen in this one video (the face detector, say): it is not played,
+            # and the videos after it are still re-encoded, rather than this one tried again
+            # and again ahead of them.
+            log.exception("Re-encoding the demo video %s failed", path.name)
+            _fail(path, ConversionError(f"It could not be re-encoded: {error}"))
             continue
         _states[path.name] = READY
         if sizes is not None:

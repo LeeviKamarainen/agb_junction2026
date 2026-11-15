@@ -247,6 +247,52 @@ def test_without_ffmpeg_the_worker_fails_loudly(anonymous, tmp_path, monkeypatch
         anonymous.portal.call(showcase.convert_stored)
 
 
+def test_a_ten_bit_video_is_re_encoded_too(client, converted, tmp_path):
+    """An iPhone records HDR video as 10-bit HEVC, whose frames ffmpeg would hand over with two
+    bytes a colour unless asked for one."""
+    path = tmp_path / "hdr.mp4"
+    subprocess.run(
+        ["ffmpeg", "-nostdin", "-v", "error", "-y"]
+        + ["-f", "lavfi", "-i", "testsrc=duration=1:size=64x48:rate=30"]
+        + ["-c:v", "libx265", "-pix_fmt", "yuv420p10le", "-x265-params", "log-level=error"]
+        + [str(path)],
+        check=True,
+    )
+    assert probe(path)["video"]["pix_fmt"] == "yuv420p10le"
+    item = draft(client, kind="video")
+
+    reply = client.post(
+        f"/api/demo/clips/{item['id']}/media", files={"files": ("hdr.mp4", path.read_bytes())}
+    )
+
+    assert reply.status_code == 200, reply.text
+    done = converted(item["id"])
+    assert done["conversion_error"] is None
+    got = probe(showcase.folder() / done["assets"][0]["name"])
+    assert (got["video"]["codec_name"], got["video"]["pix_fmt"]) == ("h264", "yuv420p")
+
+
+def test_a_video_that_fails_unforeseen_does_not_hold_up_the_rest(anonymous, tmp_path, monkeypatch):
+    """Something unforeseen in one video (the face detector failing on it, say) leaves that one
+    unplayable, with the reason, and the videos after it are re-encoded still."""
+    data = recording(tmp_path)
+    first, second = showcase.folder() / "a.mp4", showcase.folder() / "b.mp4"  # in this order
+    first.write_bytes(data)
+    second.write_bytes(data)
+    encode = showcase.encode
+
+    def failing_on_the_first(source, target, form):
+        if source == first:
+            raise RuntimeError("the detector broke")
+        return encode(source, target, form)
+
+    monkeypatch.setattr(showcase, "encode", failing_on_the_first)
+
+    assert anonymous.portal.call(showcase.convert_stored) == ["b.mp4"]
+    assert showcase.failure("a.mp4") == "It could not be re-encoded: the detector broke"
+    assert showcase.playable("b.mp4")
+
+
 def test_a_video_ffmpeg_cannot_read_is_refused_and_not_kept(client):
     item = draft(client, kind="video")
     broken = b"\0\0\0\x18ftypisom" + b"\0" * 64  # an MP4's first box, and then nothing
