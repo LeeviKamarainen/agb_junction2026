@@ -17,15 +17,15 @@ parser that matches the model (memory/docs/backend-requirements.md).
 import json
 import re
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Collection
 from datetime import UTC, datetime
-from typing import Any, Literal
+from typing import Any, Literal, Self
 
 import anyio
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, model_validator
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from app import media
+from app import demo, media
 from app.glasses import feeds, triggers
 from app.llm import Chat, Embedder
 from app.models import Goal, Memory
@@ -141,6 +141,24 @@ class AskRequest(BaseModel):
     question: str = Field(min_length=1, max_length=2000)
     # Search only these collections, whatever the model asks for. Empty: the model chooses.
     collections: list[str] = Field(default_factory=list, max_length=10)
+    # The asker is watching this demo clip, this many seconds in: the answer comes from that clip
+    # up to there only, and its time is the clip's (app/demo.py: shown_so_far). Both or neither,
+    # and not with collections, which scope a camera's memories instead.
+    demo_clip_id: int | None = None
+    demo_at_s: float | None = Field(default=None, ge=0)
+
+    @model_validator(mode="after")
+    def one_scope(self) -> Self:
+        if (self.demo_clip_id is None) != (self.demo_at_s is None):
+            raise ValueError("send demo_clip_id and demo_at_s together, or neither")
+        if self.demo_clip_id is not None and self.collections:
+            raise ValueError("a demo clip is searched on its own: leave out collections")
+        return self
+
+    def demo_view(self) -> demo.DemoView | None:
+        if self.demo_clip_id is None or self.demo_at_s is None:
+            return None
+        return demo.DemoView(self.demo_clip_id, self.demo_at_s)
 
 
 def _pinned(args: VectorSearchArgs, collections: list[str] | None) -> VectorSearchArgs:
@@ -241,11 +259,12 @@ async def run(
     collections: list[str] | None = None,
     owner_id: int | None = None,
     live_frame: str | None = None,
+    memory_ids: Collection[int] | None = None,
 ) -> AsyncIterator[Step]:
     """Answer `question`, yielding each step; the last one is the answer. Each step worth seeing
     also goes to the asker's log on the admin's stream wall."""
     async for step in _run(
-        session, question, chat, embed, owners, now, collections, owner_id, live_frame
+        session, question, chat, embed, owners, now, collections, owner_id, live_frame, memory_ids
     ):
         if owner_id is not None:
             _log_step(owner_id, step)
@@ -262,6 +281,7 @@ async def _run(
     collections: list[str] | None = None,
     owner_id: int | None = None,
     live_frame: str | None = None,
+    memory_ids: Collection[int] | None = None,
 ) -> AsyncIterator[Step]:
     """Answer `question`, yielding each step; the last one is the answer, without the citations
     the model ends it with, which become its evidence.
@@ -272,7 +292,9 @@ async def _run(
     is the account asking: the model is told that account's goals, may remove one of them, and
     may add one, for which it writes the triggers (app/glasses/triggers.py). `live_frame` (a
     JPEG data URL) is the newest frame of a stream the admin is watching: it goes with the
-    question, and the model is told an operator asks on the user's behalf.
+    question, and the model is told an operator asks on the user's behalf. `memory_ids`, when
+    given, is all that its searches may return: the frames of the demo clip the asker watches, up
+    to where it plays, with `now` the moment it shows (app/demo.py: shown_so_far).
 
     Raises UpstreamError when a model server fails.
     """
@@ -384,7 +406,7 @@ async def _run(
                     content = json.dumps({"error": problems}, default=str)
                     yield step("tool_error", round, call_id=call_id, content=content)
                 else:
-                    results = await vector_search(session, args, embed, owners)
+                    results = await vector_search(session, args, embed, owners, memory_ids)
                     yield step("tool_result", round, call_id=call_id, results=results)
                     for result in results:
                         found.setdefault(result.id, result)
@@ -422,9 +444,21 @@ async def answer(
     now: datetime | None = None,
     collections: list[str] | None = None,
     owner_id: int | None = None,
+    memory_ids: Collection[int] | None = None,
 ) -> Answer:
     steps = [
-        s async for s in run(session, question, chat, embed, owners, now, collections, owner_id)
+        s
+        async for s in run(
+            session,
+            question,
+            chat,
+            embed,
+            owners,
+            now,
+            collections,
+            owner_id,
+            memory_ids=memory_ids,
+        )
     ]
     searches: list[VectorSearchArgs] = []
     sources: dict[int, SearchResult] = {}

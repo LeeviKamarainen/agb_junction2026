@@ -354,13 +354,15 @@ def test_socket_survives_a_refused_client_leaving_first(anonymous, guest):
 # --- Déjà vu: "where do I know this from?" ---------------------------------------------------
 
 
-def seen_before(db, hours: list[int], owner: int = 0) -> None:
-    """One earlier still per entry, seen that many hours ago; the first is the most like the
-    photo `fake_embed` gives, the next a little less, and so on."""
+def seen_before(db, hours: list[int], owner: int = 1) -> list[int]:
+    """One earlier still per entry, seen that many hours ago, by default the admin's own (who
+    asks); the first is the most like the photo `fake_embed` gives, the next a little less, and
+    so on. Their ids."""
 
     async def add(session):
+        ids = []
         for place, ago in enumerate(hours, 1):
-            await add_memory(
+            memory = await add_memory(
                 session,
                 "image",
                 [1.0, 0.1 * place] + [0.0] * (WIDTH - 2),
@@ -369,9 +371,11 @@ def seen_before(db, hours: list[int], owner: int = 0) -> None:
                 collection="glasses",
                 owner_id=owner,
             )
+            ids.append(memory.id)
         await session.commit()
+        return ids
 
-    db(add)
+    return db(add)
 
 
 def look(client, **headers) -> None:
@@ -474,7 +478,7 @@ def test_recall_does_not_take_words_for_an_answer(client, db):
 
 def test_recall_only_looks_in_the_askers_memories(client, db, guest):
     bearer = guest("aino")
-    seen_before(db, [5], owner=1)  # the admin's own, not a demo memory
+    seen_before(db, [5])  # the admin's own
     look(client, headers=bearer)
     use_models(chat=says('{"same": [1], "say": "x"}'))
 
@@ -484,6 +488,17 @@ def test_recall_only_looks_in_the_askers_memories(client, db, guest):
 
     assert images(reply["screen"]) == []
     assert "Not seen before" in texts(reply["screen"])
+
+
+def test_recall_on_the_camera_leaves_the_demo_memories_out(client, db):
+    (own,) = seen_before(db, [5])
+    seen_before(db, [3], owner=0)  # a demo memory, just as alike and newer
+    look(client)
+    use_models(chat=says('{"same": [1], "say": "Your mug."}'))
+
+    reply = client.post("/api/glasses/command", json={"question": "where do I know this from"})
+
+    assert images(reply.json()["screen"]) == [f"/api/memories/{own}/image"]
 
 
 def demo_clip(db, title: str, frames: list[tuple[float, float]]) -> tuple[int, list[int]]:
@@ -525,25 +540,25 @@ def ask_demo(client, clip_id: int, at_s: float, **headers) -> dict:
     return reply.json()
 
 
-def test_recall_on_a_demo_clip_looks_in_its_earlier_frames_and_the_other_clips(client, db, guest):
+def test_recall_on_a_demo_clip_looks_only_in_its_earlier_frames(client, db, guest):
     # At 0 s the thing in view now; at 100 s the current frame, with the look from 80 s on; a
-    # frame still to come at 150 s. They all look alike, and so does a frame of another clip.
-    clip, (early, _start, look_, now_, later) = demo_clip(
+    # frame still to come at 150 s. They all look alike, and so do a frame of another clip and
+    # a still of the asker's own.
+    clip, (early, start, look_, now_, later) = demo_clip(
         db, "Walk", [(0, 0.0), (10, 0.1), (80, 0.0), (100, 0.0), (150, 0.0)]
     )
     _other, (kitchen,) = demo_clip(db, "Kitchen", [(0, 0.05)])
+    aino = guest("aino")  # a guest sees the demo
+    look(client, headers=aino)
     use_models(chat=says('{"same": [1], "say": "The red mug, on the bench."}'))
 
-    reply = ask_demo(client, clip, 110, headers=guest("aino"))  # a guest sees the demo
+    reply = ask_demo(client, clip, 110, headers=aino)
 
     shown = images(reply["screen"])
-    assert f"/api/memories/{early}/image" in shown
-    assert f"/api/memories/{kitchen}/image" in shown
-    for skipped in (look_, now_, later):
-        assert f"/api/memories/{skipped}/image" not in shown
+    assert shown == [f"/api/memories/{early}/image", f"/api/memories/{start}/image"]
     said = texts(reply["screen"])
     assert "Seen 1 minute ago" in said  # 100 s into the clip, against the frame at 0 s
-    assert "in the demo “Kitchen”" in said
+    assert "demo" not in said
 
 
 def test_recall_on_a_demo_clip_not_stored_yet_says_so(client, db):

@@ -152,16 +152,24 @@ async def nearest(
     since: datetime | None = None,
     until: datetime | None = None,
     where: Mapping[str, Any] | None = None,
+    ids: Collection[int] | None = None,
 ) -> list[Hit]:
     """The k closest rows, closest first, among those that pass the filters.
 
     `since` and `until` bound created_at (since inclusive, until exclusive, both timezone-aware);
     `where` keeps only rows whose extra metadata columns equal the given values. A list, tuple or
-    set as a value keeps rows equal to any of them (an empty one keeps none).
+    set as a value keeps rows equal to any of them (an empty one keeps none). `ids` keeps only
+    those rows (an empty one keeps none): sqlite-vec picks the k closest among them, rather than
+    dropping the others from the k closest (checked with sqlite-vec 0.1.9).
     """
     blob = _serialize(table, vector)
     extra_columns = list(_table(table).metadata)
     conditions, params = ["embedding MATCH ?", "k = ?"], [blob, k]
+    if ids is not None:
+        if not ids:
+            return []
+        conditions.append(f"id IN ({', '.join('?' * len(ids))})")
+        params.extend(ids)
     if since is not None:
         conditions.append("created_at >= ?")
         params.append(_to_unix(since))

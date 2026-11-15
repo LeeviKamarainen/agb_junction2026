@@ -125,12 +125,28 @@ async def clip_frames(session: AsyncSession, clip_id: int) -> list[tuple[float, 
     return [(frame_at_s(frame, starts), frame) for frame in frames]
 
 
+def frames_until(frames: list[tuple[float, Memory]], at_s: float) -> set[int]:
+    """The ids of those of a clip's frames (`clip_frames`) taken at most `at_s` seconds in."""
+    return {frame.id for at, frame in frames if at <= at_s and frame.id is not None}
+
+
 @dataclass(frozen=True)
 class DemoView:
     """Someone watches a demo clip instead of a camera: which, and how far into it, in seconds."""
 
     clip_id: int
     at_s: float
+
+
+async def shown_so_far(session: AsyncSession, view: DemoView) -> tuple[set[int], datetime] | None:
+    """What someone watching `view` has seen of the clip: the ids of its frames up to the point
+    it plays, and the moment that point shows (the clip's first frame plus `view.at_s`). None
+    while the clip has no frames stored."""
+    frames = await clip_frames(session, view.clip_id)
+    if not frames:
+        return None
+    start = _aware(frames[0][1].created_at)  # the oldest frame, 0 s in
+    return frames_until(frames, view.at_s), start + timedelta(seconds=view.at_s)
 
 
 def source(clip: Showcase) -> str:

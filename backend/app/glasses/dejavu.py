@@ -7,10 +7,10 @@ show the same thing. The nearest stills are only the most alike, not the same (m
 memory/notebooks/RECALL-1: a place never visited still scores 0.7 to 0.9), so the model is told
 to be strict, and the wearer hears a plain no when none is.
 
-On the home page the view can play a demo clip instead of a camera (`demo.DemoView`). Its frames are
-demo memories already (app/demo.py), so what is in front of the wearer is the clip's memory at the
-point it is playing, and "before" is the clip's own earlier frames, outside the current look, and
-everything else they may see: the other clips and their own memories.
+On the home page the view can play a demo clip instead of a camera (`demo.DemoView`). Its frames
+are demo memories already (app/demo.py), so what is in front of the wearer is the clip's memory at
+the point it is playing, and "before" is only that clip's earlier frames, outside the current
+look. With a camera, "before" is only the wearer's own stills: each looks at one memory.
 """
 
 import json
@@ -25,7 +25,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from app import demo, media, vectors
 from app.auth import Viewer
 from app.llm import Chat
-from app.models import Memory, Showcase
+from app.models import Memory
 from app.search import NEAR_COPY_S, TABLE
 
 FRESH_S = 30.0  # the newest still counts as what the wearer is looking at for this long
@@ -100,19 +100,10 @@ async def recall(
     fails and ValueError when its answer cannot be read."""
     now = datetime.now(UTC)
     connection = await session.connection()
-    titles: dict[int, str] = {}
 
-    async def label(memory: Memory, moment: datetime) -> str:
-        """When it was seen, as the wearer hears it."""
-        clip = demo.clip_of(memory.source)
-        if view is not None and clip == view.clip_id:
-            return ago(max(0.0, (current_seen - moment).total_seconds()))
-        if clip is not None:
-            if clip not in titles:
-                showcase = await session.get(Showcase, clip)
-                titles[clip] = showcase.title if showcase else "another demo"
-            return f"in the demo “{titles[clip]}”"
-        return ago((now - moment).total_seconds())
+    def label(moment: datetime) -> str:
+        """When it was seen, as the wearer hears it: on the clip's own clock for a demo clip."""
+        return ago(max(0.0, ((now if view is None else current_seen) - moment).total_seconds()))
 
     if view is None:
         current = (
@@ -150,8 +141,8 @@ async def recall(
                 break
             began = min(began, hit.created_at)
         until: datetime | None = began - timedelta(seconds=GAP_S)
-        not_before: set[int] = set()
-        wanted = SHOWN * 5
+        where: dict = {"kind": "image", "owner": viewer.id}
+        before: set[int] | None = None
     else:
         clip = await demo.clip_frames(session, view.clip_id)
         # The frame on the view: the clip's last memory up to where it is playing (a frame much
@@ -164,18 +155,19 @@ async def recall(
         vector = (await vectors.stored(connection, TABLE, [current.id or 0])).get(current.id or 0)
         if not vector or not media.path(current.image_file or "").exists():
             return None
-        # Not "before": the clip's frames from the current look on, and those still to come.
-        not_before = {m.id for at, m in clip if at > current_at - GAP_S and m.id is not None}
+        # The clip's frames before the current look at the thing (`GAP_S` ahead of it).
+        before = demo.frames_until(clip, current_at - GAP_S)
         until = None
-        wanted = SHOWN * 5 + len(not_before)
+        where = {"kind": "image"}
+        if viewer.owners is not None:
+            where["owner"] = viewer.owners
 
-    where: dict = {"kind": "image"}
-    if viewer.owners is not None:
-        where["owner"] = viewer.owners
-    hits = await vectors.nearest(connection, TABLE, vector, wanted, until=until, where=where)
+    hits = await vectors.nearest(
+        connection, TABLE, vector, SHOWN * 5, until=until, where=where, ids=before
+    )
     earlier = []  # (memory id, file, when it was seen, label), closest first, one per glance
     for hit in hits:
-        if hit.id == current.id or hit.id in not_before or len(earlier) >= SHOWN:
+        if hit.id == current.id or len(earlier) >= SHOWN:
             continue
         memory = await session.get(Memory, hit.id)
         if (
@@ -187,8 +179,7 @@ async def recall(
                 abs((hit.created_at - at).total_seconds()) > NEAR_COPY_S for _, _, at, _ in earlier
             )
         ):
-            label_ = await label(memory, hit.created_at)
-            earlier.append((hit.id, memory.image_file, hit.created_at, label_))
+            earlier.append((hit.id, memory.image_file, hit.created_at, label(hit.created_at)))
     if not earlier:
         return Recall([], "I have nothing from before to compare this with.", None)
 

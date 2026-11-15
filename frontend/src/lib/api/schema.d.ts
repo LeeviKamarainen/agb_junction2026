@@ -588,7 +588,7 @@ export interface paths {
         /**
          * Ask
          * @description Answer a question from the memories you may see: the chat model searches them, then
-         *     answers.
+         *     answers. With demo_clip_id and demo_at_s, only from that clip up to there, at its time.
          */
         post: operations["ask_api_ask_post"];
         delete?: never;
@@ -801,6 +801,10 @@ export interface components {
             question: string;
             /** Collections */
             collections?: string[];
+            /** Demo Clip Id */
+            demo_clip_id?: number | null;
+            /** Demo At S */
+            demo_at_s?: number | null;
         };
         /** Body_add_image_api_memories_image_post */
         Body_add_image_api_memories_image_post: {

@@ -5,16 +5,19 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from PIL import Image
 
-from app import agent, media, vectors
+from app import agent, demo, media, vectors
 from app.llm import UpstreamError, get_chat, get_embedder
 from app.main import app
+from app.models import Showcase
 from app.search import (
+    DEMO_OWNER,
     TABLE,
     VECTOR_SEARCH_TOOL,
     Timespan,
     VectorSearchArgs,
     _keyword_ranking,
     add_memory,
+    local,
     vector_search,
 )
 
@@ -276,6 +279,22 @@ def test_ask_stream_sends_one_step_per_line(client, memories):
     assert steps[-1]["content"] == "With Aino at 11:00."
 
 
+def asking(client, gemma, path="/api/ask", headers=None, **body) -> list[dict]:
+    """Ask through `path` with the fake models; the steps, from /api/ask or /api/ask/stream."""
+    app.dependency_overrides[get_embedder] = lambda: fake_embed
+    app.dependency_overrides[get_chat] = lambda: gemma
+    try:
+        reply = client.post(
+            path, json={"question": "Where are my keys?", **body}, headers=headers or {}
+        )
+    finally:
+        app.dependency_overrides.clear()
+    assert reply.status_code == 200, reply.text
+    if path == "/api/ask/stream":
+        return [json.loads(line) for line in reply.text.splitlines()]
+    return reply.json()["steps"]
+
+
 @pytest.mark.parametrize(
     ("said", "text", "cited"),
     [
@@ -311,6 +330,151 @@ def test_an_answer_cites_only_memories_its_searches_returned(client, memories, s
     assert body["answer"] == answer["content"] == text
     assert [m["id"] for m in body["evidence"]] == [ids[name] for name in cited]
     assert answer["evidence"] == body["evidence"]
+
+
+def demo_clip(
+    db, title: str, times: list[float], end: datetime | None = None, published: bool = True
+) -> tuple[int, list[int]]:
+    """A demo clip with its frames as app/demo.py stores them: one per time into the clip, the
+    last one at `end` (now when not given), stills captioned with the title, all pointing like
+    "keys". Its id and the frames' ids, in order."""
+
+    async def add(session):
+        clip = Showcase(title=title, published=published)
+        session.add(clip)
+        await session.flush()
+        last = end or datetime.now(UTC)
+        ids = []
+        for at in times:
+            memory = await add_memory(
+                session,
+                "image",
+                unit(0),
+                last - timedelta(seconds=times[-1] - at),
+                title,
+                media.save_image(jpeg()),
+                collection="demo",
+                owner_id=DEMO_OWNER,
+            )
+            memory.source = f"{demo.clip_prefix(clip.id)}abc"
+            session.add(memory)
+            ids.append(memory.id)
+        await session.commit()
+        return clip.id, ids
+
+    return db(add)
+
+
+def own_memories(db) -> tuple[int, int]:
+    """The admin's own note and camera still, both matching "keys": its glasses and manual."""
+
+    async def add(session):
+        still = await add_memory(
+            session, "image", unit(0), NOON, "keys", media.save_image(jpeg()), "glasses", 1
+        )
+        note = await add_memory(session, "text", unit(0), NOON, "keys on the hook", owner_id=1)
+        await session.commit()
+        return still.id, note.id
+
+    return db(add)
+
+
+def searched(steps: list[dict]) -> list[int]:
+    """The ids the (first) search returned, in its order."""
+    return [r["id"] for r in next(s for s in steps if s["type"] == "tool_result")["results"]]
+
+
+def test_a_search_limited_to_some_memories_finds_only_those(client, db, memories):
+    _keys, dog, coffee, _rex = memories
+    # Unlimited, both lists would put the keys and Rex sniffing them first.
+    args = VectorSearchArgs(user_query="keys", keywords=["keys", "rex"], limit=20)
+
+    found = db(lambda session: vector_search(session, args, fake_embed, None, {dog}))
+    by_keyword, _ = db(lambda session: _keyword_ranking(session, args, 80, None, {dog, coffee}))
+
+    assert [hit.id for hit in found] == [dog]
+    assert by_keyword == [dog]
+
+
+@pytest.mark.parametrize("path", ["/api/ask", "/api/ask/stream"])
+def test_a_question_on_a_playing_clip_searches_only_that_clip_so_far(client, db, path):
+    walk, (start, middle, _later) = demo_clip(db, "Walk", [0, 3, 6])
+    demo_clip(db, "Kitchen", [0, 6])
+    own_memories(db)  # the asker's, the admin's
+    # Both the query and the keywords match every memory there is.
+    search = tool_call("a", user_query="keys", keywords=["walk", "kitchen", "keys"], limit=20)
+    gemma = FakeGemma({"content": None, "tool_calls": [search]}, {"content": "Not yet."})
+
+    steps = asking(client, gemma, path, demo_clip_id=walk, demo_at_s=3)
+
+    assert sorted(searched(steps)) == [start, middle]
+    messages, _tools = gemma.calls[1]
+    told, images = messages[-2], messages[-1]
+    assert sorted(m["id"] for m in json.loads(told["content"])) == [start, middle]
+    labels = [part["text"] for part in images["content"] if part["type"] == "text"]
+    assert sorted(int(label.split()[1].rstrip(",")) for label in labels[1:]) == [start, middle]
+
+
+def test_a_question_on_a_playing_clip_is_asked_at_the_clips_time(client, db):
+    walk, _frames = demo_clip(db, "Walk", [0, 3, 6], end=NOON)  # it starts 6 s before noon
+    gemma = FakeGemma({"content": "Not yet."})
+
+    asking(client, gemma, demo_clip_id=walk, demo_at_s=4.5)
+
+    system = gemma.calls[0][0][0]["content"]
+    assert f"The current time is {local(NOON - timedelta(seconds=1.5))}," in system
+
+
+def test_pinning_the_glasses_collection_keeps_the_rest_out_of_both_rankings(client, db):
+    demo_clip(db, "Walk to the keys", [0, 3])
+    still, _note = own_memories(db)
+    search = tool_call("a", user_query="keys", keywords=["keys", "walk"], limit=20)
+    gemma = FakeGemma({"content": None, "tool_calls": [search]}, {"content": "Here."})
+
+    steps = asking(client, gemma, collections=["glasses"])
+
+    assert searched(steps) == [still]
+
+
+@pytest.mark.parametrize("path", ["/api/ask", "/api/ask/stream"])
+def test_a_question_on_a_clip_needs_it_published_and_stored(client, db, path):
+    stored, _ = demo_clip(db, "Walk", [0, 3])
+    draft, _ = demo_clip(db, "Draft", [0, 3], published=False)
+    empty, _ = demo_clip(db, "Not stored yet", [])
+    app.dependency_overrides[get_embedder] = lambda: fake_embed
+    app.dependency_overrides[get_chat] = lambda: FakeGemma({"content": "Not yet."})
+    try:
+        statuses = {
+            name: client.post(
+                path, json={"question": "What next?", "demo_clip_id": clip, "demo_at_s": 1}
+            ).status_code
+            for name, clip in (("stored", stored), ("draft", draft), ("gone", 99), ("empty", empty))
+        }
+    finally:
+        app.dependency_overrides.clear()
+
+    assert statuses == {"stored": 200, "draft": 404, "gone": 404, "empty": 409}
+
+
+@pytest.mark.parametrize("path", ["/api/ask", "/api/ask/stream"])
+@pytest.mark.parametrize(
+    "view",
+    [
+        {"demo_clip_id": 1},
+        {"demo_at_s": 3},
+        {"demo_clip_id": 1, "demo_at_s": -1},
+        {"demo_clip_id": 1, "demo_at_s": 3, "collections": ["glasses"]},
+    ],
+)
+def test_a_demo_view_is_a_clip_and_a_time_into_it_alone(client, path, view):
+    app.dependency_overrides[get_embedder] = lambda: fake_embed
+    app.dependency_overrides[get_chat] = lambda: FakeGemma({"content": "Unreachable."})
+    try:
+        reply = client.post(path, json={"question": "What happens next?", **view})
+    finally:
+        app.dependency_overrides.clear()
+
+    assert reply.status_code == 422
 
 
 def test_ask_stream_reports_a_failing_model_server(client, memories):
