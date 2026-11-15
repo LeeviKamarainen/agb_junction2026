@@ -738,7 +738,7 @@ export function TryView() {
             value={question}
             onChange={(event) => setQuestion(event.target.value)}
             maxLength={2000}
-            placeholder="Ask what you've seen, or say “warn me when…”"
+            placeholder="Ask what you've seen, or say “notify me when…”"
             className="h-10 min-w-0 flex-1 rounded-md border border-border bg-card px-3 text-sm outline-none focus-visible:border-primary"
           />
           <Button type="submit" size="lg" disabled={asking || !question.trim()}>
