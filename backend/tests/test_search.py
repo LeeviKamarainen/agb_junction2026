@@ -312,6 +312,27 @@ def asking(client, gemma, path="/api/ask", headers=None, **body) -> list[dict]:
         # A memory the searches did not return (the dog), or none at all: no evidence.
         ("Rex was there. [Memory {dog}] [Memory 999]", "Rex was there.", []),
         ("On the table, at 09:00.", "On the table, at 09:00.", []),
+        # Gemma's own ways (a recorded answer ended "(Memories 285, 273, 241)"): parentheses,
+        # Memories, several ids with commas or "and", more said inside the bracket.
+        ("On the hook (Memories {keys}, {rex}, {dog}).", "On the hook.", ["keys", "rex"]),
+        ("On the hook [Memory {rex}, {keys}].", "On the hook.", ["rex", "keys"]),
+        ("On the hook [Memory {keys}, seen at 09:12].", "On the hook.", ["keys"]),
+        ("On the hook (memories {rex} and {keys}).", "On the hook.", ["rex", "keys"]),
+        ("On the hook [Memories {keys}, {dog}, and {rex}]", "On the hook", ["keys", "rex"]),
+        # Cited twice: once, where first cited.
+        (
+            "Rex (Memory {rex}) sniffed them [Memory {keys}, {rex}].",
+            "Rex sniffed them.",
+            ["rex", "keys"],
+        ),
+        # A time after the id is not taken for another id, though "04:00" starts like one.
+        ("On the hook [Memory {keys}, 0{rex}:00].", "On the hook.", ["keys"]),
+        # Ordinary parentheses and brackets stay, numbers in them too.
+        (
+            "Both keys (2 of them) [see above] are on the hook (Memory {keys}).",
+            "Both keys (2 of them) [see above] are on the hook.",
+            ["keys"],
+        ),
     ],
 )
 def test_an_answer_cites_only_memories_its_searches_returned(client, memories, said, text, cited):

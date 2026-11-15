@@ -124,16 +124,29 @@ is in view right now, answer from that frame without searching; search the memor
 earlier."""
 
 
-# How an answer cites the memory it rests on (SYSTEM): the id its search results give, written as
-# the stills it was shown are labelled ("Memory 12, seen at …"). The space before a citation goes
-# with it, so that removing it leaves no gap.
-_CITATION = re.compile(r"\s*\[\s*memory\s*(\d+)\s*\]", re.IGNORECASE)
+# How an answer cites the memories it rests on: SYSTEM asks for [Memory 12], the way the stills
+# it was shown are labelled ("Memory 12, seen at …"), and Gemma also writes "(Memories 285, 273,
+# 241)", "[Memory 12, 14]" or "[Memory 12, seen at 09:12]". So a citation is a bracket or
+# parenthesis that opens with Memory or Memories and one id or several, apart by commas or
+# "and"; an id after the first counts only when a comma, "and" or the closing bracket follows,
+# so that a time written after the ids ("[Memory 12, 09:12]") is not taken for one. Whatever else
+# is inside goes with it, and so does the space before it, so that removing it leaves no gap.
+# Other brackets stay as they are.
+_CITATION = re.compile(
+    r"""\s*[\[(]\s*memor(?:y|ies)\s*
+    (?P<ids>\d+(?:(?:\s*,\s*(?:and\s+)?|\s+and\s+)\d+(?=\s*(?:,|and\b|[\])])))*)
+    [^\[\]()]*[\])]""",
+    re.IGNORECASE | re.VERBOSE,
+)
 
 
 def _cited(text: str, found: dict[int, SearchResult]) -> tuple[str, list[SearchResult]]:
-    """The answer without its citations, and the memories it cites in the order cited: only
-    those this answer's searches returned, since the model was shown no other."""
-    ids = dict.fromkeys(int(number) for number in _CITATION.findall(text))
+    """The answer without its citations, and the memories it cites in the order first cited:
+    only those this answer's searches returned, since the model was shown no other."""
+    cited = (
+        int(id) for match in _CITATION.finditer(text) for id in re.findall(r"\d+", match["ids"])
+    )
+    ids = dict.fromkeys(cited)
     return _CITATION.sub("", text).strip(), [found[id] for id in ids if id in found]
 
 
