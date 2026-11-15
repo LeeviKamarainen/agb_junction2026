@@ -1,0 +1,284 @@
+/* The home page (hero.tsx). On a phone: the name, pitch and button, then the view, the clip
+   picker and the rest. From 1000px: the text beside the view, everything above the fold on a
+   laptop. Prefixed home-. */
+
+.home {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding-block: 24px 40px;
+}
+
+/* On a phone the two columns dissolve, so their parts can interleave in the order below. */
+.home-text,
+.home-demo {
+  display: contents;
+}
+
+.home-lead {
+  order: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+}
+.home-view {
+  order: 2;
+}
+.home-controls {
+  order: 3;
+}
+.home-more {
+  order: 4;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+@media (min-width: 1000px) {
+  .home {
+    display: grid;
+    /* The view as wide as the column allows, but short enough for the clip picker under it
+       to stay above the fold (180px: the header, the page's padding and the picker), and never
+       under 640px, where GlassesView turns to its tall phone shape. */
+    grid-template-columns: minmax(260px, 1fr) minmax(0, clamp(640px, (100dvh - 180px) * 1.6, 840px));
+    align-items: center;
+    gap: 44px;
+    padding-top: 28px;
+  }
+  .home-text {
+    display: flex;
+    flex-direction: column;
+    gap: 36px;
+  }
+  .home-demo {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+}
+
+.home-lead h1 {
+  font-size: clamp(30px, 3.2vw, 42px);
+  font-weight: 650;
+  letter-spacing: -0.035em;
+  line-height: 1.05;
+}
+
+.home-pitch {
+  max-width: 34rem;
+  color: var(--muted-foreground);
+  font-size: 16px;
+  line-height: 1.5;
+}
+
+@media (min-width: 1000px) {
+  .home-pitch {
+    font-size: 17px;
+  }
+}
+
+.home-cta {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-height: 48px;
+  margin-top: 10px;
+  padding: 0 20px 0 24px;
+  border-radius: 999px;
+  background: var(--primary);
+  color: var(--background);
+  font-size: 16px;
+  font-weight: 600;
+  box-shadow: 0 10px 30px -8px rgb(136 192 208 / 0.45);
+  transition:
+    background 150ms ease,
+    box-shadow 150ms ease;
+}
+
+.home-cta:hover {
+  background: #9fd0de;
+  box-shadow: 0 12px 36px -8px rgb(136 192 208 / 0.6);
+}
+
+.home-cta svg {
+  width: 18px;
+  height: 18px;
+  transition: transform 150ms ease;
+}
+
+.home-cta:hover svg {
+  transform: translateX(3px);
+}
+
+@media (max-width: 640px) {
+  .home-cta {
+    align-self: stretch;
+  }
+}
+
+.home-caps {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.home-caps li {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.home-caps li > svg {
+  box-sizing: content-box;
+  width: 18px;
+  height: 18px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--card);
+  color: var(--primary);
+}
+
+.home-caps p {
+  max-width: 30rem;
+  color: var(--muted-foreground);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.home-caps strong {
+  display: block;
+  color: var(--foreground);
+  font-weight: 600;
+}
+
+.home-trust {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.home-trust svg {
+  width: 15px;
+  height: 15px;
+  color: var(--success);
+}
+
+/* --- Under the view: the clips and the sound --------------------------------------------------- */
+
+.home-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 16px;
+}
+
+.home-clips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.home-clip,
+.home-sound {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  padding: 0 14px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted-foreground);
+  font-size: 14px;
+  transition:
+    color 150ms ease,
+    border-color 150ms ease,
+    background 150ms ease;
+}
+
+.home-clip:hover,
+.home-sound:hover {
+  border-color: #4c566a;
+  color: var(--foreground);
+}
+
+.home-clip[aria-pressed="true"] {
+  border-color: rgb(136 192 208 / 0.6);
+  background: rgb(136 192 208 / 0.1);
+  color: var(--foreground);
+}
+
+/* The clip playing now. */
+.home-clip[aria-pressed="true"]::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--primary);
+  box-shadow: 0 0 8px var(--primary);
+}
+
+.home-clip-length {
+  color: var(--muted-foreground);
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 12px;
+}
+
+.home-sound svg {
+  width: 16px;
+  height: 16px;
+}
+
+.home-sound[aria-pressed="true"] {
+  border-color: #4c566a;
+  color: var(--foreground);
+}
+
+/* --- Over the view --------------------------------------------------------------------------- */
+
+.home-watching {
+  flex: none;
+  color: var(--primary);
+  font-weight: 600;
+}
+
+.home-play {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 52px;
+  padding: 0 26px 0 22px;
+  border: 1px solid rgb(255 255 255 / 0.2);
+  border-radius: 999px;
+  background: rgb(8 10 14 / 0.6);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+  color: #fff;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.home-play svg {
+  width: 18px;
+  height: 18px;
+}
+
+.home-note {
+  max-width: 22rem;
+  padding: 10px 16px;
+  border-radius: 12px;
+  background: rgb(8 10 14 / 0.6);
+  color: rgb(236 239 244 / 0.85);
+  font-size: 14px;
+  text-align: center;
+}

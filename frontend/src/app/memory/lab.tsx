@@ -3,6 +3,7 @@
 import { MessageSquareText, Video } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { RECALL } from "@/components/glasses-view/glasses";
 import { api } from "@/lib/api/browser";
 
 import { GlassesHarness } from "../glasses/harness";
@@ -28,11 +29,6 @@ const STREAM_EXAMPLES = [
   "Warn me when I pick up food that might have nuts",
   "Where did I leave my keys?",
 ];
-// The same questions the backend takes for déjà vu: a copy of _ASKS in
-// backend/app/glasses/dejavu.py, so change the two together.
-const RECALL =
-  /deja vu|déjà vu|\b(know|remember|recogni[sz]e|seen|see) (this|that)( one| thing| place)?( before| already| from( somewhere| before)?)?\W*$/i;
-
 const REFRESH_EVERY_MS = 5_000; // while streaming, reload the library and map at most this often
 
 /**

@@ -1,0 +1,361 @@
+/* GlassesView: the picture through the glasses' frame, with the glasses' display in the right
+   lens. Everything is prefixed gv-. Positions inside the stage are in container units (cqw, cqh)
+   of the stage, so the view looks the same at any size. */
+
+.gv {
+  container: gv / inline-size;
+  position: relative;
+}
+
+.gv-stage {
+  container: gv-stage / size;
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 10;
+  overflow: hidden;
+  isolation: isolate;
+  border-radius: 18px;
+  background: #06080c;
+  color: #fff;
+  box-shadow:
+    0 0 0 1px rgb(255 255 255 / 0.06),
+    0 24px 60px -20px rgb(0 0 0 / 0.6);
+}
+
+/* A phone or a narrow column: a taller stage, which suits portrait video and phone cameras. */
+@container gv (width < 640px) {
+  .gv-stage {
+    aspect-ratio: 4 / 5;
+  }
+}
+
+/* --- The picture and its blurred fill ------------------------------------------------------- */
+
+.gv-fill {
+  position: absolute;
+  /* Larger than the stage, so the blur's soft edge falls outside it. */
+  inset: -6%;
+  width: 112%;
+  height: 112%;
+  object-fit: cover;
+  filter: blur(22px) brightness(0.4) saturate(1.3);
+}
+
+/* The picture; anything else given instead (a placeholder line, say) is centred. */
+.gv-picture {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+}
+
+.gv-picture > video,
+.gv-picture > img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+/* --- The frame ------------------------------------------------------------------------------- */
+
+.gv-frame {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.gv-frame-body {
+  fill: rgb(4 6 9 / 0.74);
+}
+
+.gv-frame-rim {
+  fill: none;
+  stroke: rgb(223 231 242 / 0.16);
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+}
+
+.gv-frame-tall {
+  display: none;
+  border-radius: inherit;
+  box-shadow:
+    inset 0 0 0 1px rgb(223 231 242 / 0.1),
+    inset 0 0 26px 6px rgb(4 6 9 / 0.7);
+}
+
+/* The bridge, at the top between the eyes. */
+.gv-frame-tall::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 35%;
+  width: 30%;
+  height: 9%;
+  background: radial-gradient(50% 100% at 50% 0%, rgb(4 6 9 / 0.74) 40%, transparent);
+}
+
+@container gv-stage (orientation: portrait) {
+  .gv-frame-wide {
+    display: none;
+  }
+  .gv-frame-tall {
+    display: block;
+  }
+}
+
+/* --- The display, in the right lens --------------------------------------------------------- */
+
+/* --gv-size: the square display's side, about a third of a wide stage, centred in the right
+   lens near its bottom; at most 600px, the display's own size. Evidence stacks under it and
+   lifts it. */
+.gv-lens {
+  --gv-size: min(32cqw, 56cqh, 600px);
+  position: absolute;
+  left: calc(77cqw - var(--gv-size) / 2);
+  bottom: 12cqh;
+  display: flex;
+  flex-direction: column;
+  width: var(--gv-size);
+  pointer-events: none;
+}
+
+/* A tall stage: the display across the lower part of the view. */
+@container gv-stage (orientation: portrait) {
+  .gv-lens {
+    --gv-size: min(88cqw, 58cqh, 600px);
+    left: calc(50cqw - var(--gv-size) / 2);
+    bottom: 4cqh;
+  }
+}
+
+.gv-square {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 1;
+}
+
+/* Dark glass behind the screen's content (GlassesView sets its top and height), so white text
+   reads over a bright picture. */
+.gv-card {
+  position: absolute;
+  left: 0;
+  right: 0;
+  border: 1px solid rgb(255 255 255 / 0.1);
+  border-radius: calc(28px * var(--gv-scale));
+  background: linear-gradient(180deg, rgb(14 18 26 / 0.5), rgb(10 13 19 / 0.68));
+  box-shadow: 0 12px 32px -8px rgb(0 0 0 / 0.5);
+  -webkit-backdrop-filter: blur(14px) saturate(1.2);
+  backdrop-filter: blur(14px) saturate(1.2);
+  opacity: 0;
+  transition: opacity var(--gv-fade) ease;
+}
+
+.gv-card[data-on="true"] {
+  opacity: 1;
+}
+
+.gv-display {
+  position: absolute;
+  inset: 0;
+}
+
+/* Black is see-through on the glasses: here the display draws on a transparent background over
+   its glass card, which keeps the recording light and any stills in their own colours. A screen
+   too long for the display (its text grown to stay readable) runs over the top, not cut off. */
+.gv-display .gh-display {
+  overflow: visible;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.gv-display .gh-display-content {
+  background: transparent;
+  transition: opacity var(--gv-fade) ease;
+}
+
+.gv-lens[data-on="false"] .gh-display-content {
+  opacity: 0;
+}
+
+/* The screens' own sizes (glasses.css), but never smaller on the page than 13px for captions,
+   15px for body text and 18px for headings, however small the display is drawn.
+   --gv-scale is the display's scale on the page. */
+.gv-display .gh-text-caption {
+  font-size: max(19px, calc(13px / var(--gv-scale)));
+}
+.gv-display .gh-text-body {
+  font-size: max(26px, calc(15px / var(--gv-scale)));
+}
+.gv-display .gh-text-heading {
+  font-size: max(34px, calc(18px / var(--gv-scale)));
+}
+.gv-display .gh-icon {
+  width: max(34px, calc(18px / var(--gv-scale)));
+  height: max(34px, calc(18px / var(--gv-scale)));
+}
+
+.gv-evidence {
+  margin: calc(14px * var(--gv-scale)) 0 0;
+  padding: 6px;
+  border: 1px solid rgb(255 255 255 / 0.1);
+  border-radius: 14px;
+  background: rgb(10 13 19 / 0.62);
+  -webkit-backdrop-filter: blur(14px);
+  backdrop-filter: blur(14px);
+  animation: gv-appear var(--gv-fade) ease;
+  transition: opacity var(--gv-fade) ease;
+}
+
+.gv-lens[data-on="false"] .gv-evidence {
+  opacity: 0;
+}
+
+.gv-evidence img {
+  display: block;
+  width: 100%;
+  max-height: 24cqh;
+  object-fit: contain;
+  border-radius: 9px;
+}
+
+.gv-evidence figcaption {
+  padding: 6px 4px 2px;
+  color: rgb(236 239 244 / 0.8);
+  font-size: 13px;
+  line-height: 1.3;
+}
+
+@keyframes gv-appear {
+  from {
+    opacity: 0;
+  }
+}
+
+/* --- Labels, overlay and the fullscreen button ------------------------------------------------ */
+
+.gv-status {
+  position: absolute;
+  top: 11cqh;
+  left: 5cqw;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  max-width: 50cqw;
+  pointer-events: none;
+}
+
+.gv-status > * {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  overflow: hidden;
+  padding: 5px 12px;
+  border: 1px solid rgb(255 255 255 / 0.1);
+  border-radius: 999px;
+  background: rgb(8 10 14 / 0.6);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+  color: #fff;
+  font-size: 13px;
+  line-height: 1.35;
+  white-space: nowrap;
+}
+
+.gv-status svg {
+  width: 1.1em;
+  height: 1.1em;
+}
+
+/* Text in its own element is cut with an ellipsis where the pill meets the edge. */
+.gv-status > * > :not(svg) {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+@container gv-stage (orientation: portrait) {
+  .gv-status {
+    top: 14px;
+    left: 14px;
+    max-width: calc(100cqw - 76px);
+  }
+}
+
+.gv-overlay {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  pointer-events: none;
+}
+
+.gv-overlay > * {
+  pointer-events: auto;
+}
+
+.gv-full {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border: 1px solid rgb(255 255 255 / 0.14);
+  border-radius: 999px;
+  background: rgb(8 10 14 / 0.55);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+  color: #fff;
+  opacity: 0.8;
+  transition:
+    opacity 150ms ease,
+    background 150ms ease;
+}
+
+.gv-full:hover,
+.gv-full:focus-visible {
+  background: rgb(8 10 14 / 0.8);
+  opacity: 1;
+}
+
+.gv-full svg {
+  width: 17px;
+  height: 17px;
+}
+
+/* --- Fullscreen ---------------------------------------------------------------------------- */
+
+.gv:fullscreen,
+.gv[data-full] {
+  background: #000;
+}
+
+/* Where the browser refuses fullscreen (an iPhone): fill the window instead. */
+.gv[data-full="window"] {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  width: auto;
+  max-width: none;
+  height: 100dvh;
+  margin: 0;
+}
+
+.gv:fullscreen .gv-stage,
+.gv[data-full] .gv-stage {
+  width: 100%;
+  height: 100%;
+  aspect-ratio: auto;
+  border-radius: 0;
+  box-shadow: none;
+}
