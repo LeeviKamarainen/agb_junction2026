@@ -1,7 +1,6 @@
 "use client";
 
 import {
-  ArrowLeft,
   BellPlus,
   Eye,
   EyeOff,
@@ -33,7 +32,7 @@ import {
 import Link from "next/link";
 
 import type { components } from "@/lib/api/schema";
-import { UserMenu } from "@/components/user-menu";
+import { SiteHeader } from "@/components/site-header";
 import { api } from "@/lib/api/browser";
 
 import {
@@ -969,27 +968,21 @@ export function GlassesHarness({
   return (
     <div
       ref={rootRef}
-      className={`gh-root ${embedded ? "gh-embedded" : "gh-page"}${theater ? " gh-theater" : ""}`}
+      className={`gh-root ${embedded ? "gh-embedded" : "gh-page site-shell"}${theater ? " gh-theater" : ""}`}
     >
       {embedded ? (
         <StatusLine link={link} />
       ) : (
-        <header className="gh-header">
-          <div>
-            <p className="gh-eyebrow">GLASSES HARNESS</p>
-            <h1>What the wearer sees</h1>
-          </div>
-          <div className="gh-header-side">
-            <nav className="gh-nav" aria-label="Pages">
-              <UserMenu requireLogin />
-              <Link href="/memory">Memory lab</Link>
-              <Link href="/">
-                <ArrowLeft size={14} aria-hidden="true" /> Home
-              </Link>
-            </nav>
+        <>
+          <SiteHeader requireLogin />
+          <div className="gh-header">
+            <div>
+              <p className="gh-eyebrow">GLASSES HARNESS</p>
+              <h1>What the wearer sees</h1>
+            </div>
             <StatusLine link={link} />
           </div>
-        </header>
+        </>
       )}
 
       <main className="gh-main">

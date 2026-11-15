@@ -1,8 +1,6 @@
-import { ArrowLeft, Asterisk, Glasses } from "lucide-react";
 import type { Metadata } from "next";
-import Link from "next/link";
 
-import { UserMenu } from "@/components/user-menu";
+import { SiteHeader } from "@/components/site-header";
 
 import "../glasses/glasses.css";
 import { MemoryLab } from "./lab";
@@ -15,37 +13,23 @@ export const metadata: Metadata = {
 
 export default function MemoryLabPage() {
   return (
-    <div className="mx-auto flex w-full max-w-[1400px] flex-1 flex-col gap-6 px-4 py-6 md:px-8">
-      <header className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-3">
-          <Asterisk className="text-primary" size={26} aria-hidden="true" />
-          <div>
-            <h1 className="text-xl font-semibold tracking-tight">Memory lab</h1>
-            <p className="text-sm text-muted-foreground">
-              Add memories on the left, ask about them on the right. Every
-              vector_search call Gemma makes shows up as it happens; the Memory
-              tab sets up streaming and triggers, and the map below
-              shows every stored vector.
-            </p>
-          </div>
+    <div className="site-shell flex flex-1 flex-col">
+      <SiteHeader requireLogin />
+      <div className="flex flex-1 flex-col gap-6 py-8">
+        <div className="flex flex-col gap-2">
+          <p className="eyebrow">MEMORY LAB</p>
+          <h1 className="text-2xl font-semibold tracking-tight">
+            Add, ask and inspect
+          </h1>
+          <p className="max-w-3xl text-sm text-muted-foreground">
+            Add memories on the left, ask about them on the right. Every
+            vector_search call Gemma makes shows up as it happens; the Memory
+            tab sets up streaming and triggers, and the map below shows every
+            stored vector.
+          </p>
         </div>
-        <nav className="flex flex-wrap items-center gap-4" aria-label="Pages">
-          <UserMenu requireLogin />
-          <Link
-            href="/glasses"
-            className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground"
-          >
-            <Glasses size={15} aria-hidden="true" /> Full-screen glasses
-          </Link>
-          <Link
-            href="/"
-            className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground"
-          >
-            <ArrowLeft size={15} aria-hidden="true" /> Home
-          </Link>
-        </nav>
-      </header>
-      <MemoryLab />
+        <MemoryLab />
+      </div>
     </div>
   );
 }

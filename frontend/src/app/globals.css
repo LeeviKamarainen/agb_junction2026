@@ -22,6 +22,8 @@
   --color-accent: var(--secondary);
   --color-accent-foreground: var(--foreground);
   --color-destructive: var(--destructive);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
   --color-border: var(--border);
   --color-input: var(--border);
   --color-ring: var(--primary);
@@ -32,14 +34,17 @@
 }
 :root {
   color-scheme: dark;
-  --background: #1b1710;
-  --foreground: #efe7d4;
-  --card: #242015;
-  --primary: #ead5a5;
-  --secondary: #302a1e;
-  --muted-foreground: #c9bfa6;
-  --destructive: #f6a7a0;
-  --border: #494030;
+  /* Nordic: polar-night slate surfaces, snow-white text, frost-blue accent. */
+  --background: #1d212a;
+  --foreground: #eceff4;
+  --card: #242933;
+  --primary: #88c0d0;
+  --secondary: #2e3440;
+  --muted-foreground: #a7b0c0;
+  --destructive: #e3898f;
+  --success: #a3be8c;
+  --warning: #ebcb8b;
+  --border: #3b4252;
 }
 @layer base {
   * {
@@ -110,7 +115,7 @@
   left: 12px;
   padding: 12px 20px;
   background: var(--primary);
-  color: #111210;
+  color: var(--background);
   font-weight: 600;
   transform: translateY(-160%);
 }
@@ -141,6 +146,23 @@
   height: 35px;
   margin-right: 2px;
   color: var(--primary);
+}
+.site-nav-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
+  padding-inline: 10px;
+  border-radius: 999px;
+  color: var(--muted-foreground);
+  font-size: 14px;
+}
+.site-nav-link:hover,
+.site-nav-link[aria-current="page"] {
+  color: var(--foreground);
+  background: var(--secondary);
+}
+.site-nav-link[aria-current="page"] {
+  box-shadow: inset 0 0 0 1px var(--border);
 }
 .wordmark-accent {
   margin-left: -4px;
@@ -254,7 +276,7 @@
 .demo-heading h1 { font-size: 20px; font-weight: 500; }
 .demo-heading p { margin-top: 5px; font-size: 13px; color: var(--muted-foreground); }
 .showcase-grid { display: grid; grid-template-columns: minmax(0, 1fr) 250px; gap: 20px; }
-.showcase-media { aspect-ratio: 16 / 9; max-height: 55dvh; width: 100%; background: #0c0b08; display: grid; place-items: center; overflow: hidden; }
+.showcase-media { aspect-ratio: 16 / 9; max-height: 55dvh; width: 100%; background: #12151c; display: grid; place-items: center; overflow: hidden; }
 .showcase-media video, .showcase-media img { width: 100%; height: 100%; max-height: 100%; object-fit: contain; }
 .showcase-queue { display: flex; flex-direction: column; gap: 6px; border-left: 1px solid var(--border); padding-left: 16px; }
 .showcase-queue button { display: flex; gap: 12px; padding: 12px; text-align: left; border: 1px solid transparent; min-width: 0; }
