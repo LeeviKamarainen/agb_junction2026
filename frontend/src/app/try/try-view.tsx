@@ -648,7 +648,7 @@ export function TryView() {
 
   return (
     <div className="try-grid">
-      <h1 className="sr-only">Try GlassMemory</h1>
+      <h1 className="sr-only">Try Recall/Remind</h1>
       <section aria-label="Through the glasses" className="flex min-w-0 flex-col gap-3">
         <GlassesView
           media={mediaRef}

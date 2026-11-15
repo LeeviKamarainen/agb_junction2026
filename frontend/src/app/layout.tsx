@@ -13,7 +13,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "GlassMemory — a private visual memory for your Meta glasses",
+  title: "Recall/Remind — a private visual memory for your Meta glasses",
   description:
     "Give your Meta glasses a private visual memory and real-time notifications triggered from visual cues.",
 };

@@ -48,7 +48,9 @@ export function Hero({ clips }: { clips: Clip[] | "loading" | "failed" }) {
     <section className="home" aria-labelledby="home-title">
       <div className="home-text">
         <div className="home-lead">
-          <h1 id="home-title">GlassMemory</h1>
+          <h1 id="home-title">
+            Recall<span className="wordmark-accent">/Remind</span>
+          </h1>
           <p className="home-pitch">
             Give your Meta glasses a private visual memory and real-time notifications
             triggered from visual cues.

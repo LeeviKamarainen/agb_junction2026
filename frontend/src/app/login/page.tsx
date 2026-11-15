@@ -5,7 +5,7 @@ import Link from "next/link";
 import { AuthForm } from "./auth-form";
 
 export const metadata: Metadata = {
-  title: "Log in — GlassMemory",
+  title: "Log in — Recall/Remind",
   description:
     "Start a 60-minute guest session or return to your temporary account with its username.",
 };
