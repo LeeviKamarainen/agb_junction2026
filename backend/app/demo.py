@@ -40,6 +40,12 @@ _PREFIX = "clip:"
 # sequence, showcase.MAX_ASSETS images each shown for as long as one may be. A request naming a
 # point further in is refused, rather than overflowing the clip's time.
 LONGEST_CLIP_S = float(max(MAX_VIDEO_S, showcase.MAX_ASSETS * MAX_IMAGE_S))
+# How far past a point in a clip a frame may be and still count as shown by then, in seconds. A
+# frame's time into its clip comes from times stored to the microsecond, while the browser
+# counts an image sequence's playhead as image index × image_seconds in floating point (3 × 0.3
+# is 0.8999999999999999 where 0.9 is stored). A millisecond is far above that rounding and far
+# below the shortest an image shows (ShowcaseFields.image_seconds, 0.25 s).
+AT_TOLERANCE_S = 0.001
 
 # Made by the running worker (`worker`), so it belongs to the app's event loop.
 _wanted: asyncio.Event | None = None
@@ -130,8 +136,11 @@ async def clip_frames(session: AsyncSession, clip_id: int) -> list[tuple[float, 
 
 
 def frames_until(frames: list[tuple[float, Memory]], at_s: float) -> set[int]:
-    """The ids of those of a clip's frames (`clip_frames`) taken at most `at_s` seconds in."""
-    return {frame.id for at, frame in frames if at <= at_s and frame.id is not None}
+    """The ids of those of a clip's frames (`clip_frames`) taken at most `at_s` seconds in, as
+    far as AT_TOLERANCE_S tells them apart."""
+    return {
+        frame.id for at, frame in frames if at <= at_s + AT_TOLERANCE_S and frame.id is not None
+    }
 
 
 @dataclass(frozen=True)

@@ -551,6 +551,20 @@ def test_a_time_into_a_clip_is_a_number_up_to_the_longest_clip(at_s):
         agent.AskRequest(question="What next?", demo_clip_id=1, demo_at_s=at_s)
 
 
+def test_a_question_on_an_image_sequence_reaches_the_image_on_screen(client, db):
+    # Each image shown for 0.3 s, stored as app/demo.py stores them, to the microsecond: the
+    # fourth one 0.9 s in. The page's playhead while it shows is 3 × 0.3, a hair less.
+    steps_clip, frames = demo_clip(db, "Steps", [i * 0.3 for i in range(5)])
+    at_s = 3 * 0.3
+    assert at_s < 0.9
+    search = tool_call("a", user_query="keys", limit=20)
+    gemma = FakeGemma({"content": None, "tool_calls": [search]}, {"content": "Not yet."})
+
+    steps = asking(client, gemma, demo_clip_id=steps_clip, demo_at_s=at_s)
+
+    assert sorted(searched(steps)) == frames[:4]
+
+
 def test_ask_stream_reports_a_failing_model_server(client, memories):
     async def broken(messages, tools):
         raise UpstreamError("The chat model answered 400: tool choice not enabled")
