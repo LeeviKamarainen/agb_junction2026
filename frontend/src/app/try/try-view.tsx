@@ -37,6 +37,7 @@ import type { FlexBoxNode } from "../glasses/types";
 import { decode } from "../memory/pca";
 import { errorText } from "../memory/types";
 import { MemoryTrail, type TrailPoint } from "./memory-trail";
+import { REVEAL_SLACK_S } from "./trail";
 import { useCamera } from "./use-camera";
 
 type Clip = components["schemas"]["ShowcasePublic"];
@@ -62,6 +63,9 @@ const MAX_SIDE = 896; // the glasses stream at 504x896: send about that much, no
 const HISTORY = 3; // exchanges listed under the view; the lens shows only the newest, briefly
 // The camera's frames are fetched for the map at most this often while frames are being stored.
 const TRAIL_REFRESH_MS = 1500;
+// How often to look again for the frames of a clip published moments ago, which the backend is
+// still storing as memories (a minute of video takes about that long to embed).
+const CLIP_RETRY_MS = 5000;
 const CAMERA_EXAMPLES = [
   "Where did I leave my keys?",
   "Warn me when I see a cup",
@@ -131,6 +135,10 @@ export function TryView() {
     mediaRef.current = element;
   }, []);
   const streamId = useRef("");
+  // Counts what the view shows (a source, a replay): an answer or a frame's reply that comes back
+  // after it changed is about something no longer in view, and is dropped.
+  const generation = useRef(0);
+  const [starting, setStarting] = useState(false);
   const sending = useRef(false); // one frame at a time; frames due meanwhile are skipped
   const shownKey = useRef<SourceKey | null>(null); // the source the map's points belong to
   const lastFetched = useRef<number | null>(null);
@@ -141,19 +149,32 @@ export function TryView() {
   const onCamera = sourceKey === "camera";
   const streaming = started && (onCamera ? Boolean(camera.stream) && cameraLive : playing);
 
-  // The published clips, public; the one the home page was showing comes first.
+  // The published clips, public.
   useEffect(() => {
-    const wanted = Number(params.get("clip"));
     api
       .GET("/api/demo/clips", { cache: "no-store" })
-      .then(({ data }) => {
-        const list = (data ?? []).filter((c) => c.assets.length);
-        setClips(list);
-        const first = list.find((c) => c.id === wanted) ?? list[0];
-        setSourceKey(first ? first.id : "camera");
-      })
+      .then(({ data }) => setClips((data ?? []).filter((c) => c.assets.length)))
       .catch(() => setError("Could not load the demo videos."));
-  }, [params]);
+  }, []);
+
+  // ?clip= names the source: a clip's id, or "camera". The home page's Try it out sets it and the
+  // chips keep it in step (choose). Next keeps this page alive between visits, so a new ?clip=
+  // can reach a page that is playing something else: it switches as its chip would.
+  const param = params.get("clip");
+  const wanted: SourceKey | null =
+    param === "camera" ? "camera" : param && /^\d+$/.test(param) ? Number(param) : null;
+  const follow = useEffectEvent((list: Clip[], want: SourceKey | null) => {
+    const known = want === "camera" || list.some((c) => c.id === want);
+    if (sourceKey === null) setSourceKey(known ? want : (list[0]?.id ?? "camera"));
+    else if (known && want !== null && want !== sourceKey) void choose(want);
+  });
+  useEffect(() => {
+    if (!clips) return;
+    // The address changed outside this page (a link elsewhere): follow it once this render is
+    // done, as a click on its chip would.
+    const timer = setTimeout(() => follow(clips, wanted));
+    return () => clearTimeout(timer);
+  }, [clips, wanted]);
 
   // A returning guest's goals; after that they change only through this page.
   const loadGoals = useEffectEvent(() => void refreshGoals());
@@ -202,6 +223,11 @@ export function TryView() {
     });
     if (shownKey.current !== id) return; // the visitor moved on meanwhile
     if (problem || !data) return setError(errorText(problem, "Could not load the memory map"));
+    // A clip published moments ago is still being stored as memories, in the background.
+    if (!data.length) {
+      setTimeout(() => shownKey.current === id && void loadClipTrail(id), CLIP_RETRY_MS);
+      return;
+    }
     setPoints(
       data.map((memory) => toPoint(memory, memory.clip_at_s ?? 0, clock(memory.clip_at_s ?? 0))),
     );
@@ -239,7 +265,15 @@ export function TryView() {
       void loadCameraTrail();
     }, TRAIL_REFRESH_MS);
   }
-  useEffect(() => () => clearTimeout(trailTimer.current), []);
+  useEffect(
+    () => () => {
+      // Also when Next hides the page: a timer cleared but still recorded would block every
+      // refresh after the visitor comes back.
+      clearTimeout(trailTimer.current);
+      trailTimer.current = undefined;
+    },
+    [],
+  );
 
   // ---- Playing ---------------------------------------------------------------------------
 
@@ -250,14 +284,15 @@ export function TryView() {
     return clip ? imageIndex * clip.image_seconds : 0;
   }
 
-  // A new clip (or the first, after Start) plays from its start.
-  useEffect(() => {
-    const media = mediaRef.current;
-    if (!started || clip?.kind !== "video" || !(media instanceof HTMLVideoElement)) return;
-    media.play().catch((problem: unknown) =>
-      setError(`The video could not play: ${problem instanceof Error ? problem.message : problem}`),
-    );
-  }, [started, clip?.id, clip?.kind]);
+  /** Plays a video. A play cut short (the clip changed, the page hid) is no failure. Only Start,
+   * a new source (the clip's autoPlay) and Replay start one: a page Next shows again stays as the
+   * visitor left it, paused by GlassesView. */
+  function play(media: HTMLVideoElement) {
+    media.play().catch((problem: unknown) => {
+      if (problem instanceof DOMException && problem.name === "AbortError") return;
+      setError(`The video could not play: ${problem instanceof Error ? problem.message : problem}`);
+    });
+  }
 
   // An image sequence shows each image for its clip's image_seconds.
   const advanceImage = useEffectEvent(() => {
@@ -281,12 +316,7 @@ export function TryView() {
     if (!onCamera || !(media instanceof HTMLVideoElement)) return;
     media.srcObject = camera.stream;
     // GlassesView pauses the view when Next hides this page, which clears autoplay.
-    if (camera.stream)
-      media.play().catch((problem: unknown) => {
-        // A newer stream replacing this one aborts its play(): nothing went wrong.
-        if (!(problem instanceof DOMException && problem.name === "AbortError"))
-          setError(`The camera could not play: ${problem instanceof Error ? problem.message : problem}`);
-      });
+    if (camera.stream) play(media);
   }, [onCamera, camera.stream]);
 
   // React sets `muted` only when the element is created; the sound toggle changes it after.
@@ -296,13 +326,23 @@ export function TryView() {
   }, [sound, onCamera, clip?.id]);
 
   async function start() {
+    if (starting) return;
     setError(null);
+    // Within the tap: an iPhone plays sound, and speaks, only when first asked during one.
+    const media = mediaRef.current;
+    if (!onCamera && media instanceof HTMLVideoElement) play(media);
+    if (sound) say("");
+    setStarting(true);
     try {
       await ensureSession();
     } catch (problem) {
+      if (media instanceof HTMLVideoElement) media.pause();
       setError(problem instanceof Error ? problem.message : String(problem));
       return;
+    } finally {
+      setStarting(false);
     }
+    generation.current += 1;
     streamId.current = crypto.randomUUID();
     setStarted(true);
     void refreshGoals();
@@ -318,8 +358,11 @@ export function TryView() {
   }
 
   async function choose(next: SourceKey) {
-    if (next === sourceKey || camera.busy) return;
+    if (next === sourceKey || camera.busy || starting) return;
     if (onCamera) camera.stop();
+    generation.current += 1;
+    // The address says what is shown, so going back and forth through history keeps the choice.
+    window.history.replaceState(null, "", `/try?clip=${next}`);
     setSourceKey(next);
     setPoints([]);
     setHighlight([]);
@@ -349,21 +392,23 @@ export function TryView() {
     if (onCamera) return setCameraLive((live) => !live);
     const media = mediaRef.current;
     if (clip?.kind === "video" && media instanceof HTMLVideoElement) {
-      if (media.paused) void media.play();
+      if (media.paused) play(media);
       else media.pause();
     } else setPlaying((on) => !on);
   }
 
   function replay() {
+    generation.current += 1;
     setEnded(false);
     setPlayhead(0);
     setImageIndex(0);
     setHighlight([]);
+    setLens(null);
     streamId.current = crypto.randomUUID();
     const media = mediaRef.current;
     if (clip?.kind === "video" && media instanceof HTMLVideoElement) {
       media.currentTime = 0;
-      void media.play();
+      play(media);
     } else setPlaying(true);
   }
 
@@ -393,6 +438,7 @@ export function TryView() {
   async function sendFrame() {
     if (sending.current) return;
     sending.current = true;
+    const seen = generation.current;
     try {
       const blob = await grab();
       if (!blob) return;
@@ -417,6 +463,7 @@ export function TryView() {
         setError(errorText(body, `The backend answered ${response.status}`));
         return;
       }
+      if (seen !== generation.current) return; // a frame of what is no longer in view
       const reply = body as FrameReply;
       if (reply.message) {
         show({ screen: messageScreen(reply.message), evidence: null, seconds: MESSAGE_S });
@@ -463,6 +510,7 @@ export function TryView() {
     show({ screen: thinkingScreen(asked), evidence: null, seconds: null });
     // The memory being watched, up to now: the clip up to the playhead, or the camera's frames.
     const scope = clip ? { demo_clip_id: clip.id, demo_at_s: position() } : null;
+    const seen = generation.current;
     try {
       await ensureSession();
       if (RECALL.test(asked)) {
@@ -471,15 +519,20 @@ export function TryView() {
           body: { question: asked, ...(scope ?? {}) },
         });
         if (problem || !data) throw new Error(errorText(problem, "Could not ask the glasses"));
+        record(id, { answer: data.speech ?? "" });
+        if (seen !== generation.current) return; // about a picture no longer in view
         show({ screen: data.screen, evidence: null, seconds: data.dismiss_after_s ?? MESSAGE_S });
         speak(data.speech ?? "");
-        record(id, { answer: data.speech ?? "" });
       } else {
         const { data, error: problem } = await api.POST("/api/ask", {
           body: { question: asked, ...(scope ?? { collections: CAMERA_SCOPE }) },
         });
         if (problem || !data) throw new Error(errorText(problem, "Could not get an answer"));
         const evidence = toEvidence(data.evidence?.[0]);
+        record(id, { answer: plain(data.answer), evidence });
+        // The answer may have started or stopped watching for something.
+        void refreshGoals();
+        if (seen !== generation.current) return; // about a picture no longer in view
         show({
           screen: answerScreen(asked, data.answer),
           evidence,
@@ -487,12 +540,9 @@ export function TryView() {
         });
         setHighlight((data.evidence ?? []).map((result) => result.id));
         speak(data.answer);
-        record(id, { answer: plain(data.answer), evidence });
-        // The answer may have started or stopped watching for something.
-        void refreshGoals();
       }
     } catch (problem) {
-      show(null);
+      if (seen === generation.current) show(null);
       record(id, { error: problem instanceof Error ? problem.message : String(problem) });
     } finally {
       setAsking(false);
@@ -512,7 +562,7 @@ export function TryView() {
         DEJA_VU_EXAMPLE,
       ]
     : CAMERA_EXAMPLES;
-  const shown = onCamera ? points : points.filter((point) => point.at <= playhead);
+  const shown = onCamera ? points : points.filter((point) => point.at <= playhead + REVEAL_SLACK_S);
 
   const media = onCamera ? (
     <video
@@ -528,6 +578,7 @@ export function TryView() {
       key={clip.id}
       ref={setMedia}
       src={clip.assets[0].url}
+      autoPlay={started}
       muted={!sound}
       playsInline
       disableRemotePlayback
@@ -555,8 +606,13 @@ export function TryView() {
   );
 
   const startButton = (
-    <button type="button" className="try-start" onClick={() => void start()} disabled={camera.busy}>
-      {camera.busy ? (
+    <button
+      type="button"
+      className="try-start"
+      onClick={() => void start()}
+      disabled={camera.busy || starting}
+    >
+      {camera.busy || starting ? (
         <LoaderCircle className="animate-spin" aria-hidden="true" />
       ) : onCamera ? (
         <Camera aria-hidden="true" />
@@ -610,6 +666,7 @@ export function TryView() {
                 type="button"
                 className="try-chip"
                 aria-pressed={sourceKey === option.id}
+                disabled={starting}
                 onClick={() => void choose(option.id)}
               >
                 {option.title}
@@ -619,6 +676,7 @@ export function TryView() {
               type="button"
               className="try-chip"
               aria-pressed={onCamera}
+              disabled={starting}
               onClick={() => void choose("camera")}
             >
               <Camera size={14} aria-hidden="true" /> Your camera

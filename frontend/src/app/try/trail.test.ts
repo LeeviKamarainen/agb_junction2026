@@ -151,6 +151,13 @@ test("the playhead reveals the points at or before it, in time order whatever or
   assert.equal(revealed(order, 100), 4);
 });
 
+test("an image is reached when the playhead's floating point lands just short of its time", () => {
+  // The third image of a 0.3 s sequence: the backend stores 0.9, the browser computes 0.3 * 3.
+  const images = byTime([0, 0.3, 0.6, 0.9].map((at, id) => ({ id, at })));
+  assert.equal(revealed(images, 0.3 * 3), 4);
+  assert.equal(revealed(images, 0.89), 3); // a hundredth short is still short
+});
+
 test("a new layout mid-move starts each point where it is drawn, so nothing jumps", () => {
   const first = retarget(null, new Map([[1, [0, 0] as Spot]]), 0, 400);
   assert.deepEqual(spotAt(first, 1, 0), [0, 0]); // a first layout is drawn in place

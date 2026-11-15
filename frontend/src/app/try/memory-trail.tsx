@@ -71,8 +71,8 @@ function grow(t: number): number {
 }
 
 /**
- * Draws the trail on two stacked canvases: the path and the points below, redrawn only when they
- * change or move; the rings above (the newest point, an answer's, the pointer's), redrawn every
+ * Draws the trail on two stacked canvases: the points below, redrawn only when they change or
+ * move; the rings above (the newest point, an answer's, the pointer's), redrawn every
  * frame while one pulses, which costs a few arcs however many points there are.
  */
 class Painter {

@@ -111,10 +111,15 @@ export function layout(coords: readonly Spot[]): Spot[] {
   return coords.map((c): Spot => [unit(c[0], 0), unit(c[1], 1)]);
 }
 
-/** The points in time order, ties by id: the order of the path, whatever order they came in. */
+/** The points in time order, ties by id: the order they were seen, whatever order they came in. */
 export function byTime<T extends { at: number; id: number }>(points: readonly T[]): T[] {
   return [...points].sort((a, b) => a.at - b.at || a.id - b.id);
 }
+
+// How far past the playhead a point still counts as reached. The backend stores a frame's time to
+// the microsecond, and the browser computes an image's in floating point (0.3 * 3 is
+// 0.8999999999999999): a millisecond covers both, and no two frames are that close (2 fps).
+export const REVEAL_SLACK_S = 0.001;
 
 /**
  * How many of the time-ordered points the playhead has reached: those at or before `until`, or
@@ -126,7 +131,7 @@ export function revealed(ordered: readonly { at: number }[], until: number | und
   let hi = ordered.length;
   while (lo < hi) {
     const mid = (lo + hi) >> 1;
-    if (ordered[mid].at <= until) lo = mid + 1;
+    if (ordered[mid].at <= until + REVEAL_SLACK_S) lo = mid + 1;
     else hi = mid;
   }
   return lo;

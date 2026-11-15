@@ -79,7 +79,8 @@ export function UserMenu({ requireLogin = false, className = "" }: Props) {
   );
 }
 
-/** A guest's minutes left; at zero the page goes to /login, since the account is gone. */
+/** A guest's minutes left; at zero every page hears that nobody is logged in: the account is
+ * gone. */
 function TimeLeft({ until }: { until: string }) {
   const end = new Date(until).getTime();
   const [now, setNow] = useState(() => Date.now());
@@ -91,7 +92,8 @@ function TimeLeft({ until }: { until: string }) {
 
   const minutes = Math.max(0, Math.ceil((end - now) / 60_000));
   useEffect(() => {
-    if (minutes === 0) window.location.replace("/login");
+    // The account is gone: every page hears it, and one that needs a login sends the visitor on.
+    if (minutes === 0) loggedOut();
   }, [minutes]);
 
   return (
