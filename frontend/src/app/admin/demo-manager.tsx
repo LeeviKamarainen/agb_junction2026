@@ -188,12 +188,11 @@ export function DemoManager() {
         <div>
           <h1>Manage demos</h1>
           <p>
-            Upload media, arrange the sequence, then publish it on the home
-            page.
+            Upload media, arrange the sequence, then publish it on Try it.
           </p>
         </div>
-        <Link href="/" className="text-sm text-primary">
-          View the home page ↗
+        <Link href="/try" className="text-sm text-primary">
+          View Try it ↗
         </Link>
       </div>
       <form

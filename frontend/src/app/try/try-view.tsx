@@ -158,8 +158,8 @@ export function TryView() {
       .catch(() => setError("Could not load the demo videos."));
   }, []);
 
-  // ?clip= names the source: a clip's id, or "camera". The home page's Try it out sets it and the
-  // chips keep it in step (choose). Next keeps this page alive between visits, so a new ?clip=
+  // ?clip= names the source: a clip's id, or "camera", which a link can set and the chips keep in
+  // step (choose). Next keeps this page alive between visits, so a new ?clip=
   // can reach a page that is playing something else: it switches as its chip would.
   const param = params.get("clip");
   const wanted: SourceKey | null =
