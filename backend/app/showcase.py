@@ -2,6 +2,7 @@
 so random file names prevent a reused demo id from inheriting earlier uploads."""
 
 import io
+import json
 import uuid
 from pathlib import Path
 
@@ -43,6 +44,11 @@ def save(data: bytes, kind: str) -> tuple[str, str]:
         return name, "image/jpeg"
     except (UnidentifiedImageError, OSError, Image.DecompressionBombError) as error:
         raise ValueError("Upload a readable image") from error
+
+
+def assets(item) -> list[dict]:
+    """A Showcase's uploaded media, in order: name, label and content_type each."""
+    return json.loads(item.assets_json)
 
 
 def delete(names: list[str]) -> None:

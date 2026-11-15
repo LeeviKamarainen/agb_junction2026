@@ -8,6 +8,7 @@ import type { components } from "@/lib/api/schema";
 import { useSession } from "@/lib/session";
 import { Button } from "@/components/ui/button";
 import { AuthForm } from "../login/auth-form";
+import { CueEditor } from "./cue-editor";
 
 type Clip = components["schemas"]["ShowcasePublic"];
 const field =
@@ -32,6 +33,7 @@ function write(clip: Clip) {
     position: clip.position,
     published: clip.published,
     asset_order: clip.assets.map((a) => a.name),
+    cues: clip.cues.filter((cue) => cue.text.trim()),
   };
 }
 
@@ -459,6 +461,12 @@ function ClipEditor({
           </li>
         ))}
       </ol>
+      <CueEditor
+        cues={draft.cues}
+        videoUrl={draft.kind === "video" ? draft.assets[0]?.url : undefined}
+        disabled={blocked}
+        onChange={(cues) => patch({ cues })}
+      />
       <div className="flex flex-wrap items-center gap-3">
         <label className="flex items-center gap-2 text-sm">
           <input

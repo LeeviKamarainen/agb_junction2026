@@ -124,6 +124,22 @@ def test_a_single_frame_becomes_a_glasses_memory_with_no_message(client, scene):
     assert memory["collection"] == "glasses" and memory["image_url"]
 
 
+def test_a_frame_sent_with_store_false_is_only_checked(client, scene):
+    goal = {"text": "Find my keys", "triggers": [{"name": "Keys", "watch_for": "a set of keys"}]}
+    assert client.post("/api/glasses/goals", json=goal).status_code == 201
+    files = {"frame": ("f.jpg", jpeg(), "image/jpeg")}
+    data = {"source": "stream", "stream_id": "demo", "store": "false"}
+
+    reply = client.post("/api/glasses/frames", files=files, data=data)
+
+    assert reply.status_code == 200, reply.text
+    body = reply.json()
+    assert body["stored"] is False and body["memory_id"] is None
+    assert [m["name"] for m in body["matches"]] == ["Keys"]
+    assert client.get("/api/memories").json() == []
+    assert list(media.media_dir().iterdir()) == []  # the frame's file is not kept either
+
+
 def test_a_still_stream_is_stored_once_but_singles_always(client, scene):
     first = send(client, "stream", "s1").json()
     again = send(client, "stream", "s1").json()

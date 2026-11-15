@@ -13,6 +13,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from app import agent, demo_bundles, faces, media, vectors
 from app.auth import DEMO_OWNER, Viewer, ViewerDep
 from app.db import SessionDep, new_session
+from app.glasses import feeds
 from app.llm import Chat, Embedder, InputType, UpstreamError, get_chat, get_embedder
 from app.models import (
     CollectionCount,
@@ -315,6 +316,7 @@ async def ask(
 ):
     """Answer a question from the memories you may see: the chat model searches them, then
     answers."""
+    feeds.note(viewer.id, "question", body.question, "chat")
     try:
         return await agent.answer(
             session,
@@ -342,6 +344,7 @@ async def ask_stream(body: agent.AskRequest, viewer: ViewerDep, chat: ChatDep, e
 
     # Read now: the request's session closes before the stream ends.
     owners, owner_id = viewer.owners, viewer.id
+    feeds.note(owner_id, "question", body.question, "chat")
 
     async def lines() -> AsyncIterator[str]:
         # Its own session: the request's would close before the stream ends.

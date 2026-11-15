@@ -308,7 +308,7 @@ export function GlassesHarness({
     const sent =
       socket !== null &&
       (jpeg && kind === "frame"
-        ? socket.sendJpeg({ type: kind, id: id ?? 0 }, jpeg.blob)
+        ? socket.sendJpeg({ type: kind, id: id ?? 0, client: "harness" }, jpeg.blob)
         : socket.send(message));
     const watch = kind === "frame" || kind === "ping" || kind === "watch";
     const what = jpeg
@@ -666,6 +666,7 @@ export function GlassesHarness({
       form.append("source", "stream");
       form.append("stream_id", memoryStreamId.current);
       form.append("seen_at", new Date().toISOString());
+      form.append("client", "harness"); // for the admin's stream wall
       const { data, error } = await api.POST("/api/glasses/frames", {
         body: form as never,
         bodySerializer: () => form,
