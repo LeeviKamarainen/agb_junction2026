@@ -13,13 +13,10 @@ import {
 import { Button } from "@/components/ui/button";
 import type { components } from "@/lib/api/schema";
 
+import { CueOverlay } from "./cue-overlay";
+import { clock } from "./cues";
+
 type Clip = components["schemas"]["ShowcasePublic"];
-const clock = (seconds: number) =>
-  `${Math.floor(seconds / 60)
-    .toString()
-    .padStart(2, "0")}:${Math.floor(seconds % 60)
-    .toString()
-    .padStart(2, "0")}`;
 
 export function ShowcasePlayer({ clips }: { clips: Clip[] }) {
   const [playback, setPlayback] = useState({ position: 0, playing: false });
@@ -134,7 +131,7 @@ export function ShowcasePlayer({ clips }: { clips: Clip[] }) {
     <section aria-label="Curated demo playback">
       <div className="showcase-grid">
         <div className="min-w-0">
-          <div className="showcase-media">
+          <div className="showcase-media relative">
             {current.clip.kind === "video" ? (
               <video
                 key={id}
@@ -172,6 +169,7 @@ export function ShowcasePlayer({ clips }: { clips: Clip[] }) {
                 onError={mediaError}
               />
             )}
+            <CueOverlay cues={current.clip.cues} at={local} />
           </div>
           <div className="flex items-start justify-between gap-4 py-3">
             <div>

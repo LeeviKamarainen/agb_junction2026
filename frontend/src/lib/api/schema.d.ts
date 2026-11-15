@@ -1279,6 +1279,27 @@ export interface components {
             /** Content Type */
             content_type: string;
         };
+        /**
+         * ShowcaseCue
+         * @description Something the wearer says at `at_s` seconds into the clip. One that `stays` is shown as
+         *     active (a trigger, say) from then on, until a later cue `stops` it: by its id, or "*" for
+         *     every cue before it.
+         */
+        ShowcaseCue: {
+            /** Id */
+            id: string;
+            /** At S */
+            at_s: number;
+            /** Text */
+            text: string;
+            /**
+             * Stays
+             * @default true
+             */
+            stays: boolean;
+            /** Stops */
+            stops?: string | null;
+        };
         /** ShowcaseOrder */
         ShowcaseOrder: {
             /** Ids */
@@ -1322,6 +1343,8 @@ export interface components {
             id: number;
             /** Assets */
             assets: components["schemas"]["ShowcaseAsset"][];
+            /** Cues */
+            cues: components["schemas"]["ShowcaseCue"][];
         };
         /** ShowcaseWrite */
         ShowcaseWrite: {
@@ -1360,6 +1383,8 @@ export interface components {
             published: boolean;
             /** Asset Order */
             asset_order?: string[] | null;
+            /** Cues */
+            cues?: components["schemas"]["ShowcaseCue"][] | null;
         };
         /**
          * Step
