@@ -239,6 +239,11 @@
 .live-stage { position: relative; display: flex; aspect-ratio: 16 / 9; max-height: 70dvh; width: 100%; overflow: hidden; border-radius: 10px; background: #000; touch-action: manipulation; user-select: none; }
 .live-stage-full { aspect-ratio: auto; max-height: none; height: 100dvh; width: 100vw; border-radius: 0; }
 .live-stage-window { position: fixed; inset: 0; z-index: 50; }
+/* The glasses' display over the view: square, centered, as tall as the view allows; black is
+   see-through, as on the glasses, and it never takes a tap from the view. */
+.live-glasses { position: absolute; inset: 0; container-type: size; display: grid; place-items: center; pointer-events: none; mix-blend-mode: screen; }
+.live-glasses > .gh-display-host { width: min(100cqw, 100cqh, 600px); }
+.live-glasses .gh-display { border: 0; border-radius: 0; box-shadow: none; outline: 1px dashed rgb(255 255 255 / .25); }
 .live-media { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
 .live-card { display: flex; flex-direction: column; gap: 4px; max-width: 34rem; border-radius: 8px; background: rgb(0 0 0 / .75); padding: 10px 12px; color: #fff; }
 .live-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; border-radius: 8px; background: rgb(0 0 0 / .55); padding: 6px; padding-bottom: max(6px, env(safe-area-inset-bottom)); }

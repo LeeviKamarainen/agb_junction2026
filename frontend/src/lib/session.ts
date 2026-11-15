@@ -39,7 +39,12 @@ export function useSession() {
   }, []);
 
   useEffect(() => {
-    const changed = () => { void refresh(); };
+    // `loggedOut()` says nobody is logged in now: no need to ask, and nothing may show the old
+    // login meanwhile. Any other change is asked about.
+    const changed = (event: Event) => {
+      if (event instanceof CustomEvent && event.detail === null) setUser(null);
+      else void refresh();
+    };
     window.addEventListener("session-changed", changed);
     return () => window.removeEventListener("session-changed", changed);
   }, [refresh]);
@@ -49,6 +54,11 @@ export function useSession() {
 
 export async function logOut() {
   await api.POST("/api/auth/logout");
+}
+
+/** Tell every useSession at once that nobody is logged in any more. */
+export function loggedOut() {
+  window.dispatchEvent(new CustomEvent("session-changed", { detail: null }));
 }
 
 /** Where to go after logging in: the ?next= path when it is one of ours, else the demo page. */

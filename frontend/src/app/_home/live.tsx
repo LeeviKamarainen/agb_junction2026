@@ -4,6 +4,7 @@ import {
   Bell,
   Circle,
   Film,
+  Glasses,
   Maximize,
   MessageSquareText,
   Minimize,
@@ -20,7 +21,16 @@ import { api } from "@/lib/api/browser";
 import type { components } from "@/lib/api/schema";
 import { ensureSession, useSession } from "@/lib/session";
 
+import "../glasses/glasses.css";
+import { Display } from "../glasses/display";
 import { say } from "../glasses/speech";
+import {
+  answerScreen,
+  MESSAGE_S,
+  messageScreen,
+  plain as plainAnswer,
+  secondsToRead,
+} from "./glasses-screens";
 import { type AskChatHandle, AskChat } from "../memory/ask-chat";
 import {
   FPS,
@@ -38,8 +48,6 @@ type Message = components["schemas"]["GlassesMessage"];
 type Source = "demo" | "camera";
 type Facing = "environment" | "user";
 
-const MESSAGE_MS = 8_000; // how long a trigger's message stays on the view, as on the glasses
-const ANSWER_MS = 15_000; // how long an answer stays on the view
 const MAX_SIDE = 896; // the glasses stream at 504x896: send about that much, not more
 
 const EXAMPLES = [
@@ -85,6 +93,21 @@ export function LiveHome() {
   const [fired, setFired] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [speak, setSpeak] = useState(true);
+  // The glasses' display over the view: what the wearer would see of a trigger or an answer.
+  const [glassesOn, setGlassesOn] = useState(false);
+  const [listening, setListening] = useState(false);
+  // The control bar's height: the glasses' display sits above it, so nothing hides its text.
+  const barRef = useRef<HTMLDivElement>(null);
+  const [barHeight, setBarHeight] = useState(0);
+  useEffect(() => {
+    const bar = barRef.current;
+    if (!bar) return;
+    const observer = new ResizeObserver(([entry]) =>
+      setBarHeight(Math.ceil(entry.target.getBoundingClientRect().height)),
+    );
+    observer.observe(bar);
+    return () => observer.disconnect();
+  }, []);
   const [nativeFullscreen, setNativeFullscreen] = useState(false);
   const [cssFullscreen, setCssFullscreen] = useState(false);
   const immersive = nativeFullscreen || cssFullscreen;
@@ -277,12 +300,14 @@ export function LiveHome() {
 
   useEffect(() => {
     if (!message) return;
-    const timer = setTimeout(() => setMessage(null), MESSAGE_MS);
+    const timer = setTimeout(() => setMessage(null), MESSAGE_S * 1000);
     return () => clearTimeout(timer);
   }, [message]);
   useEffect(() => {
     if (!answer) return;
-    const timer = setTimeout(() => setAnswer(null), ANSWER_MS);
+    // As long as the glasses would show it.
+    const seconds = secondsToRead(`${answer.question} ${plainAnswer(answer.text)}`);
+    const timer = setTimeout(() => setAnswer(null), seconds * 1000);
     return () => clearTimeout(timer);
   }, [answer]);
   useEffect(() => {
@@ -358,6 +383,16 @@ export function LiveHome() {
       <span className="line-clamp-5 text-sm">{answer.text}</span>
     </span>
   ) : null;
+
+  // What the glasses would show now: déjà vu's screen from the backend, else a trigger's
+  // message, else the latest answer; nothing (a clear display) otherwise.
+  const glassesScreen = recalled
+    ? recalled.screen
+    : message
+      ? messageScreen(message)
+      : answer
+        ? answerScreen(answer.question, answer.text)
+        : null;
 
   const chip =
     "inline-flex items-center gap-1.5 rounded-md bg-white/10 px-2.5 py-1.5 text-xs font-medium text-white backdrop-blur hover:bg-white/20 disabled:opacity-50";
@@ -435,9 +470,24 @@ export function LiveHome() {
             </span>
           )}
 
+          {glassesOn && (
+            <div
+              className="live-glasses"
+              aria-label="What the glasses would show"
+              style={{ bottom: barHeight + 12 }}
+            >
+              <Display
+                screen={glassesScreen}
+                seeThrough
+                listening={listening}
+                onAction={() => {}}
+              />
+            </div>
+          )}
+
           <div className="absolute inset-x-0 bottom-0 flex flex-col gap-2 p-3">
-            {overlay}
-            <div className="live-bar" onDoubleClick={(event) => event.stopPropagation()}>
+            {!glassesOn && overlay}
+            <div ref={barRef} className="live-bar" onDoubleClick={(event) => event.stopPropagation()}>
               <span className="inline-flex rounded-md bg-white/10 p-0.5" role="group" aria-label="What the view shows">
                 {(["demo", "camera"] as const).map((option) => (
                   <button
@@ -479,7 +529,18 @@ export function LiveHome() {
                 label="Ask"
                 className="bg-white/10! px-2.5! py-1.5! text-xs! text-white!"
                 onText={(text) => chatRef.current?.ask(text)}
+                onListening={setListening}
               />
+              <button
+                type="button"
+                className={`${chip} ${glassesOn ? "bg-white! text-black!" : ""}`}
+                aria-pressed={glassesOn}
+                title="Show what the glasses' display would show over the view"
+                onClick={() => setGlassesOn((on) => !on)}
+              >
+                <Glasses size={14} aria-hidden="true" />
+                <span className="max-sm:sr-only">Glasses display</span>
+              </button>
               <span className="ml-auto inline-flex gap-2">
                 <button
                   type="button"
@@ -524,6 +585,7 @@ export function LiveHome() {
           pinned={[]}
           beforeAsk={ensureSession}
           examples={EXAMPLES}
+          onListening={setListening}
           intro="Ask about the demo day, or what your camera has seen. Ask Gemma to warn you about something, then stream: every frame is checked for it."
           className="min-h-[24rem] lg:max-h-[70vh]"
           special={(question) =>
