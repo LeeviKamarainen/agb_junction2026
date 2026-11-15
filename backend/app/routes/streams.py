@@ -41,7 +41,7 @@ async def list_streams(viewer: ViewerDep):
 async def stream_detail(feed_id: str, viewer: ViewerDep):
     """One feed with its full log, newest first: what became of each frame (stored or why not,
     every trigger's score against its level, what fired), the user's questions, the chat
-    model's searches and answers, goals, reminders, warnings and errors, each with its JSON
+    model's searches and answers, goals and errors, each with its JSON
     `detail`. 404 once the feed has gone quiet."""
     _admin(viewer)
     found = feeds.detail(feed_id)

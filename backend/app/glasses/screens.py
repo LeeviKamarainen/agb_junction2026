@@ -121,42 +121,27 @@ def plain(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
-def reminder_added(target: str, text: str) -> GlassesReply:
+def goal_added(text: str, triggers: list[str]) -> GlassesReply:
+    """A goal is set up: the glasses now watch for its triggers."""
+    shown = ", ".join(triggers[:4]) + ("…" if len(triggers) > 4 else "")
     return GlassesReply(
-        intent="remind",
+        intent="goal",
         screen=_screen(
-            _title("check", f"Watching for: {target}"),
+            _title("check", "Watching for it"),
             Text(value=text, style="CAPTION"),
+            *([Text(value=shown, style="CAPTION")] if shown else []),
         ),
-        speech=f"Okay, I’ll warn you when I see the {target}.",
-        dismiss_after_s=4,
+        speech="Okay, I'll watch for that.",
+        dismiss_after_s=6,
     )
 
 
-def reminder_unclear(text: str) -> GlassesReply:
+def goal_problem(text: str, problem: str) -> GlassesReply:
+    """A goal could not be set up."""
     return GlassesReply(
-        intent="remind",
-        screen=_screen(
-            _title("alert", "What should I watch for?"),
-            Text(value=text, style="CAPTION"),
-        ),
-        speech="Sorry, what should I watch for? Name the thing, like the stool.",
-        dismiss_after_s=5,
-    )
-
-
-def warning(target: str, text: str) -> GlassesReply:
-    """An object from a reminder is in view. Short and loud: the wearer may be walking."""
-    return GlassesReply(
-        intent="warning",
-        screen=_screen(
-            Icon(name="warning"),
-            Text(value=f"{target.capitalize()} ahead", style="HEADING"),
-            Text(value=text, style="CAPTION"),
-            justify="center",
-            align="center",
-        ),
-        speech=f"Careful: {target} ahead.",
+        intent="goal",
+        screen=_screen(_title("alert", problem), Text(value=text, style="CAPTION")),
+        speech=problem,
         dismiss_after_s=6,
     )
 

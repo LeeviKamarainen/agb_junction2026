@@ -1,14 +1,12 @@
 import io
-import threading
 from datetime import UTC, datetime, timedelta
 
-import anyio
 import pytest
 from fastapi import WebSocketDisconnect
 from PIL import Image
 
 from app import media, vectors
-from app.glasses import reminders
+from app.glasses import triggers
 from app.llm import UpstreamError
 from app.main import app
 from app.routes.glasses import optional_chat, optional_embedder
@@ -179,114 +177,70 @@ def test_double_tap_opens_the_microphone(client):
     assert reply["client_action"] == "listen_question"
 
 
+GOAL_ANSWER = '{"triggers": [{"name": "Stool", "watch_for": "a wooden stool on the floor"}]}'
+
+
 @pytest.mark.parametrize(
-    ("said", "target"),
+    "said",
     [
-        ("Remind me to not trip over a stool in the kitchen", "stool"),
-        ("warn me about the stairs", "stairs"),
-        ("remind me when you see my keys", "keys"),
-        ("remind me to watch out for wet floor signs", "wet floor"),
+        "Remind me to not trip over a stool in the kitchen",
+        "warn me about the stairs",
+        "please tell me when my bus comes",
+        "Can you alert me if I leave my keys",
     ],
 )
-def test_reminder_target_by_rule(said, target):
-    assert reminders.target_from(said) == target
+def test_warn_and_remind_me_set_up_a_goal(said):
+    assert triggers.is_goal(said)
 
 
-def test_saying_remind_me_adds_a_reminder(client):
-    said = "Remind me to not trip over a stool in the kitchen"
+@pytest.mark.parametrize("said", ["where are my keys?", "what did I tell Aino?", "warnings?"])
+def test_other_questions_are_not_goals(said):
+    assert not triggers.is_goal(said)
+
+
+def test_saying_warn_me_makes_a_goal_with_triggers(client):
+    said = "Warn me so I don't trip over the stool in the kitchen"
+    use_models(chat=says(GOAL_ANSWER))
+
     reply = client.post("/api/glasses/command", json={"question": said}).json()
 
-    assert reply["intent"] == "remind"
-    assert "stool" in reply["speech"]
-    listed = client.get("/api/glasses/reminders").json()
-    assert [(r["target"], r["text"]) for r in listed] == [("stool", said)]
+    assert reply["intent"] == "goal" and reply["dismiss_after_s"]
+    assert "Watching for it" in texts(reply["screen"]) and "Stool" in texts(reply["screen"])
+    (goal,) = client.get("/api/glasses/goals").json()
+    assert goal["text"] == said and goal["enabled"]
+    assert [(t["name"], t["watch_for"]) for t in goal["triggers"]] == [
+        ("Stool", "a wooden stool on the floor")
+    ]
 
 
-def test_reminder_without_an_object_asks_again(client):
+def test_a_goal_the_model_cannot_write_triggers_for_saves_nothing(client):
+    use_models(chat=says("Sorry, I can't help with that."))
+
     reply = client.post("/api/glasses/command", json={"question": "remind me"}).json()
 
-    assert reply["intent"] == "remind"
-    assert client.get("/api/glasses/reminders").json() == []
-    assert client.post("/api/glasses/reminders", json={"text": "remind me"}).status_code == 422
+    assert reply["intent"] == "goal"
+    assert "another way" in texts(reply["screen"])
+    assert client.get("/api/glasses/goals").json() == []
 
 
-def test_reminder_can_be_triggered_and_deleted(client):
-    made = client.post("/api/glasses/reminders", json={"text": "warn me about the stool"}).json()
+def test_a_goal_without_a_chat_model_says_so(client):
+    reply = client.post("/api/glasses/command", json={"question": "warn me about the stairs"})
 
-    warning = client.post(f"/api/glasses/reminders/{made['id']}/trigger").json()
-    assert warning["intent"] == "warning"
-    assert "Stool ahead" in texts(warning["screen"])
-
-    assert client.delete(f"/api/glasses/reminders/{made['id']}").status_code == 204
-    assert client.get("/api/glasses/reminders").json() == []
+    assert "isn’t set up" in texts(reply.json()["screen"])
+    assert client.get("/api/glasses/goals").json() == []
 
 
-def watch(client):
-    return client.post("/api/glasses/watch", files={"photo": ("w.jpg", JPEG, "image/jpeg")}).json()
-
-
-def test_watch_warns_once_a_minute_when_the_object_is_in_view(client):
-    client.post("/api/glasses/reminders", json={"text": "warn me about the stool"})
-    client.post("/api/glasses/reminders", json={"text": "warn me about the dog"})
-    use_models(chat=says("1"))  # the vision model sees item 1, the stool
-
-    first, second = watch(client), watch(client)
-
-    assert first["seen"] == ["stool"]
-    assert first["warning"]["speech"] == "Careful: stool ahead."
-    assert second["seen"] == ["stool"]
-    assert second["warning"] is None  # warned less than a minute ago
-
-
-def test_watch_sees_nothing_when_the_object_is_absent(client):
-    client.post("/api/glasses/reminders", json={"text": "warn me about the stool"})
-    use_models(chat=says("none"))
-
-    assert watch(client)["seen"] == []
-
-
-def test_watch_only_cools_down_the_reminder_it_shows(client):
-    for target in ("stool", "dog"):
-        client.post("/api/glasses/reminders", json={"text": f"warn me about the {target}"})
-    use_models(chat=says("1, 2"))
-
-    assert watch(client)["warning"]["speech"] == "Careful: stool ahead."
-    assert watch(client)["warning"]["speech"] == "Careful: dog ahead."
-    assert watch(client)["warning"] is None
-
-
-def test_watch_without_a_vision_model_says_so(client):
-    client.post("/api/glasses/reminders", json={"text": "warn me about the stool"})
-
-    result = watch(client)
-
-    assert result["seen"] == [] and result["warning"] is None
-    assert "no vision model" in result["note"]
-
-
-def test_watch_reports_an_unexpected_failure_instead_of_500(client, monkeypatch):
-    client.post("/api/glasses/reminders", json={"text": "warn me about the stool"})
-
-    async def odd_model(_messages, _tools):
-        raise KeyError("choices")
-
-    use_models(chat=odd_model)
-
-    result = client.post("/api/glasses/watch", files={"photo": ("w.jpg", JPEG, "image/jpeg")})
-
-    assert result.status_code == 200
-    assert "check failed: KeyError" in result.json()["note"]
+def test_the_reminder_routes_are_gone(client):
+    assert client.get("/api/glasses/reminders").status_code == 404
+    files = {"photo": ("w.jpg", JPEG, "image/jpeg")}
+    assert client.post("/api/glasses/watch", files=files).status_code in (404, 405)
 
 
 # --- The WebSocket (/api/glasses/ws) ---------------------------------------------------------
 
 
-def send_jpeg(ws, kind: str, id: int, data: bytes = JPEG):
-    ws.send_json({"type": kind, "id": id})
-    ws.send_bytes(data)
-
-
 def test_socket_answers_ping_and_commands(client):
+    use_models(chat=says(GOAL_ANSWER))  # the socket takes its models when it connects
     with client.websocket_connect("/api/glasses/ws") as ws:
         ws.send_json({"type": "ping", "id": 1})
         assert ws.receive_json() == {"type": "pong", "id": 1}
@@ -299,8 +253,10 @@ def test_socket_answers_ping_and_commands(client):
         ws.send_json(
             {"type": "command", "id": 3, "question": "remind me not to trip over the stool"}
         )
-        assert ws.receive_json()["reply"]["intent"] == "remind"
-    assert [r["target"] for r in client.get("/api/glasses/reminders").json()] == ["stool"]
+        assert ws.receive_json()["reply"]["intent"] == "goal"
+    assert [g["text"] for g in client.get("/api/glasses/goals").json()] == [
+        "remind me not to trip over the stool"
+    ]
 
 
 @pytest.mark.parametrize(
@@ -320,72 +276,11 @@ def test_socket_reports_bad_messages_and_stays_open(client, message):
         assert ws.receive_json()["type"] == "pong"
 
 
-def test_socket_rejects_a_watched_frame_that_is_not_a_jpeg(client):
+def test_socket_no_longer_takes_watch_messages(client):
     with client.websocket_connect("/api/glasses/ws") as ws:
-        ws.send_json({"type": "watch", "on": True})
-        send_jpeg(ws, "frame", 6, b"not a jpeg")
-        assert ws.receive_json() == {
-            "type": "error",
-            "id": 6,
-            "status": 415,
-            "detail": "frame must be a JPEG",
-        }
-        ws.send_json({"type": "ping"})
-        assert ws.receive_json()["type"] == "pong"
-
-
-def test_socket_checks_frames_only_while_watching(client):
-    with client.websocket_connect("/api/glasses/ws") as ws:
-        send_jpeg(ws, "frame", 1)
-        assert ws.receive_json()["status"] == 409
-
-
-def test_socket_pushes_a_warning_when_the_object_is_in_view(client):
-    client.post("/api/glasses/reminders", json={"text": "warn me about the stool"})
-    use_models(chat=says("1"))
-    with client.websocket_connect("/api/glasses/ws") as ws:
-        ws.send_json({"type": "watch", "on": True})
-        send_jpeg(ws, "frame", 1)
-
-        result = ws.receive_json()
-        assert result["type"] == "watch_result" and result["id"] == 1
-        assert result["result"]["seen"] == ["stool"] and result["dropped"] == 0
-        warning = ws.receive_json()
-        assert warning["type"] == "reply" and warning["id"] is None
-        assert warning["reply"]["speech"] == "Careful: stool ahead."
-
-        send_jpeg(ws, "frame", 2)
-        again = ws.receive_json()
-        assert again["result"]["warning"] is None  # warned less than a minute ago
-        ws.send_json({"type": "ping"})
-        assert ws.receive_json()["type"] == "pong"  # and no second warning before it
-
-
-def test_socket_checks_only_the_latest_frame(client):
-    client.post("/api/glasses/reminders", json={"text": "warn me about the stool"})
-    checking, release, checks = threading.Event(), threading.Event(), []
-
-    async def slow_model(_messages, _tools):
-        checks.append(1)
-        checking.set()
-        assert await anyio.to_thread.run_sync(release.wait, 5)  # the test thread sets it
-        return {"role": "assistant", "content": "none"}
-
-    use_models(chat=slow_model)
-    with client.websocket_connect("/api/glasses/ws") as ws:
-        ws.send_json({"type": "watch", "on": True})
-        send_jpeg(ws, "frame", 1)
-        assert checking.wait(5)
-        for id in (2, 3, 4):  # arrive while frame 1 is being checked
-            send_jpeg(ws, "frame", id)
-        ws.send_json({"type": "ping"})
-        assert ws.receive_json()["type"] == "pong"  # the socket kept reading meanwhile
-        release.set()
-
-        first, latest = ws.receive_json(), ws.receive_json()
-        assert (first["id"], first["dropped"]) == (1, 0)
-        assert (latest["id"], latest["dropped"]) == (4, 2)  # 2 and 3 were never checked
-    assert len(checks) == 2
+        ws.send_json({"type": "watch", "id": 5, "on": True})
+        error = ws.receive_json()
+        assert error["type"] == "error" and error["id"] == 5 and error["status"] == 422
 
 
 @pytest.mark.parametrize(
@@ -429,12 +324,13 @@ def test_socket_accepts_a_login(anonymous, guest, how):
 
 def test_socket_commands_are_scoped_to_the_login(client, guest):
     aino, ville = guest("aino"), guest("ville")
+    use_models(chat=says(GOAL_ANSWER))
     with client.websocket_connect("/api/glasses/ws", headers=aino) as ws:
         ws.send_json({"type": "command", "id": 1, "question": "remind me about the stool"})
-        assert ws.receive_json()["reply"]["intent"] == "remind"
+        assert ws.receive_json()["reply"]["intent"] == "goal"
 
-    assert len(client.get("/api/glasses/reminders", headers=aino).json()) == 1
-    assert client.get("/api/glasses/reminders", headers=ville).json() == []
+    assert len(client.get("/api/glasses/goals", headers=aino).json()) == 1
+    assert client.get("/api/glasses/goals", headers=ville).json() == []
 
 
 def test_socket_survives_a_refused_client_leaving_first(anonymous, guest):

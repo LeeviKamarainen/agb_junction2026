@@ -1,4 +1,4 @@
-import type { GlassesReply, WatchResult } from "./types";
+import type { GlassesReply } from "./types";
 
 /**
  * The glasses' WebSocket, /api/glasses/ws. The protocol is in backend/app/glasses/channel.py;
@@ -9,21 +9,11 @@ export type ClientMessage =
   | ({ type: "command"; id: number } & (
       { action: string } | { question: string }
     ))
-  // `client` names this app on the admin's stream wall.
-  | { type: "frame"; id: number; client?: string }
-  | { type: "watch"; on: boolean }
   | { type: "ping"; id: number }
   | { type: "auth"; token: string };
 
 export type ServerMessage =
   | { type: "reply"; id: number | null; reply: GlassesReply }
-  | {
-      type: "watch_result";
-      id: number | null;
-      result: WatchResult;
-      dropped: number;
-      ms: number;
-    }
   | { type: "error"; id: number | null; status: number; detail: string }
   | { type: "pong"; id: number | null };
 
@@ -43,8 +33,6 @@ const MAX_RETRY_MS = 10_000;
 // The backoff starts over only after a socket stayed open this long, so a backend that accepts
 // and then fails at once is not hammered every half second.
 const STABLE_MS = 5_000;
-// A frame is not sent while this much is still waiting to go out: the network is slow.
-const MAX_BUFFERED = 2_000_000;
 
 /** Same origin: Caddy passes the upgrade in production, `next dev`'s /api rewrite does locally. */
 function socketUrl(): string {
@@ -80,15 +68,6 @@ export class GlassesSocket {
   send(message: ClientMessage): boolean {
     if (!this.socket || !this.open) return false;
     this.socket.send(JSON.stringify(message));
-    return true;
-  }
-
-  /** A frame's header, then its JPEG as a binary frame. False when not sent. */
-  sendJpeg(message: ClientMessage & { type: "frame" }, jpeg: Blob) {
-    if (!this.socket || !this.open) return false;
-    if (this.socket.bufferedAmount > MAX_BUFFERED) return false;
-    this.socket.send(JSON.stringify(message));
-    this.socket.send(jpeg);
     return true;
   }
 

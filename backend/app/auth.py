@@ -30,7 +30,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from app import media, vectors
 from app.db import SessionDep
 from app.glasses import triggers
-from app.models import AuthSession, Memory, Reminder, User
+from app.models import AuthSession, Memory, User
 from app.search import (
     DEMO_OWNER,  # memories every user sees; the admin adds them with demo=true
     TABLE,
@@ -163,8 +163,8 @@ def _delete_files(media_files: list[str]) -> None:
 
 
 async def purge_expired_guests(session: AsyncSession) -> int:
-    """Deletes every expired guest with its logins, memories (and their image files) and
-    reminders. Returns how many. Commits."""
+    """Deletes every expired guest with its logins, memories (and their image files), goals and
+    triggers. Returns how many. Commits."""
     now = datetime.now(UTC)
     guests = await session.exec(
         select(User).where(User.role == "guest", col(User.expires_at).is_not(None))
@@ -180,8 +180,6 @@ async def purge_expired_guests(session: AsyncSession) -> int:
                 files.append(memory.image_file)
             await session.delete(memory)
         await triggers.remove_of(session, user.id)
-        for reminder in await session.exec(select(Reminder).where(Reminder.owner_id == user.id)):
-            await session.delete(reminder)
         logins = await session.exec(select(AuthSession).where(AuthSession.user_id == user.id))
         for login in logins:
             await session.delete(login)

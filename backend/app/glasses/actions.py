@@ -1,9 +1,11 @@
-"""What the glasses' commands, memory frames and watched frames do, shared by the HTTP routes
+"""What the glasses' commands and memory frames do, shared by the HTTP routes
 (app/routes/glasses.py) and the WebSocket (channel.py). All are coroutines: the database and the
 model calls are awaited, so neither path ties up a thread while a model thinks.
 
 Questions go through the same question loop as /api/ask (app.agent), over the asker's memories.
-Without the chat and embedding models the glasses say memory search isn't set up.
+Without the chat and embedding models the glasses say memory search isn't set up. A question
+that asks to be warned ("warn me when…", "remind me to…") sets up a goal instead, whose triggers
+the chat model writes (app/glasses/triggers.py), as asking for it in the chat does.
 """
 
 import logging
@@ -18,7 +20,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app import agent, faces
 from app.auth import Viewer
-from app.glasses import dejavu, feeds, frames, reminders, screens
+from app.glasses import dejavu, feeds, frames, screens, triggers
 from app.glasses.layout import GlassesReply
 from app.llm import Chat, Embedder, UpstreamError
 from app.search import clean_collection
@@ -26,7 +28,6 @@ from app.search import clean_collection
 log = logging.getLogger(__name__)
 
 MAX_FRAME = 10 * 1024 * 1024
-JPEG_START = b"\xff\xd8\xff"  # the first bytes of every JPEG file
 
 
 async def memory_frame(
@@ -116,7 +117,7 @@ ACTIONS = {"ask", "double_tap"}
 class Command(BaseModel):
     """Exactly one of: the action of a button or gesture (`action`), or what the wearer said
     (`question`). What they said goes to the memory as it is, unless it starts "remind me…" or
-    "warn me…", which makes it a reminder (reminders.py).
+    "warn me…", which makes it a goal whose triggers watch the camera (triggers.py).
     """
 
     action: str | None = Field(default=None, max_length=100)
@@ -133,15 +134,6 @@ class Command(BaseModel):
         return self
 
 
-class WatchResult(BaseModel):
-    """What one watched frame showed. `warning` is the screen to draw, when there is one."""
-
-    seen: list[str]  # targets in view, including ones warned about less than a minute ago
-    warning: GlassesReply | None = None
-    # How the frame was checked ("chat model"), or why it wasn't.
-    note: str
-
-
 async def command(
     session: AsyncSession, viewer: Viewer, body: Command, chat: Chat | None, embed: Embedder | None
 ) -> GlassesReply:
@@ -153,9 +145,8 @@ async def command(
     question = (body.question or "").strip()
     if not question:
         return screens.home()
-    if reminders.is_reminder(question):
-        feeds.note(viewer.id, "reminder", question, "glasses")
-        return await _remind(session, question, chat, viewer)
+    if triggers.is_goal(question):
+        return await _watch_for(session, question, chat, viewer)
     feeds.note(viewer.id, "question", question, "glasses")
     if dejavu.is_recall(question):
         view = (
@@ -167,13 +158,21 @@ async def command(
     return await _ask(session, question, chat, embed, viewer)
 
 
-async def _remind(
+async def _watch_for(
     session: AsyncSession, text: str, chat: Chat | None, viewer: Viewer
 ) -> GlassesReply:
-    reminder = await reminders.add(session, text, chat, viewer.id)
-    if reminder is None:
-        return screens.reminder_unclear(text)
-    return screens.reminder_added(reminder.target, reminder.text)
+    """A goal from what the wearer said: the chat model writes its triggers, which then watch
+    their memory stream (frames.py), as the chat's start_watching tool does."""
+    if chat is None:
+        return screens.goal_problem(text, "Watching isn’t set up yet.")
+    try:
+        drafts = await triggers.write(chat, text)
+    except (UpstreamError, ValueError) as error:
+        log.warning("Writing triggers failed: %s", error)
+        return screens.goal_problem(text, "I couldn’t set that up. Try saying it another way.")
+    await triggers.add(session, viewer.id, text, drafts)
+    feeds.note(viewer.id, "goal", text, "glasses", {"triggers": [d.model_dump() for d in drafts]})
+    return screens.goal_added(text, [draft.name for draft in drafts])
 
 
 async def _recall(
@@ -210,59 +209,3 @@ async def _ask(
         return screens.memory_problem(question, "I can’t reach the memory right now.")
     said = answer.answer or "I couldn’t find that in your memories."
     return screens.memory_answer(question, said)
-
-
-def check_jpeg(data: bytes, what: str) -> None:
-    """413 or 415 for a still the glasses would not have sent."""
-    if len(data) > MAX_FRAME:
-        raise HTTPException(413, f"{what} is larger than 10 MB")
-    if not data.startswith(JPEG_START):
-        raise HTTPException(415, f"{what} must be a JPEG")
-
-
-async def watch(
-    session: AsyncSession, viewer: Viewer, data: bytes, chat: Chat | None, client: str = "web"
-) -> WatchResult:
-    """Checks one frame for every reminder's object; never raises for a model's failure. Every
-    face in the frame is blurred before the chat model sees it, or the stream wall shows it."""
-    check_jpeg(data, "frame")
-    try:
-        data = await anyio.to_thread.run_sync(faces.anonymise, data)
-    except ValueError as error:
-        raise HTTPException(415, str(error)) from error
-    key = feeds.record(viewer.id, viewer.user.username, client, "watch", "", data)
-    started = time.perf_counter()
-    result = await _check(session, viewer, data, chat)
-    seen = ", ".join(result.seen) or "nothing watched for"
-    text = f"{'warning · ' if result.warning else ''}{seen} in view · {result.note}"
-    ms = round((time.perf_counter() - started) * 1000)
-    feeds.frame_result(key, text, result.model_dump(mode="json", exclude={"warning"}), ms)
-    return result
-
-
-async def _check(
-    session: AsyncSession, viewer: Viewer, data: bytes, chat: Chat | None
-) -> WatchResult:
-    """Which of the viewer's reminders' objects the (blurred) frame shows."""
-    watched = await reminders.active(session, viewer.id)  # your own, even for the admin
-    try:
-        found, note = await reminders.detect(data, [r.target for r in watched], chat)
-    except reminders.Unavailable as error:
-        return WatchResult(seen=[], note=str(error))
-    except Exception as error:  # a frame a second: one bad answer must not break the loop
-        log.exception("Checking a watched frame failed")
-        return WatchResult(seen=[], note=f"check failed: {type(error).__name__}: {error}")
-    seen = [watched[i] for i in found]
-    now = datetime.now(UTC)
-    due = [r for r in seen if reminders.due(r, now)]
-    first = due[0] if due else None
-    if first is not None:
-        first.last_warned_at = now
-        session.add(first)
-        feeds.note(viewer.id, "warning", f"{first.target}: {first.text}", "watch")
-    await session.commit()
-    return WatchResult(
-        seen=[r.target for r in seen],
-        warning=screens.warning(first.target, first.text) if first else None,
-        note=note,
-    )

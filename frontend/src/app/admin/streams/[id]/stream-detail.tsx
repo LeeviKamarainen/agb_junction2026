@@ -27,7 +27,7 @@ const time = (iso: string) =>
  * One stream in full: its frames large, about twice a second, with fullscreen, and under it the
  * verbose backend log of its client, as the Memory lab's: what became of every frame (stored or
  * why not, each trigger's score against its level, what fired), the user's questions, Gemma's
- * searches and answers, goals, reminders, warnings and errors, each with its JSON. Beside the
+ * searches and answers, goals and errors, each with its JSON. Beside the
  * frames, a chat with Gemma about the stream that can also change what its user watches for.
  */
 export function StreamDetail() {

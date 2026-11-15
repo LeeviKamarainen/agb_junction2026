@@ -80,19 +80,17 @@ def test_a_client_that_does_not_name_itself_is_web_and_names_are_cleaned(client,
 
 
 def test_socket_frames_are_the_glasses_app_unless_named(client, no_models):
-    reminder = client.post("/api/glasses/reminders", json={"text": "warn me about the stool"})
-    assert reminder.status_code == 201
     with client.websocket_connect("/api/glasses/ws") as ws:
         ws.send_json({"type": "memory_frame", "id": 1, "source": "stream", "stream_id": "g"})
         ws.send_bytes(jpeg())
         assert ws.receive_json()["status"] == 503
-        ws.send_json({"type": "watch", "on": True})
-        ws.send_json({"type": "frame", "id": 2, "client": "harness"})
+        header = {"type": "memory_frame", "id": 2, "source": "single", "client": "harness"}
+        ws.send_json(header)
         ws.send_bytes(jpeg("blue"))
-        assert ws.receive_json()["type"] == "watch_result"
+        assert ws.receive_json()["status"] == 503
 
     kinds = {(f["client"], f["kind"]) for f in client.get("/api/admin/streams").json()}
-    assert kinds == {("glasses", "stream"), ("harness", "watch")}
+    assert kinds == {("glasses", "stream"), ("harness", "photo")}
 
 
 def test_a_quiet_feed_is_dropped(client, no_models, monkeypatch):
@@ -112,8 +110,12 @@ def test_each_feed_shows_what_its_user_asked_and_set(client, guest, no_models):
     async def embed(inputs, input_type="query"):
         return [[1.0] + [0.0] * 767 for _ in inputs]
 
+    async def writes_triggers(_messages, _tools):
+        return {"role": "assistant", "content": '{"triggers": [{"watch_for": "a stool"}]}'}
+
     app.dependency_overrides[get_chat] = lambda: chat
     app.dependency_overrides[get_embedder] = lambda: embed
+    app.dependency_overrides[optional_chat] = lambda: writes_triggers  # "remind me" makes a goal
     aino, ville = guest("aino"), guest("ville")
     send(client, aino, source="stream", stream_id="s1", client="live")
     send(client, ville, source="stream", stream_id="s2", client="live")
@@ -128,7 +130,7 @@ def test_each_feed_shows_what_its_user_asked_and_set(client, guest, no_models):
     log = [(e["kind"], e["text"], e["via"]) for e in listed["s1"]["events"]]
     assert log == [
         ("question", "what did I eat?", "chat"),
-        ("reminder", "remind me about the stool", "glasses"),
+        ("goal", "remind me about the stool", "glasses"),
         ("question", "where are my keys?", "glasses"),
     ]
     assert listed["s2"]["events"] == []  # ville's feed: nothing of aino's

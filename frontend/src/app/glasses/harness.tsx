@@ -1,9 +1,6 @@
 "use client";
 
 import {
-  BellPlus,
-  Eye,
-  EyeOff,
   Mic,
   Maximize,
   Minimize,
@@ -12,12 +9,10 @@ import {
   RotateCcw,
   SwitchCamera,
   Send,
-  Trash2,
   Video,
   VideoOff,
   Volume2,
   VolumeX,
-  Zap,
 } from "lucide-react";
 import {
   type FormEvent,
@@ -48,7 +43,7 @@ import {
   say,
   transcripts,
 } from "./speech";
-import type { FlexBoxNode, GlassesReply, Reminder } from "./types";
+import type { FlexBoxNode, GlassesReply } from "./types";
 
 type LogEntry = {
   id: number;
@@ -59,7 +54,7 @@ type LogEntry = {
   ms?: number;
   error?: string;
   json?: string;
-  /** A watched frame or a ping: these come every second and can be hidden. */
+  /** A ping: these come regularly and can be hidden. */
   watch?: boolean;
 };
 
@@ -67,7 +62,7 @@ type LogEntry = {
 type Pending = {
   request: string;
   started: number;
-  kind: "command" | "frame" | "ping";
+  kind: "command" | "ping";
 };
 
 const CAMERA_WARMUP_MS = 800;
@@ -80,9 +75,6 @@ function subscribeLandscape(changed: () => void) {
 }
 const isLandscapePhone = () => window.matchMedia(landscapeQuery).matches;
 
-// How often the camera sends a frame while watching. The backend checks the newest and drops
-// any that arrive while it is busy, so a slow vision model never builds a queue.
-const WATCH_EVERY_MS = 1000;
 // An idle socket is pinged this often, so a dead connection shows in the status line.
 const PING_EVERY_MS = 20_000;
 // Two taps of the key within this time are a double tap.
@@ -123,17 +115,19 @@ async function fetchHome(): Promise<
     return { error: `${error}. Is the backend running (make dev)?` };
   }
 }
-// Watching adds a line a second; keep about ten minutes of them.
+// Pings and replies add up; keep the last few hundred.
 const MAX_LOG = 600;
 
 /**
  * Stands in for the glasses and the Android app: webcam = camera, laptop mic = microphone,
- * speechSynthesis = speakers, T T = Neural Band double tap. The rest is in the backend: commands,
- * watched frames and pushed warnings go over its WebSocket (/api/glasses/ws, see channel.ts); the
- * home screen and reminders over its HTTP routes.
+ * speechSynthesis = speakers, T T = Neural Band double tap. The rest is in the backend: commands
+ * go over its WebSocket (/api/glasses/ws, see channel.ts); memory frames and the home screen over
+ * its HTTP routes. "Warn me…" sets up a goal whose triggers watch the memory stream.
  */
 type HarnessProps = {
   onFrame?: (reply: components["schemas"]["FrameReply"]) => void;
+  /** "Warn me…" set up a goal, e.g. to reload the goals shown beside it. */
+  onGoal?: () => void;
   recalled?: GlassesReply | null;
   /** Inside another page (the Memory lab): no page header, one column. */
   embedded?: boolean;
@@ -145,6 +139,7 @@ export function GlassesHarness({
   embedded = false,
   active = true,
   onFrame,
+  onGoal,
   recalled,
 }: HarnessProps = {}) {
   const rootRef = useRef<HTMLDivElement>(null);
@@ -208,15 +203,10 @@ export function GlassesHarness({
     "environment",
   );
   const [cameraStarting, setCameraStarting] = useState(false);
-  const [reminders, setReminders] = useState<Reminder[]>([]);
-  const [newReminder, setNewReminder] = useState("");
-  const [reminderError, setReminderError] = useState<string | null>(null);
   const [streaming, setStreaming] = useState(false);
   const [streamNote, setStreamNote] = useState("");
   const memoryBusy = useRef(false);
   const memoryStreamId = useRef("");
-  const [watching, setWatching] = useState(false);
-  const [lastWatch, setLastWatch] = useState<string | null>(null);
   const [showWatchLog, setShowWatchLog] = useState(true);
   // Known only in the browser; the server render assumes support, then the browser corrects it.
   const recognitionSupported = useSyncExternalStore(
@@ -232,8 +222,6 @@ export function GlassesHarness({
     camera: `${uid}-camera`,
     voice: `${uid}-voice`,
     inputs: `${uid}-inputs`,
-    reminders: `${uid}-reminders`,
-    newReminder: `${uid}-new-reminder`,
     log: `${uid}-log`,
   };
   const displayRef = useRef<HTMLDivElement>(null);
@@ -263,7 +251,8 @@ export function GlassesHarness({
   }
 
   function apply(request: string, reply: GlassesReply, started?: number) {
-    if (reply.intent === "remind") void loadReminders();
+    // "Warn me…" set up a goal: the page showing the goals reloads them.
+    if (reply.intent === "goal") onGoal?.();
     // A shown screen clears itself: back to the empty display.
     clearTimeout(dismissRef.current);
     if (reply.dismiss_after_s)
@@ -291,43 +280,27 @@ export function GlassesHarness({
     addLog({ request, error, watch });
   }
 
-  /**
-   * Sends a message over the socket, remembers it until its answer comes and logs it. `jpeg`
-   * goes as a binary frame right after a frame's header. False when not sent.
-   */
+  /** Sends a message over the socket, remembers it until its answer comes and logs it. False
+   * when not sent. */
   function send(
     // The socket sends `auth` itself, on opening.
     message: Exclude<ClientMessage, { type: "auth" }>,
     request: string,
-    jpeg?: { blob: Blob; width: number; height: number },
   ): boolean {
     const socket = socketRef.current;
     const kind = message.type;
     const id = "id" in message ? message.id : undefined;
-    const sent =
-      socket !== null &&
-      (jpeg && kind === "frame"
-        ? socket.sendJpeg({ type: kind, id: id ?? 0, client: "harness" }, jpeg.blob)
-        : socket.send(message));
-    const watch = kind === "frame" || kind === "ping" || kind === "watch";
-    const what = jpeg
-      ? ` + JPEG ${jpeg.width}×${jpeg.height}, ${Math.round(jpeg.blob.size / 1024)} kB`
-      : "";
+    const sent = socket !== null && socket.send(message);
+    const watch = kind === "ping";
     if (!sent) {
-      fail(
-        `↑ ${kind} · ${request}`,
-        socket?.open
-          ? "Not sent: the previous frames are still going out."
-          : "Not sent: the backend socket is not connected yet.",
-        watch,
-      );
+      fail(`↑ ${kind} · ${request}`, "Not sent: the backend socket is not connected yet.", watch);
       return false;
     }
-    if (id !== undefined && kind !== "watch")
+    if (id !== undefined)
       pendingRef.current.set(id, { request, started: performance.now(), kind });
     addLog({
       request: `↑ ${kind}${id !== undefined ? ` #${id}` : ""} · ${request}`,
-      intent: `sent${what}`,
+      intent: "sent",
       json: JSON.stringify(message, null, 2),
       watch,
     });
@@ -361,53 +334,17 @@ export function GlassesHarness({
         watch: true,
       });
     } else if (message.type === "error") {
-      fail(
-        `↓ error${label}`,
-        `${message.status}: ${message.detail}`,
-        pending?.kind === "frame",
-      );
-      if (pending?.kind === "frame") setLastWatch(`Error: ${message.detail}`);
-    } else if (message.type === "watch_result") {
-      const { result } = message;
-      const outcome = result.warning
-        ? `warning: ${result.seen.join(", ")} in view`
-        : result.seen.length
-          ? `sees ${result.seen.join(", ")}, already warned in the last minute`
-          : "nothing to warn about";
-      const dropped = message.dropped
-        ? ` · ${message.dropped} newer frame${message.dropped === 1 ? "" : "s"} skipped while checking`
-        : "";
-      setLastWatch(
-        `${new Date().toLocaleTimeString()} · ${outcome} · ${result.note} · checked in ${message.ms} ms${dropped}`,
-      );
-      addLog({
-        request: `↓ watch_result${label}`,
-        ms,
-        intent: `${outcome} · ${result.note}${dropped}`,
-        json: JSON.stringify(message, null, 2),
-        watch: true,
-      });
-    } else if (message.id === null) {
-      // Pushed: a warning from a watched frame.
-      apply(`↓ reply, pushed: warning`, message.reply);
-      void loadReminders();
+      fail(`↓ error${label}`, `${message.status}: ${message.detail}`);
     } else {
       apply(`↓ reply${label}`, message.reply, pending?.started);
     }
-    // Frames the backend dropped for a newer one never get an answer.
-    if (message.type === "watch_result" && message.id !== null)
-      for (const [id, waiting] of pendingRef.current)
-        if (waiting.kind === "frame" && id < message.id)
-          pendingRef.current.delete(id);
   }
 
   function socketChanged(next: SocketState) {
     setLink(next);
-    if (next.state === "open" && watching)
-      send({ type: "watch", on: true }, "watching again after reconnecting");
     if (next.state === "closed") {
       for (const [id, waiting] of pendingRef.current)
-        if (waiting.kind !== "frame" && waiting.kind !== "ping")
+        if (waiting.kind !== "ping")
           fail(
             `#${id} · ${waiting.request}`,
             "The socket closed before the answer came.",
@@ -497,21 +434,18 @@ export function GlassesHarness({
     setCameraStarting(false);
     setCamera(null);
     setSeeThrough(false);
-    setWatching(false);
     setStreaming(false);
   }
 
   async function switchCamera() {
     const next = cameraFacing === "environment" ? "user" : "environment";
     const resumeStreaming = streaming;
-    const resumeWatching = watching;
     const resumeSeeThrough = seeThrough;
     stopCamera();
     setCameraFacing(next);
     const stream = await startCamera(next);
     if (stream && streamRef.current === stream) {
       setSeeThrough(resumeSeeThrough);
-      setWatching(resumeWatching);
       if (resumeStreaming) memoryStreamId.current = crypto.randomUUID();
       setStreaming(resumeStreaming);
     }
@@ -553,99 +487,14 @@ export function GlassesHarness({
     return { blob, width: canvas.width, height: canvas.height };
   }
 
-  async function loadReminders() {
-    const request = "GET /api/glasses/reminders";
-    const started = performance.now();
-    try {
-      const { data, response } = await api.GET("/api/glasses/reminders");
-      if (!data) {
-        fail(request, `HTTP ${response.status}`);
-        return;
-      }
-      setReminders(data);
-      addLog({
-        request,
-        ms: Math.round(performance.now() - started),
-        intent: data.length
-          ? `${data.length} reminder${data.length === 1 ? "" : "s"}: ${data
-              .map((r) => r.target)
-              .join(", ")}`
-          : "no reminders",
-        json: JSON.stringify(data, null, 2),
-      });
-    } catch (error) {
-      fail(request, String(error));
-    }
-  }
-
-  async function addReminder(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const text = newReminder.trim();
-    if (!text) return;
-    const request = `POST /api/glasses/reminders “${text}”`;
-    const started = performance.now();
-    const { data, response } = await api.POST("/api/glasses/reminders", {
-      body: { text },
-    });
-    const ms = Math.round(performance.now() - started);
-    if (data)
-      addLog({
-        request,
-        ms,
-        intent: `watching for: ${data.target}`,
-        json: JSON.stringify(data, null, 2),
-      });
-    else fail(request, `HTTP ${response.status}`);
-    if (data) {
-      setNewReminder("");
-      setReminderError(null);
-      void loadReminders();
-    } else
-      setReminderError(
-        response.status === 422
-          ? "Couldn’t tell what to watch for: name the thing, like “the stool”."
-          : `HTTP ${response.status}`,
-      );
-  }
-
-  async function deleteReminder(id: number) {
-    const request = `DELETE /api/glasses/reminders/${id}`;
-    const started = performance.now();
-    const { response } = await api.DELETE(
-      "/api/glasses/reminders/{reminder_id}",
-      { params: { path: { reminder_id: id } } },
-    );
-    if (response.ok)
-      addLog({
-        request,
-        ms: Math.round(performance.now() - started),
-        intent: "deleted",
-      });
-    else fail(request, `HTTP ${response.status}`);
-    void loadReminders();
-  }
-
-  async function pretendSeen(reminder: Reminder) {
-    const request = `pretend “${reminder.target}” is in view · POST /api/glasses/reminders/${reminder.id}/trigger`;
-    const started = performance.now();
-    const { data, response } = await api.POST(
-      "/api/glasses/reminders/{reminder_id}/trigger",
-      { params: { path: { reminder_id: reminder.id } } },
-    );
-    if (data) apply(request, data, started);
-    else fail(request, `HTTP ${response.status}`);
-  }
-
   async function toggleMemoryStream() {
     if (streaming) {
-      setWatching(false);
       setStreaming(false);
       return;
     }
     if (!(await startCamera())) return;
     memoryStreamId.current = crypto.randomUUID();
     setStreaming(true);
-    setWatching(true);
   }
 
   // Same memory/trigger pipeline as the phone app. Only one upload in flight; skip overdue frames.
@@ -724,20 +573,6 @@ export function GlassesHarness({
     // eslint-disable-next-line react-hooks/set-state-in-effect
     if (recalled) showRecalled(recalled);
   }, [recalled]);
-
-  /** One watched frame: the backend checks the newest for every reminder's object. */
-  async function watchOnce(stopped: () => boolean) {
-    const frame = await grabFrame();
-    // Stopped while the frame was being grabbed: the backend no longer expects it.
-    if (stopped()) return;
-    if ("error" in frame) {
-      setLastWatch(`Stopped watching: ${frame.error}`);
-      setWatching(false);
-      fail("watch frame", frame.error, true);
-      return;
-    }
-    send({ type: "frame", id: nextMessageId.current++ }, "watch frame", frame);
-  }
 
   function ping() {
     if (socketRef.current?.open)
@@ -868,42 +703,9 @@ export function GlassesHarness({
 
   // Open the app once on load.
   const onFirstHome = useEffectEvent(showHome);
-  const onFirstReminders = useEffectEvent(() => loadReminders());
   useEffect(() => {
     fetchHome().then(onFirstHome);
-    void onFirstReminders();
   }, []);
-
-  // While watching, send a frame a second; the backend checks the newest one it has.
-  const onWatchTick = useEffectEvent((stopped: () => boolean) =>
-    watchOnce(stopped),
-  );
-  const onWatching = useEffectEvent((on: boolean) => {
-    // Leaving the page closes the socket first: nothing to tell it then.
-    if (!socketRef.current) return;
-    if (!on)
-      for (const [id, waiting] of pendingRef.current)
-        if (waiting.kind === "frame") pendingRef.current.delete(id);
-    send({ type: "watch", on }, on ? "start watching" : "stop watching");
-  });
-  useEffect(() => {
-    if (!watching || !active) return;
-    onWatching(true);
-    let stopped = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const tick = async () => {
-      const started = performance.now();
-      await onWatchTick(() => stopped);
-      const left = WATCH_EVERY_MS - (performance.now() - started);
-      if (!stopped) timer = setTimeout(tick, Math.max(0, left));
-    };
-    void tick();
-    return () => {
-      stopped = true;
-      clearTimeout(timer);
-      onWatching(false);
-    };
-  }, [watching, active]);
 
   // Both <video>s show the same webcam stream.
   useEffect(() => {
@@ -1248,69 +1050,6 @@ export function GlassesHarness({
             </Link>
           </section>
 
-          {embedded ? (
-            <section className="gh-card" aria-labelledby={ids.reminders}>
-              <div className="gh-card-heading">
-                <h2 id={ids.reminders}>Reminders</h2>
-                <button
-                  type="button"
-                  className="gh-chip"
-                  aria-pressed={watching}
-                  onClick={() => setWatching((on) => !on)}
-                >
-                  {watching ? (
-                    <EyeOff size={14} aria-hidden="true" />
-                  ) : (
-                    <Eye size={14} aria-hidden="true" />
-                  )}
-                  {watching ? "Stop watching" : "Watch"}
-                </button>
-              </div>
-              <p className="gh-note">
-                Say or type “remind me not to trip over the stool”. While
-                watching, the camera sends a frame every second over the socket
-                and the backend pushes a warning when the thing is in view.
-              </p>
-              {lastWatch ? (
-                <p className="gh-heard" aria-live="polite">
-                  {lastWatch}
-                </p>
-              ) : null}
-              {reminders.length ? (
-                <ReminderList
-                  reminders={reminders}
-                  onPretend={pretendSeen}
-                  onDelete={deleteReminder}
-                />
-              ) : (
-                <p className="gh-note">No reminders yet.</p>
-              )}
-              <form className="gh-typed" onSubmit={addReminder}>
-                <label htmlFor={ids.newReminder} className="gh-sr-only">
-                  New reminder
-                </label>
-                <input
-                  id={ids.newReminder}
-                  value={newReminder}
-                  onChange={(event) => setNewReminder(event.target.value)}
-                  placeholder="Remind me not to trip over the stool"
-                  maxLength={500}
-                  autoComplete="off"
-                />
-                <button
-                  type="submit"
-                  className="gh-chip"
-                  disabled={!newReminder.trim()}
-                >
-                  <BellPlus size={14} aria-hidden="true" /> Add
-                </button>
-              </form>
-              {reminderError ? (
-                <p className="gh-error">{reminderError}</p>
-              ) : null}
-            </section>
-          ) : null}
-
           <section className="gh-card gh-log-card" aria-labelledby={ids.log}>
             <div className="gh-card-heading">
               <h2 id={ids.log}>Backend log</h2>
@@ -1365,45 +1104,6 @@ export function GlassesHarness({
         </aside>
       </main>
     </div>
-  );
-}
-
-function ReminderList({
-  reminders,
-  onPretend,
-  onDelete,
-}: {
-  reminders: Reminder[];
-  onPretend: (reminder: Reminder) => void;
-  onDelete: (id: number) => void;
-}) {
-  return (
-    <ul className="gh-reminders">
-      {reminders.map((reminder) => (
-        <li key={reminder.id}>
-          <div>
-            <strong>{reminder.target}</strong>
-            <small title={reminder.text}>{reminder.text}</small>
-          </div>
-          <button
-            type="button"
-            className="gh-chip"
-            title="Show the warning as if it were in view"
-            onClick={() => onPretend(reminder)}
-          >
-            <Zap size={14} aria-hidden="true" /> Pretend seen
-          </button>
-          <button
-            type="button"
-            className="gh-chip"
-            aria-label={`Delete the reminder about ${reminder.target}`}
-            onClick={() => onDelete(reminder.id)}
-          >
-            <Trash2 size={14} aria-hidden="true" />
-          </button>
-        </li>
-      ))}
-    </ul>
   );
 }
 

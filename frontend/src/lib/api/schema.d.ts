@@ -284,7 +284,7 @@ export interface paths {
          * Stream Detail
          * @description One feed with its full log, newest first: what became of each frame (stored or why not,
          *     every trigger's score against its level, what fired), the user's questions, the chat
-         *     model's searches and answers, goals, reminders, warnings and errors, each with its JSON
+         *     model's searches and answers, goals and errors, each with its JSON
          *     `detail`. 404 once the feed has gone quiet.
          */
         get: operations["stream_detail_api_admin_streams__feed_id__get"];
@@ -652,88 +652,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/glasses/reminders": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Reminders
-         * @description Your reminders; the admin's list holds everyone's.
-         */
-        get: operations["list_reminders_api_glasses_reminders_get"];
-        put?: never;
-        /**
-         * Add Reminder
-         * @description What the wearer would say, e.g. "remind me not to trip over the stool"; 422 when no
-         *     object can be found in it.
-         */
-        post: operations["add_reminder_api_glasses_reminders_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/glasses/reminders/{reminder_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post?: never;
-        /** Delete Reminder */
-        delete: operations["delete_reminder_api_glasses_reminders__reminder_id__delete"];
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/glasses/reminders/{reminder_id}/trigger": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Trigger Reminder
-         * @description The warning as if the object were in view, for testing without a vision model.
-         */
-        post: operations["trigger_reminder_api_glasses_reminders__reminder_id__trigger_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/glasses/watch": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Watch
-         * @description One frame from the camera while the glasses watch for reminders, with every face in it blurred before the chat model sees it. Not stored. A target in view gives a warning, at most once a minute per reminder.
-         */
-        post: operations["watch_api_glasses_watch_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/glasses/frames": {
         parameters: {
             query?: never;
@@ -946,19 +864,6 @@ export interface components {
              */
             collection: string;
         };
-        /** Body_watch_api_glasses_watch_post */
-        Body_watch_api_glasses_watch_post: {
-            /**
-             * Photo
-             * @description One JPEG frame
-             */
-            photo: string;
-            /**
-             * Client
-             * @default
-             */
-            client: string;
-        };
         /** Button */
         Button: {
             /**
@@ -982,7 +887,7 @@ export interface components {
          * Command
          * @description Exactly one of: the action of a button or gesture (`action`), or what the wearer said
          *     (`question`). What they said goes to the memory as it is, unless it starts "remind me…" or
-         *     "warn me…", which makes it a reminder (reminders.py).
+         *     "warn me…", which makes it a goal whose triggers watch the camera (triggers.py).
          */
         Command: {
             /** Action */
@@ -1016,7 +921,7 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "stream" | "photo" | "watch";
+            kind: "stream" | "photo";
             /** Stream Id */
             stream_id: string;
             /** Demo */
@@ -1053,7 +958,7 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "question" | "answer" | "search" | "goal" | "reminder" | "trigger" | "warning" | "frame" | "error";
+            kind: "question" | "answer" | "search" | "goal" | "trigger" | "frame" | "error";
             /** Text */
             text: string;
             /** Via */
@@ -1077,7 +982,7 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "stream" | "photo" | "watch";
+            kind: "stream" | "photo";
             /** Stream Id */
             stream_id: string;
             /** Demo */
@@ -1320,27 +1225,6 @@ export interface components {
             owner?: string | null;
             /** Embedding */
             embedding: string;
-        };
-        /** ReminderCreate */
-        ReminderCreate: {
-            /** Text */
-            text: string;
-        };
-        /** ReminderPublic */
-        ReminderPublic: {
-            /** Id */
-            id: number;
-            /** Text */
-            text: string;
-            /** Target */
-            target: string;
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-            /** Last Warned At */
-            last_warned_at: string | null;
         };
         /** SearchResult */
         SearchResult: {
@@ -1669,17 +1553,6 @@ export interface components {
              * @default 8
              */
             limit: number;
-        };
-        /**
-         * WatchResult
-         * @description What one watched frame showed. `warning` is the screen to draw, when there is one.
-         */
-        WatchResult: {
-            /** Seen */
-            seen: string[];
-            warning?: components["schemas"]["GlassesReply"] | null;
-            /** Note */
-            note: string;
         };
     };
     responses: never;
@@ -2702,152 +2575,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["GlassesReply"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_reminders_api_glasses_reminders_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ReminderPublic"][];
-                };
-            };
-        };
-    };
-    add_reminder_api_glasses_reminders_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ReminderCreate"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ReminderPublic"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    delete_reminder_api_glasses_reminders__reminder_id__delete: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                reminder_id: number;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    trigger_reminder_api_glasses_reminders__reminder_id__trigger_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                reminder_id: number;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["GlassesReply"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    watch_api_glasses_watch_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "multipart/form-data": components["schemas"]["Body_watch_api_glasses_watch_post"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["WatchResult"];
                 };
             };
             /** @description Validation Error */
