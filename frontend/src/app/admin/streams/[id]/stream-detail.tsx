@@ -10,6 +10,7 @@ import type { components } from "@/lib/api/schema";
 import { useSession } from "@/lib/session";
 
 import { EVENTS, type FeedEvent, KINDS, LiveFrame, clientInfo, since } from "../stream-wall";
+import { StreamChat } from "./stream-chat";
 
 type Detail = components["schemas"]["FeedDetail"];
 
@@ -26,7 +27,8 @@ const time = (iso: string) =>
  * One stream in full: its frames large, about twice a second, with fullscreen, and under it the
  * verbose backend log of its client, as the Memory lab's: what became of every frame (stored or
  * why not, each trigger's score against its level, what fired), the user's questions, Gemma's
- * searches and answers, goals, reminders, warnings and errors, each with its JSON.
+ * searches and answers, goals, reminders, warnings and errors, each with its JSON. Beside the
+ * frames, a chat with Gemma about the stream that can also change what its user watches for.
  */
 export function StreamDetail() {
   const { id } = useParams<{ id: string }>();
@@ -154,36 +156,39 @@ export function StreamDetail() {
             )}
           </div>
 
-          <div
-            ref={viewRef}
-            className={`relative overflow-hidden bg-black ${
-              fullscreen ? "h-screen w-screen" : "aspect-video max-h-[70vh] w-full rounded-lg"
-            }`}
-          >
-            <LiveFrame id={feed.id} live={feed.live && !ended} alt={`${feed.user}'s ${KINDS[feed.kind]}`} />
-            <span
-              className={`absolute top-3 left-3 flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium ${
-                feed.live && !ended ? "bg-red-600 text-white" : "bg-black/60 text-white/70"
+          <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,7fr)_minmax(0,5fr)]">
+            <div
+              ref={viewRef}
+              className={`relative overflow-hidden bg-black ${
+                fullscreen ? "h-screen w-screen" : "aspect-video max-h-[70vh] w-full rounded-lg"
               }`}
             >
-              {feed.live && !ended && (
-                <Circle size={8} className="animate-pulse fill-white" aria-hidden="true" />
-              )}
-              {feed.live && !ended ? "LIVE" : `idle · ${since(feed.last_at, now)}`}
-            </span>
-            {feed.demo && (
-              <span className="absolute top-3 right-3 flex items-center gap-1 rounded-full bg-black/60 px-2.5 py-1 text-xs text-white">
-                <Film size={12} aria-hidden="true" /> demo clip · not stored
+              <LiveFrame id={feed.id} live={feed.live && !ended} alt={`${feed.user}'s ${KINDS[feed.kind]}`} />
+              <span
+                className={`absolute top-3 left-3 flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium ${
+                  feed.live && !ended ? "bg-red-600 text-white" : "bg-black/60 text-white/70"
+                }`}
+              >
+                {feed.live && !ended && (
+                  <Circle size={8} className="animate-pulse fill-white" aria-hidden="true" />
+                )}
+                {feed.live && !ended ? "LIVE" : `idle · ${since(feed.last_at, now)}`}
               </span>
-            )}
-            <button
-              type="button"
-              onClick={() => void toggleFullscreen()}
-              className="absolute right-3 bottom-3 inline-flex items-center gap-1.5 rounded-md bg-black/60 px-2.5 py-1.5 text-xs text-white hover:bg-black/80"
-            >
-              {fullscreen ? <Minimize size={14} aria-hidden="true" /> : <Maximize size={14} aria-hidden="true" />}
-              {fullscreen ? "Exit fullscreen" : "Fullscreen"}
-            </button>
+              {feed.demo && (
+                <span className="absolute top-3 right-3 flex items-center gap-1 rounded-full bg-black/60 px-2.5 py-1 text-xs text-white">
+                  <Film size={12} aria-hidden="true" /> demo clip · not stored
+                </span>
+              )}
+              <button
+                type="button"
+                onClick={() => void toggleFullscreen()}
+                className="absolute right-3 bottom-3 inline-flex items-center gap-1.5 rounded-md bg-black/60 px-2.5 py-1.5 text-xs text-white hover:bg-black/80"
+              >
+                {fullscreen ? <Minimize size={14} aria-hidden="true" /> : <Maximize size={14} aria-hidden="true" />}
+                {fullscreen ? "Exit fullscreen" : "Fullscreen"}
+              </button>
+            </div>
+            <StreamChat feedId={feed.id} />
           </div>
 
           <section aria-labelledby="log-title" className="flex flex-col rounded-lg border border-border bg-card">
