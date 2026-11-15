@@ -64,6 +64,8 @@ export function AskChat({
   voice = false,
   endpoint = "/api/ask/stream",
   onListening,
+  title = "Ask Gemma",
+  simple = false,
   ref,
 }: {
   compact?: boolean;
@@ -90,6 +92,11 @@ export function AskChat({
   endpoint?: string;
   /** Its microphone opened or closed. */
   onListening?: (listening: boolean) => void;
+  /** The heading over the chat. */
+  title?: string;
+  /** Only the questions and answers: no model calls, searches or results in between (the home
+   * page, for people who don't care how it's found). Errors still show. */
+  simple?: boolean;
   ref?: Ref<AskChatHandle>;
 } = {}) {
   const [exchanges, setExchanges] = useState<Exchange[]>([]);
@@ -214,7 +221,7 @@ export function AskChat({
           id={`${ids}-title`}
           className="flex items-center gap-2 font-semibold"
         >
-          <Bot size={18} aria-hidden="true" /> Ask Gemma
+          <Bot size={18} aria-hidden="true" /> {title}
         </h2>
         {exchanges.length > 0 && (
           <Button
@@ -234,7 +241,7 @@ export function AskChat({
       >
         {exchanges.length === 0 && (
           <div className="m-auto flex max-w-sm flex-col items-center gap-3 text-center text-sm text-muted-foreground">
-            {!compact && <MessageSquareText size={28} aria-hidden="true" />}
+            {!compact && !simple && <MessageSquareText size={28} aria-hidden="true" />}
             {intro && <p>{intro}</p>}
             <div className="flex flex-wrap justify-center gap-2">
               {examples.map((example) => (
@@ -252,7 +259,7 @@ export function AskChat({
           </div>
         )}
         {exchanges.map((exchange) => (
-          <ExchangeView key={exchange.id} exchange={exchange} />
+          <ExchangeView key={exchange.id} exchange={exchange} simple={simple} />
         ))}
         <div ref={bottom} />
       </div>
@@ -310,10 +317,12 @@ export function AskChat({
   );
 }
 
-function ExchangeView({ exchange }: { exchange: Exchange }) {
+function ExchangeView({ exchange, simple }: { exchange: Exchange; simple: boolean }) {
   const last = exchange.steps.at(-1);
   const final = last?.type === "answer" ? last : undefined;
-  const process = final ? exchange.steps.slice(0, -1) : exchange.steps;
+  const all = final ? exchange.steps.slice(0, -1) : exchange.steps;
+  // In the simple view only what went wrong shows between question and answer.
+  const process = simple ? all.filter((step) => step.type === "error") : all;
 
   return (
     <article className="flex flex-col gap-3">
@@ -321,7 +330,8 @@ function ExchangeView({ exchange }: { exchange: Exchange }) {
         {exchange.question}
       </p>
 
-      <ol className="flex flex-col gap-2 border-l border-border pl-4">
+      {(process.length > 0 || !exchange.done) && (
+      <ol className={`flex flex-col gap-2 ${simple ? "" : "border-l border-border pl-4"}`}>
         {process.map((step, index) => (
           <li key={index}>
             <StepView step={step} />
@@ -334,10 +344,11 @@ function ExchangeView({ exchange }: { exchange: Exchange }) {
               className="animate-spin"
               aria-hidden="true"
             />
-            Working…
+            {simple ? "Searching your memories…" : "Working…"}
           </li>
         )}
       </ol>
+      )}
 
       {final && (
         <div className="flex flex-col gap-1 self-start rounded-2xl rounded-bl-sm bg-secondary px-4 py-3 text-sm">
@@ -346,7 +357,7 @@ function ExchangeView({ exchange }: { exchange: Exchange }) {
             {(final.elapsed_ms / 1000).toFixed(1)} s
           </span>
           <p className="whitespace-pre-wrap">
-            {final.content || "(Gemma returned an empty answer)"}
+            {final.content || (simple ? "(no answer)" : "(Gemma returned an empty answer)")}
           </p>
         </div>
       )}

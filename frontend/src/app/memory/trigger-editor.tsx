@@ -1,6 +1,6 @@
 "use client";
 
-import { Save, Trash2, Zap } from "lucide-react";
+import { ChevronDown, Save, SlidersHorizontal, Trash2, Zap } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -34,12 +34,24 @@ export function TriggerEditor({
   lastMatches,
   firedCount = 0,
   visible = true,
+  compact = false,
 }: {
   lastMatches: Map<number, Match>;
   firedCount?: number;
   visible?: boolean;
+  /** For the home page: one line per goal with its switch, no explanation; a goal's triggers
+   * open for tuning on demand. */
+  compact?: boolean;
 }) {
   const [goals, setGoals] = useState<Goal[] | null>(null);
+  // Compact: the goals whose triggers are open for tuning.
+  const [tuning, setTuning] = useState<Set<number>>(new Set());
+  const toggleTuning = (id: number) =>
+    setTuning((open) => {
+      const next = new Set(open);
+      if (!next.delete(id)) next.add(id);
+      return next;
+    });
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -83,6 +95,128 @@ export function TriggerEditor({
     }
     await load();
   }
+
+  /** A goal's triggers, each with its score and level and its fields to tune. */
+  function triggerRows(goal: Goal) {
+    return goal.triggers.map((trigger) => (
+      <TriggerRow
+        // Remounts when the trigger itself changed, so the fields never show an old draft.
+        key={`${trigger.id}:${trigger.name}:${trigger.watch_for}:${trigger.sigmas}`}
+        trigger={trigger}
+        match={lastMatches.get(trigger.id)}
+        onSave={(body) =>
+          void change(
+            api.PUT("/api/glasses/triggers/{id}", {
+              params: { path: { id: trigger.id } },
+              body,
+            }),
+            "Could not save the trigger",
+          )
+        }
+        onDelete={() =>
+          void change(
+            api.DELETE("/api/glasses/triggers/{id}", {
+              params: { path: { id: trigger.id } },
+            }),
+            "Could not drop the trigger",
+          )
+        }
+      />
+    ));
+  }
+
+  if (compact)
+    return (
+      <section aria-labelledby="watching-title" className="flex flex-col gap-2 text-sm">
+        <h2
+          id="watching-title"
+          className="flex items-center gap-1.5 text-xs font-medium tracking-wide text-muted-foreground"
+        >
+          <Zap size={13} aria-hidden="true" /> WATCHING FOR
+        </h2>
+        {error && (
+          <p className="text-xs text-destructive" role="alert">
+            {error}
+          </p>
+        )}
+        {goals?.length ? (
+          <ul className="flex flex-col gap-1.5">
+            {goals.map((goal) => (
+              <li
+                key={goal.id}
+                className={`flex flex-col rounded-md border border-border bg-card ${goal.enabled ? "" : "opacity-60"}`}
+              >
+                <div className="flex items-center gap-2 px-3 py-1.5">
+                <span className="min-w-0 flex-1 truncate" title={goal.text}>
+                  {goal.text}
+                </span>
+                <button
+                  type="button"
+                  aria-expanded={tuning.has(goal.id)}
+                  aria-label={`Tune the ${goal.triggers.length} triggers of: ${goal.text}`}
+                  title="Tune its triggers"
+                  className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-secondary hover:text-foreground"
+                  onClick={() => toggleTuning(goal.id)}
+                >
+                  <SlidersHorizontal size={13} aria-hidden="true" />
+                  {goal.triggers.length}
+                  <ChevronDown
+                    size={12}
+                    aria-hidden="true"
+                    className={tuning.has(goal.id) ? "rotate-180" : ""}
+                  />
+                </button>
+                <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                  <input
+                    type="checkbox"
+                    checked={goal.enabled}
+                    aria-label={`Watch for: ${goal.text}`}
+                    onChange={(e) =>
+                      void change(
+                        api.PUT("/api/glasses/goals/{id}", {
+                          params: { path: { id: goal.id } },
+                          body: { enabled: e.target.checked },
+                        }),
+                        "Could not switch the goal",
+                      )
+                    }
+                  />
+                  On
+                </label>
+                <button
+                  type="button"
+                  aria-label={`Stop watching for: ${goal.text}`}
+                  className="rounded p-1 text-muted-foreground hover:bg-secondary hover:text-foreground"
+                  onClick={() =>
+                    void change(
+                      api.DELETE("/api/glasses/goals/{id}", {
+                        params: { path: { id: goal.id } },
+                      }),
+                      "Could not remove the goal",
+                    )
+                  }
+                >
+                  <Trash2 size={14} aria-hidden="true" />
+                </button>
+                </div>
+                {tuning.has(goal.id) && (
+                  <div className="flex flex-col gap-2 border-t border-border p-2">
+                    {triggerRows(goal)}
+                  </div>
+                )}
+              </li>
+            ))}
+          </ul>
+        ) : (
+          !error && (
+            <p className="text-xs text-muted-foreground">
+              Nothing yet. Say &ldquo;warn me when I see my keys&rdquo; to have the glasses watch
+              for something.
+            </p>
+          )
+        )}
+      </section>
+    );
 
   return (
     <section
@@ -155,31 +289,7 @@ export function TriggerEditor({
               <Trash2 aria-hidden="true" /> Remove goal
             </Button>
           </div>
-          {goal.triggers.map((trigger) => (
-            <TriggerRow
-              // Remounts when the trigger itself changed, so the fields never show an old draft.
-              key={`${trigger.id}:${trigger.name}:${trigger.watch_for}:${trigger.sigmas}`}
-              trigger={trigger}
-              match={lastMatches.get(trigger.id)}
-              onSave={(body) =>
-                void change(
-                  api.PUT("/api/glasses/triggers/{id}", {
-                    params: { path: { id: trigger.id } },
-                    body,
-                  }),
-                  "Could not save the trigger",
-                )
-              }
-              onDelete={() =>
-                void change(
-                  api.DELETE("/api/glasses/triggers/{id}", {
-                    params: { path: { id: trigger.id } },
-                  }),
-                  "Could not drop the trigger",
-                )
-              }
-            />
-          ))}
+          {triggerRows(goal)}
         </article>
       ))}
       {!error && (goals ?? []).length === 0 && (
