@@ -34,10 +34,14 @@ export function TriggerEditor({
   lastMatches,
   firedCount = 0,
   visible = true,
+  compact = false,
 }: {
   lastMatches: Map<number, Match>;
   firedCount?: number;
   visible?: boolean;
+  /** For the home page: one line per goal with its switch, no explanation and no trigger
+   * tuning (the Memory lab has those). */
+  compact?: boolean;
 }) {
   const [goals, setGoals] = useState<Goal[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -83,6 +87,76 @@ export function TriggerEditor({
     }
     await load();
   }
+
+  if (compact)
+    return (
+      <section aria-labelledby="watching-title" className="flex flex-col gap-2 text-sm">
+        <h2
+          id="watching-title"
+          className="flex items-center gap-1.5 text-xs font-medium tracking-wide text-muted-foreground"
+        >
+          <Zap size={13} aria-hidden="true" /> WATCHING FOR
+        </h2>
+        {error && (
+          <p className="text-xs text-destructive" role="alert">
+            {error}
+          </p>
+        )}
+        {goals?.length ? (
+          <ul className="flex flex-col gap-1.5">
+            {goals.map((goal) => (
+              <li
+                key={goal.id}
+                className={`flex items-center gap-2 rounded-md border border-border bg-card px-3 py-1.5 ${goal.enabled ? "" : "opacity-60"}`}
+              >
+                <span className="min-w-0 flex-1 truncate" title={goal.text}>
+                  {goal.text}
+                </span>
+                <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                  <input
+                    type="checkbox"
+                    checked={goal.enabled}
+                    aria-label={`Watch for: ${goal.text}`}
+                    onChange={(e) =>
+                      void change(
+                        api.PUT("/api/glasses/goals/{id}", {
+                          params: { path: { id: goal.id } },
+                          body: { enabled: e.target.checked },
+                        }),
+                        "Could not switch the goal",
+                      )
+                    }
+                  />
+                  On
+                </label>
+                <button
+                  type="button"
+                  aria-label={`Stop watching for: ${goal.text}`}
+                  className="rounded p-1 text-muted-foreground hover:bg-secondary hover:text-foreground"
+                  onClick={() =>
+                    void change(
+                      api.DELETE("/api/glasses/goals/{id}", {
+                        params: { path: { id: goal.id } },
+                      }),
+                      "Could not remove the goal",
+                    )
+                  }
+                >
+                  <Trash2 size={14} aria-hidden="true" />
+                </button>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          !error && (
+            <p className="text-xs text-muted-foreground">
+              Nothing yet. Say &ldquo;warn me when I see my keys&rdquo; to have the glasses watch
+              for something.
+            </p>
+          )
+        )}
+      </section>
+    );
 
   return (
     <section

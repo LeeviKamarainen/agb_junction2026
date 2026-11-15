@@ -562,13 +562,10 @@ export function LiveHome() {
 
         <p className="text-xs text-muted-foreground" aria-live="polite">
           {streaming
-            ? `Streaming ${FPS} frames a second · ${stats.sent} checked against your triggers${
-                source === "camera" ? ` · ${stats.stored} stored as your memories` : ""
+            ? `Streaming ${FPS} frames a second · ${stats.sent} checked${
+                source === "camera" ? ` · ${stats.stored} remembered` : ""
               }`
-            : source === "demo"
-              ? "Playing the demo day. Stream it to check it against your triggers, or switch to your camera."
-              : "Stream your camera to check it against your triggers and remember what it sees."}
-          {" "}Double-tap the view to start or stop, as with the Neural Band.
+            : "Press Stream (or double-tap the view) to watch for what you asked."}
         </p>
         {error && (
           <p className="text-sm text-destructive" role="alert">
@@ -586,8 +583,10 @@ export function LiveHome() {
           beforeAsk={ensureSession}
           examples={EXAMPLES}
           onListening={setListening}
-          intro="Ask about the demo day, or what your camera has seen. Ask Gemma to warn you about something, then stream: every frame is checked for it."
-          className="min-h-[24rem] lg:max-h-[70vh]"
+          title="Ask about your day"
+          simple
+          intro="Ask about the demo day or what your camera saw, or say “warn me when…” to have the glasses watch for something."
+          className="min-h-[20rem] lg:max-h-[60vh]"
           special={(question) =>
             RECALL.test(question) ? recall(question) : null
           }
@@ -595,20 +594,17 @@ export function LiveHome() {
             setAnswer({ question, text });
             if (speak) say(text);
           }}
-          // Gemma may have added or removed a goal: reload the triggers.
+          // The answer may have added or removed a goal: reload the list.
           onDone={() => setFired((n) => n + 1)}
         />
+        <TriggerEditor compact lastMatches={matches} firedCount={fired} visible={Boolean(user)} />
         <p className="text-xs text-muted-foreground">
           {user
             ? user.role === "guest"
-              ? "You are a temporary guest: your goals and camera memories are deleted after 60 minutes."
+              ? "Temporary guest: your goals and camera memories are deleted after 60 minutes."
               : null
-            : "No account needed: your first question or stream starts a 60-minute guest session."}
+            : "No account needed: asking or streaming starts a 60-minute guest session."}
         </p>
-      </div>
-
-      <div className="live-triggers">
-        <TriggerEditor lastMatches={matches} firedCount={fired} visible={Boolean(user)} />
       </div>
     </div>
   );
