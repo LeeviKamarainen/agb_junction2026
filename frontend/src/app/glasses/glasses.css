@@ -1,33 +1,34 @@
 /* The glasses harness (/glasses, and the Memory lab's Glasses tab). Everything is prefixed gh- to stay out of the main site's way. */
 
 .gh-root {
-  --gh-bg: #0b0b0d;
-  --gh-panel: #141418;
-  --gh-line: #2a2a31;
-  --gh-text: #ececf1;
-  --gh-muted: #8d8d99;
-  --gh-accent: #ead5a5;
-  --gh-danger: #ff7a7a;
-  --gh-ok: #5be3a1;
+  /* The site's theme (globals.css); only the display itself keeps the device's black. */
+  --gh-bg: var(--background);
+  --gh-panel: var(--card);
+  --gh-inset: var(--background);
+  --gh-raised: var(--secondary);
+  --gh-line: var(--border);
+  --gh-line-strong: #4c566a;
+  --gh-text: var(--foreground);
+  --gh-muted: var(--muted-foreground);
+  --gh-accent: var(--primary);
+  --gh-danger: var(--destructive);
+  --gh-ok: var(--success);
 
   color: var(--gh-text);
   font-family: var(--font-geist-sans), system-ui, sans-serif;
 }
 
 .gh-page {
-  min-height: 100vh;
-  padding: 28px clamp(16px, 3vw, 40px) 40px;
-  background: var(--gh-bg);
-  color: var(--gh-text);
-  font-family: var(--font-geist-sans), system-ui, sans-serif;
+  padding-bottom: 40px;
 }
 
 .gh-header {
   display: flex;
+  flex-wrap: wrap;
   align-items: flex-end;
   justify-content: space-between;
   gap: 16px;
-  margin-bottom: 24px;
+  margin-block: 28px 24px;
 }
 
 .gh-header h1 {
@@ -130,8 +131,8 @@
   border-radius: 18px;
   background: #000;
   box-shadow:
-    0 0 0 6px #050506,
-    0 24px 60px rgb(0 0 0 / 0.6);
+    0 0 0 6px #10131a,
+    0 24px 60px rgb(0 0 0 / 0.45);
 }
 
 .gh-backdrop {
@@ -201,9 +202,9 @@
 .gh-button {
   min-width: 120px;
   padding: 14px 22px;
-  border: 2px solid #3a3a44;
+  border: 2px solid #3b4252;
   border-radius: 999px;
-  background: #16161b;
+  background: #1d212a;
   color: #fff;
   font-size: 22px;
   font-weight: 600;
@@ -211,15 +212,15 @@
 }
 
 .gh-button:hover {
-  border-color: #5a5a66;
+  border-color: #4c566a;
 }
 
 .gh-button:focus-visible,
 .gh-button:focus {
   outline: none;
   border-color: var(--gh-accent);
-  background: #10283a;
-  box-shadow: 0 0 22px rgb(124 196 255 / 0.45);
+  background: #24374a;
+  box-shadow: 0 0 22px rgb(136 192 208 / 0.45);
 }
 
 .gh-stage-bar {
@@ -276,7 +277,7 @@
   aspect-ratio: 16 / 9;
   overflow: hidden;
   border-radius: 10px;
-  background: #0c0c0f;
+  background: var(--gh-inset);
   color: var(--gh-muted);
   font-size: 14px;
   text-align: center;
@@ -301,7 +302,7 @@
   gap: 6px;
   border: 1px solid var(--gh-line);
   border-radius: 999px;
-  background: #1c1c22;
+  background: var(--gh-raised);
   color: var(--gh-text);
   font: inherit;
   cursor: pointer;
@@ -314,7 +315,7 @@
 .gh-chip:hover,
 .gh-primary:hover,
 .gh-talk:hover {
-  border-color: #4a4a55;
+  border-color: var(--gh-line-strong);
 }
 .gh-chip:disabled {
   opacity: 0.45;
@@ -327,13 +328,13 @@
 .gh-primary {
   padding: 11px 16px;
   border-color: transparent;
-  background: var(--gh-text);
-  color: #0b0b0d;
+  background: var(--gh-accent);
+  color: var(--gh-bg);
   font-weight: 600;
 }
 
 .gh-primary:hover {
-  background: #fff;
+  background: #9fd0de;
 }
 
 .gh-talk {
@@ -346,8 +347,8 @@
 
 .gh-talk-on {
   border-color: var(--gh-danger);
-  background: #3a1518;
-  box-shadow: 0 0 0 4px rgb(255 122 122 / 0.15);
+  background: #3d2a33;
+  box-shadow: 0 0 0 4px rgb(227 137 143 / 0.15);
 }
 
 .gh-heard {
@@ -368,7 +369,7 @@
   padding: 8px 12px;
   border: 1px solid var(--gh-line);
   border-radius: 10px;
-  background: #0e0e12;
+  background: var(--gh-inset);
   color: var(--gh-text);
   font: inherit;
   font-size: 14px;
@@ -422,7 +423,7 @@
 .gh-log li {
   padding: 8px 10px;
   border-radius: 8px;
-  background: #0e0e12;
+  background: var(--gh-inset);
 }
 .gh-log-line {
   display: flex;
@@ -576,7 +577,7 @@
 }
 
 .gh-icon[aria-label="warning"] {
-  color: #ffc94d;
+  color: var(--warning);
 }
 
 .gh-phone-hint {
@@ -627,6 +628,7 @@
 
 /* On rotation the POV is the first viewport. Everything else follows in page scroll. */
 .gh-page.gh-theater {
+  width: 100%;
   display: grid;
   grid-template-areas: "pov" "header" "controls";
   grid-template-columns: minmax(0, 1fr);
@@ -634,6 +636,7 @@
   min-height: 100dvh;
 }
 .gh-theater .gh-main { display: contents; }
+.gh-theater > .site-header { display: none; }
 .gh-theater .gh-stage { grid-area: pov; }
 .gh-theater .gh-pov {
   width: 100%;

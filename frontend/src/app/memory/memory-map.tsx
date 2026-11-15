@@ -42,21 +42,21 @@ const RAMP = [
   "#cde2fb",
 ].map((hex) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16)));
 const PALETTE = [
-  "#ff794f",
-  "#5fb3f9",
-  "#7fd18b",
-  "#e7c55b",
-  "#c39bf2",
-  "#f27fb2",
-  "#5fd4c8",
-  "#b0b3a8",
+  "#88c0d0",
+  "#d08770",
+  "#a3be8c",
+  "#ebcb8b",
+  "#b48ead",
+  "#bf616a",
+  "#8fbcbb",
+  "#d8dee9",
 ];
 const KIND_COLORS: Record<string, string> = {
-  image: "#5fb3f9",
-  text: "#e7c55b",
+  image: "#88c0d0",
+  text: "#ebcb8b",
 };
-const SURFACE = "#111210"; // the canvas background, also the gap drawn around each point
-const FOUND = "#ff794f";
+const SURFACE = "#1d212a"; // the canvas background, also the gap drawn around each point
+const FOUND = "#d08770";
 const RADIUS = 5; // of a point, in CSS pixels
 const REACH = 32; // how far from a point the pointer may be and still pick it
 const TAP = 6; // pixels a pointer may move and still count as a tap, not a drag
@@ -208,12 +208,12 @@ function MapCanvas({
         const start = end.map((v) => -v);
         const from = toScreen(start);
         const to = toScreen(end);
-        context.strokeStyle = "rgba(242, 240, 233, 0.16)";
+        context.strokeStyle = "rgba(236, 239, 244, 0.16)";
         context.beginPath();
         context.moveTo(from.x, from.y);
         context.lineTo(to.x, to.y);
         context.stroke();
-        context.fillStyle = "rgba(242, 240, 233, 0.45)";
+        context.fillStyle = "rgba(236, 239, 244, 0.45)";
         context.fillText(label, to.x + 4, to.y - 4);
       });
       list = points.map((point) => ({ point, ...toScreen(point.pos) }));
@@ -508,14 +508,14 @@ export function MemoryMap({
       for (const point of points) {
         result.set(
           point.memory.id,
-          KIND_COLORS[point.memory.kind] ?? "#b0b3a8",
+          KIND_COLORS[point.memory.kind] ?? "#d8dee9",
         );
       }
     } else {
       for (const point of points) {
         result.set(
           point.memory.id,
-          collectionColors.get(point.memory.collection) ?? "#b0b3a8",
+          collectionColors.get(point.memory.collection) ?? "#d8dee9",
         );
       }
     }
