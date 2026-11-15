@@ -49,8 +49,10 @@ export function CueEditor({
               setAt(e.currentTarget.currentTime);
               run.onTime(e.currentTarget.currentTime);
             }}
-            onSeeking={(e) => run.onSeeking(e.currentTarget.currentTime)}
-            onSeeked={(e) => setAt(e.currentTarget.currentTime)}
+            onSeeked={(e) => {
+              setAt(e.currentTarget.currentTime);
+              run.onTime(e.currentTarget.currentTime);
+            }}
           />
           {run.live ? (
             <Overlay
@@ -99,8 +101,8 @@ export function CueEditor({
         ) : null}
         {run.live ? (
           <span className="text-xs text-muted-foreground">
-            Play the video: its frames and prompts go to Gemma as your glasses
-            would send them.
+            Play or scrub the video: what it shows and the prompts it passes go
+            to Gemma as your glasses would send them.
           </span>
         ) : null}
       </div>
