@@ -141,12 +141,6 @@
   font-weight: 800;
   letter-spacing: -1.3px;
 }
-.brand-symbol {
-  width: 35px;
-  height: 35px;
-  margin-right: 2px;
-  color: var(--primary);
-}
 .site-nav-link {
   display: inline-flex;
   align-items: center;
@@ -169,8 +163,7 @@
   color: var(--primary);
   font-weight: 450;
 }
-.eyebrow,
-.footer-brand {
+.eyebrow {
   font-family: var(--font-geist-mono), monospace;
 }
 .eyebrow {
@@ -183,42 +176,6 @@
   letter-spacing: 1.25px;
   line-height: 1.6;
 }
-.site-footer {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: space-between;
-  align-items: center;
-  gap: 12px 24px;
-  padding-block: 27px;
-  border-top: 1px solid var(--border);
-  color: var(--muted-foreground);
-  font-size: 10px;
-}
-.footer-brand {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  color: var(--foreground);
-  letter-spacing: 0.5px;
-}
-.footer-brand svg {
-  color: var(--primary);
-}
-/* The demo timeline's current moment fades in each time it changes. */
-.demo-moment {
-  animation: moment-arrive 600ms ease-out;
-}
-@keyframes moment-arrive {
-  from {
-    opacity: 0;
-    transform: translateY(8px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
 @media (max-width: 1100px) {
   .site-shell {
     width: calc(100% - 72px);
@@ -230,10 +187,6 @@
   }
   .wordmark {
     font-size: 19px;
-  }
-  .brand-symbol {
-    width: 28px;
-    height: 28px;
   }
 }
 @media (prefers-reduced-motion: reduce) {
@@ -252,36 +205,34 @@
 .site-shell { width: min(100% - 40px, 1180px); }
 .site-header { min-height: 68px; gap: 12px; }
 .wordmark { font-size: 18px; font-weight: 650; letter-spacing: -.6px; gap: 0; }
-.site-footer { margin-top: 32px; padding-block: 16px; font-size: 11px; }
-/* The home page: the live view and the triggers on the left, the day chat on the right. */
-.live-grid { display: grid; gap: 20px; padding-top: 8px; grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); align-items: start; }
-@media (max-width: 1023px) { .live-grid { grid-template-columns: minmax(0, 1fr); } }
-@media (max-width: 700px) { .live-stage:not(.live-stage-full) { aspect-ratio: 3 / 4; } }
-.live-stage { position: relative; display: flex; aspect-ratio: 16 / 9; max-height: 70dvh; width: 100%; overflow: hidden; border-radius: 10px; background: #000; touch-action: manipulation; user-select: none; }
-.live-stage-full { aspect-ratio: auto; max-height: none; height: 100dvh; width: 100vw; border-radius: 0; }
-.live-stage-window { position: fixed; inset: 0; z-index: 50; }
-/* The glasses' display over the view: square, centered, as tall as the view allows; black is
-   see-through, as on the glasses, and it never takes a tap from the view. */
-.live-glasses { position: absolute; inset: 0; container-type: size; display: grid; place-items: center; pointer-events: none; mix-blend-mode: screen; }
-.live-glasses > .gh-display-host { width: min(100cqw, 100cqh, 600px); }
-.live-glasses .gh-display { border: 0; border-radius: 0; box-shadow: none; outline: 1px dashed rgb(255 255 255 / .25); }
-.live-media { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
-.live-card { display: flex; flex-direction: column; gap: 4px; max-width: 34rem; border-radius: 8px; background: rgb(0 0 0 / .75); padding: 10px 12px; color: #fff; }
-.live-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; border-radius: 8px; background: rgb(0 0 0 / .55); padding: 6px; padding-bottom: max(6px, env(safe-area-inset-bottom)); }
 .home-ask > form { order: -1; padding: 12px; }
 .home-ask > div[aria-live] { flex: none; max-height: 65vh; }
 .home-ask textarea { min-height: 64px; border: 0; background: transparent; font-size: 16px; }
 .demo-heading { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px; padding-block: 22px; }
 .demo-heading h1 { font-size: 20px; font-weight: 500; }
 .demo-heading p { margin-top: 5px; font-size: 13px; color: var(--muted-foreground); }
-.showcase-grid { display: grid; grid-template-columns: minmax(0, 1fr) 250px; gap: 20px; }
 .showcase-media { aspect-ratio: 16 / 9; max-height: 55dvh; width: 100%; background: #12151c; display: grid; place-items: center; overflow: hidden; }
 .showcase-media video, .showcase-media img { width: 100%; height: 100%; max-height: 100%; object-fit: contain; }
-.showcase-queue { display: flex; flex-direction: column; gap: 6px; border-left: 1px solid var(--border); padding-left: 16px; }
-.showcase-queue button { display: flex; gap: 12px; padding: 12px; text-align: left; border: 1px solid transparent; min-width: 0; }
-.showcase-queue button[aria-current=true] { background: var(--card); border-color: var(--border); }
-.showcase-transport { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding-block: 14px; }
-.showcase-chapters { display: flex; gap: 4px; margin-block: 18px 10px; }
-.showcase-chapters button { background: var(--card); border-bottom: 2px solid var(--border); text-align: left; padding: 10px; min-width: 0; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.showcase-chapters button[aria-current=true] { border-color: var(--primary); }
-@media(max-width: 700px) { .showcase-grid { grid-template-columns: minmax(0,1fr); } .showcase-queue { border-left: 0; padding-left: 0; border-top: 1px solid var(--border); padding-top: 12px; } .site-shell { width: calc(100% - 28px); } .site-header { padding-block: 12px; } }
+@media (max-width: 700px) { .site-shell { width: calc(100% - 28px); } .site-header { padding-block: 12px; } }
+
+/* /try: the glasses view and what to do with it on the left, the growing memory on the right. */
+.try-grid { display: grid; gap: 24px; padding-block: 16px 40px; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); align-items: start; }
+@media (max-width: 1023px) { .try-grid { grid-template-columns: minmax(0, 1fr); } }
+.try-memory { position: sticky; top: 16px; display: flex; flex-direction: column; gap: 10px; border: 1px solid var(--border); border-radius: 12px; background: var(--card); padding: 14px; }
+/* Square enough for the map's two axes, never taller than the window beside the view. */
+.try-trail { height: min(62dvh, 560px); min-height: 280px; }
+.try-start { display: inline-flex; align-items: center; gap: 10px; border-radius: 999px; background: var(--primary); color: var(--primary-foreground); padding: 14px 26px; font-size: 17px; font-weight: 600; box-shadow: 0 10px 40px rgb(0 0 0 / .45); transition: transform .15s ease; }
+.try-start:hover { transform: scale(1.04); }
+.try-start:disabled { opacity: .7; }
+.try-start svg { width: 20px; height: 20px; }
+.try-chip { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--border); border-radius: 999px; padding: 6px 12px; font-size: 13px; color: var(--muted-foreground); }
+.try-chip:hover { color: var(--foreground); }
+.try-chip[aria-pressed="true"] { border-color: var(--primary); background: var(--secondary); color: var(--foreground); }
+.try-suggestion { border-radius: 999px; background: var(--secondary); padding: 5px 11px; font-size: 12px; color: var(--secondary-foreground); }
+.try-suggestion:hover:not(:disabled) { background: color-mix(in oklab, var(--secondary), var(--foreground) 10%); }
+.try-suggestion:disabled { opacity: .5; }
+.try-goal { display: inline-flex; max-width: 100%; align-items: center; gap: 6px; border: 1px solid color-mix(in oklab, var(--primary), transparent 55%); border-radius: 999px; padding: 4px 6px 4px 10px; font-size: 12px; }
+.try-goal button { display: inline-grid; place-items: center; border-radius: 999px; padding: 2px; color: var(--muted-foreground); }
+.try-goal button:hover { background: var(--secondary); color: var(--foreground); }
+.try-exchange { display: flex; align-items: center; gap: 12px; border-left: 2px solid var(--border); padding: 4px 0 4px 12px; }
+.try-exchange img { height: 56px; width: auto; max-width: 96px; border-radius: 6px; object-fit: contain; background: #000; }
