@@ -350,3 +350,12 @@ def test_the_streamed_answer_is_scoped_too(client, two_guests):
     assert reply.status_code == 200
     assert "ville" not in everything_said(seen)
     assert "ville" not in reply.text
+
+
+def test_a_guest_can_end_itself_at_once_and_the_admin_cannot(client, guest):
+    token = guest()
+    assert client.get("/api/auth/me", headers=token).json()["role"] == "guest"
+    assert client.delete("/api/auth/guest", headers=token).status_code == 204
+    assert client.get("/api/auth/me", headers=token).status_code == 401
+    assert client.delete("/api/auth/guest").status_code == 403
+    assert client.get("/api/auth/me").json()["role"] == "admin"

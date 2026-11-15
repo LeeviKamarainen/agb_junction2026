@@ -9,6 +9,7 @@ import { useSession } from "@/lib/session";
 import { Button } from "@/components/ui/button";
 import { AuthForm } from "../login/auth-form";
 import { CueEditor } from "./cue-editor";
+import type { Cue } from "../demos/cues";
 
 type Clip = components["schemas"]["ShowcasePublic"];
 const field =
@@ -35,6 +36,29 @@ function write(clip: Clip) {
     asset_order: clip.assets.map((a) => a.name),
     cues: clip.cues.filter((cue) => cue.text.trim()),
   };
+}
+
+/** An editor's cue with the fields the API fills in by default. */
+const whole = (cue: Cue): Clip["cues"][number] => ({
+  ...cue,
+  answer: cue.answer ?? "",
+  kind: cue.kind ?? "prompt",
+});
+
+/** Download a demo's prompts and recorded answers as a JSON file. */
+function exportCues(clip: Clip) {
+  const data = {
+    title: clip.title,
+    duration_s: clip.duration_s,
+    cues: clip.cues,
+  };
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(
+    new Blob([JSON.stringify(data, null, 2)], { type: "application/json" }),
+  );
+  link.download = `${clip.title.replace(/[^\w-]+/g, "-") || "demo"}-prompts.json`;
+  link.click();
+  URL.revokeObjectURL(link.href);
 }
 
 async function duration(file: File): Promise<number | null> {
@@ -465,7 +489,13 @@ function ClipEditor({
         cues={draft.cues}
         videoUrl={draft.kind === "video" ? draft.assets[0]?.url : undefined}
         disabled={blocked}
-        onChange={(cues) => patch({ cues })}
+        onChange={(cues) => patch({ cues: cues.map(whole) })}
+        onRecord={(update) =>
+          setDraft((d) => ({ ...d, cues: update(d.cues).map(whole) }))
+        }
+        onRecorded={() => void task(async () => exportCues(await save()))}
+        onExport={() => exportCues(draft)}
+        onEndAt={(duration_s) => patch({ duration_s })}
       />
       <div className="flex flex-wrap items-center gap-3">
         <label className="flex items-center gap-2 text-sm">
