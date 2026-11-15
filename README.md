@@ -25,7 +25,6 @@ Meta glasses ──► Android app ──WebSocket──► backend (FastAPI + S
 | `frontend/` | Next.js web app: the **live view** (`/`), **Demos** (`/demos`), and for the admin the **Memory lab** (`/memory`) and the **glasses harness** (`/glasses`), plus the login pages. |
 | `glasses-android/` | The real glasses client: an Android app that streams the Meta glasses' camera and sends frames, photos and voice to the backend; see [its README](glasses-android/README.md). |
 | `memory/` | The visual memory service that runs on the Gemma server: embeds frames, serves the embeddings and chat, and draws the memory map; see [its README](memory/README.md). Its own uv project (about 6 GB with torch). |
-| `my-glasses-app/` | A small web app for the glasses' display (React, Meta's UI toolkit), see below. |
 | `deploy/`, `compose.yaml` | Production: Docker Compose with Caddy on a Hetzner VM. |
 
 ## Getting started
@@ -110,35 +109,6 @@ Every change goes through a pull request; what lands on `main` is deployed to th
 
 To get SSH access to the server, add an SSH key to your GitHub account (Settings → SSH and GPG keys) and ask someone with access to run `make prod-import-keys`.
 
-## my-glasses-app
-
-A web app for Meta Ray-Ban Display glasses, built with React, Vite and Meta's
-UI Toolkit (`@wearables-ui-toolkit/mrbd`). It is currently a small demo, "Pinch
-Counter", that shows how D-pad focus and pinch (select) work.
-
-### Run it locally
-
-Needs Node.js 20.19+ or 22.12+.
-
-```sh
-cd my-glasses-app
-npm install
-npm run dev
-```
-
-Open the printed address (usually http://localhost:5173) in Chrome or Brave.
-
-### Test without glasses
-
-Install the [Meta Ray-Ban Display Simulator](https://chromewebstore.google.com/detail/meta-ray-ban-display-simu/jpjlmmodokemlepklkdbimceggpbjcll)
-Chrome extension, open the app, and click the extension icon to turn the
-simulator on. Click inside the display, then use the arrow keys to move focus
-and Enter to pinch.
-
-### Other scripts
-
-- `npm run typecheck`: TypeScript check
-- `npm run build`: production build into `dist/`
-- `npm run preview`: serve the production build
+## Live experience
 
 The Memory tab in `/memory` configures the live experience: stream the camera at 2 fps, ask questions with the microphone, and manage goals and triggers. `/glasses` uses the same emulator in fullscreen, with Start memory stream and Ask with microphone controls over the view. Triggers configured in Memory belong to the logged-in account and run on its streamed frames. Camera and microphone access require HTTPS (or localhost); speech recognition depends on browser support.

@@ -13,7 +13,7 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 
-# From the web app (my-glasses-app)
+# Node (frontend)
 node_modules/
 dist/
 .DS_Store
