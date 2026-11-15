@@ -22,7 +22,7 @@ Meta glasses ──► Android app ──WebSocket──► backend (FastAPI + S
 | Folder | What it is |
 |---|---|
 | `backend/` | FastAPI backend (SQLModel on SQLite, vector search with sqlite-vec). Stores memories, runs the ask loop, checks frames against triggers, decides what the glasses display. All routes are under `/api`. |
-| `frontend/` | Next.js web app: the **home page** (`/`) plays the demo clips through the glasses, **Try it** (`/try`) runs a clip or your camera live, with questions and the memory growing as a map; for the admin, demo management (`/admin`), the **stream wall** (`/admin/streams`), the **Memory lab** (`/memory`) and the **glasses harness** (`/glasses`). |
+| `frontend/` | Next.js web app: the **home page** (`/`) shows our submission video, **Try it** (`/try`) runs a clip or your camera live, with questions and the memory growing as a map; for the admin, demo management (`/admin`), the **stream wall** (`/admin/streams`), the **Memory lab** (`/memory`) and the **glasses harness** (`/glasses`). |
 | `glasses-android/` | The real glasses client: an Android app that streams the Meta glasses' camera and sends frames, photos and voice to the backend; see [its README](glasses-android/README.md). |
 | `memory/` | The visual memory service that runs on the Gemma server: embeds frames, serves the embeddings and chat, and draws the memory map; see [its README](memory/README.md). Its own uv project (about 6 GB with torch). |
 | `deploy/`, `compose.yaml` | Production: Docker Compose with Caddy on a Hetzner VM. |
@@ -58,7 +58,7 @@ Open http://localhost:3000. Visitors never log in: **Try it** starts a **guest**
 
 ### The home page and Try it
 
-The home page plays one of the published demo clips as the wearer sees it: the whole picture through a drawn glasses frame, with the glasses' display in the right lens showing what was said and answered in that clip (its prompts, set at `/admin`). Pick another clip under it; the sound button plays the clip's audio and reads the display aloud. **Try it out** opens `/try` with that clip.
+The home page shows our submission video (embedded from YouTube) beside the pitch; **Try it out** opens `/try`.
 
 `/try` is the same view, live. **Start** plays the clip, or your camera (on a phone, front or back), and sends 2 frames a second as the glasses do, each checked against your goals. Ask by typing or holding **Hold to ask**: the answer appears in the right lens with the frame it rests on, and is spoken. While a demo clip plays, only the part already shown can be found, so the answers never run ahead of the video. Say "warn me when I see a door" and the goal appears under the view; its message shows in the lens when it fires. On the right, the memory grows as a map: one point per remembered frame, similar frames close together; point at one to see it, and the frame an answer rests on is ringed.
 

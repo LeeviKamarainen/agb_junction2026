@@ -14,8 +14,8 @@ export type Cue = {
   kind?: "prompt" | "trigger";
 };
 
-export const SPOKEN_S = 4; // how long a prompt is shown as being said,
-export const ANSWERED_S = 8; // how long with Gemma's answer under it, or a trigger's message
+const SPOKEN_S = 4; // how long a prompt is shown as being said,
+const ANSWERED_S = 8; // how long with Gemma's answer under it, or a trigger's message
 
 /** At `at` seconds into the clip: the prompts still active, and the one being said, if any. */
 export function cueState(cues: Cue[], at: number) {
