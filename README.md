@@ -59,7 +59,7 @@ Open http://localhost:3000 and start a **guest**: a generated name, no password,
 
 ### The live view and curated demos
 
-The home page is what the glasses see: it plays the published demo clips, or your own camera (on a phone, front or back). **Stream** sends 2 frames a second, as the glasses do, and each is checked against your triggers; a trigger's message appears on the view. Beside it, ask about the day by typing or holding **Talk**: answers are spoken and shown on the view too. Ask Gemma to warn you about something ("warn me when I see a bicycle") and the triggers for it appear below. **Fullscreen** fills the screen with the view and its controls (on an iPhone, the window). Double-tap the view to start or stop the stream.
+The home page is what the glasses see: it plays the published demo clips, or your own camera (on a phone, front or back). **Stream** sends 2 frames a second, as the glasses do, and each is checked against your triggers; a trigger's message appears on the view. Beside it, ask about the day by typing or holding **Talk**: answers are spoken and shown on the view too. Ask Gemma to warn you about something ("warn me when I see a bicycle") and the triggers for it appear below. **Glasses display** draws the glasses' own display over the video, so you see exactly what the wearer would when a trigger fires or an answer comes back. **Fullscreen** fills the screen with the view and its controls (on an iPhone, the window). Double-tap the view to start or stop the stream.
 
 Nobody needs an account: the first question or stream starts a 60-minute guest, which sees the demo memories and its own. Demo clips are only checked against the triggers; camera frames are also stored as the guest's memories.
 

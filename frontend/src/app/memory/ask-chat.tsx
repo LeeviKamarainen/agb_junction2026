@@ -63,6 +63,7 @@ export function AskChat({
   onAnswer,
   voice = false,
   endpoint = "/api/ask/stream",
+  onListening,
   ref,
 }: {
   compact?: boolean;
@@ -87,6 +88,8 @@ export function AskChat({
   voice?: boolean;
   /** Where questions go: a route that answers as /api/ask/stream does, one Step per line. */
   endpoint?: string;
+  /** Its microphone opened or closed. */
+  onListening?: (listening: boolean) => void;
   ref?: Ref<AskChatHandle>;
 } = {}) {
   const [exchanges, setExchanges] = useState<Exchange[]>([]);
@@ -291,6 +294,7 @@ export function AskChat({
             disabled={busy}
             className="h-10"
             onText={(text) => void ask(text)}
+            onListening={onListening}
           />
         )}
         <Button type="submit" size="lg" disabled={busy || !question.trim()}>
