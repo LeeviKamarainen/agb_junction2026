@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { Suspense } from "react";
 
 import { UserMenu } from "@/components/user-menu";
 import { useSession } from "@/lib/session";
@@ -29,7 +30,6 @@ type Props = {
 /** The header every page shares: the wordmark, the page links and the login menu. */
 export function SiteHeader({ requireLogin = false }: Props) {
   const { user } = useSession();
-  const path = usePathname();
   const links = [
     ...PUBLIC_LINKS,
     ...(user ? USER_LINKS : []),
@@ -45,18 +45,32 @@ export function SiteHeader({ requireLogin = false }: Props) {
         aria-label="Main navigation"
         className="flex flex-wrap items-center justify-end gap-x-1 gap-y-2"
       >
-        {links.map(({ href, label }) => (
-          <Link
-            key={href}
-            href={href}
-            className="site-nav-link"
-            aria-current={path === href ? "page" : undefined}
-          >
-            {label}
-          </Link>
-        ))}
+        {/* The current page is only known per request on a dynamic route (/admin/streams/<id>):
+            the links prerender without the highlight, which streams in after. */}
+        <Suspense fallback={<NavLinks links={links} current={null} />}>
+          <CurrentNavLinks links={links} />
+        </Suspense>
         <UserMenu requireLogin={requireLogin} className="ml-3" />
       </nav>
     </header>
   );
+}
+
+type NavLink = { href: string; label: string };
+
+function CurrentNavLinks({ links }: { links: NavLink[] }) {
+  return <NavLinks links={links} current={usePathname()} />;
+}
+
+function NavLinks({ links, current }: { links: NavLink[]; current: string | null }) {
+  return links.map(({ href, label }) => (
+    <Link
+      key={href}
+      href={href}
+      className="site-nav-link"
+      aria-current={current === href ? "page" : undefined}
+    >
+      {label}
+    </Link>
+  ));
 }
