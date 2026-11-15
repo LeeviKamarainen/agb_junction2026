@@ -44,11 +44,14 @@ export function TriggerEditor({
 
   const load = useCallback(async () => {
     try {
-      const { data, error: problem } = await api.GET("/api/glasses/goals", {
+      const { data, error: problem, response } = await api.GET("/api/glasses/goals", {
         cache: "no-store",
       });
-      if (problem || !data)
-        setError(errorText(problem, "Could not load goals"));
+      if (response.status === 401) {
+        // Nobody logged in (just logged out, or the guest expired): no goals, and no error.
+        setGoals(null);
+        setError(null);
+      } else if (problem || !data) setError(errorText(problem, "Could not load goals"));
       else setGoals(data);
     } catch {
       setError("Could not reach the backend");
@@ -59,6 +62,11 @@ export function TriggerEditor({
     // Loading when shown, and when a trigger fired, is the point of this effect.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     if (visible) void load();
+    else {
+      // Hidden, or nobody logged in any more: nothing of the last login's goals stays.
+      setGoals(null);
+      setError(null);
+    }
   }, [load, firedCount, visible]);
 
   /** Runs one change, shows what went wrong, and reloads the goals. */

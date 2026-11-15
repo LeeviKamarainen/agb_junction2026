@@ -6,7 +6,11 @@ import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
 import { Button } from "@/components/ui/button";
-import { logOut, useSession } from "@/lib/session";
+import { loggedOut, logOut, useSession } from "@/lib/session";
+
+// Set while logging out: the page is about to go home, so a page that needs a login must not
+// send its visitor to /login meanwhile.
+let leaving = false;
 
 type Props = {
   /** On a page that needs a login: go to /login when nobody is logged in (e.g. it expired). */
@@ -20,15 +24,23 @@ export function UserMenu({ requireLogin = false, className = "" }: Props) {
   const router = useRouter();
 
   useEffect(() => {
-    if (requireLogin && user === null) {
+    if (requireLogin && user === null && !leaving) {
       const next = window.location.pathname + window.location.search;
       window.location.replace(`/login?next=${encodeURIComponent(next)}`);
     }
   }, [requireLogin, user]);
 
+  /** Logs out and goes home; every useSession hears of it, so nothing shows the old login. */
   async function leave() {
+    leaving = true;
     await logOut();
-    router.push("/login");
+    // First: the pages kept in memory, home among them, forget the login before one shows.
+    loggedOut();
+    router.push("/");
+    // Once home, a later visit to a page that needs a login asks for one again.
+    setTimeout(() => {
+      leaving = false;
+    }, 2000);
   }
 
   if (user === undefined)

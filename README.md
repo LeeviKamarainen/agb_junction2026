@@ -22,7 +22,7 @@ Meta glasses ──► Android app ──WebSocket──► backend (FastAPI + S
 | Folder | What it is |
 |---|---|
 | `backend/` | FastAPI backend (SQLModel on SQLite, vector search with sqlite-vec). Stores memories, runs the ask loop, checks frames against triggers and reminders, decides what the glasses display. All routes are under `/api`. |
-| `frontend/` | Next.js web app: the **live view** (`/`), **Demos** (`/demos`), and for the admin the **Memory lab** (`/memory`) and the **glasses harness** (`/glasses`), plus the login pages. |
+| `frontend/` | Next.js web app: the **live view** (`/`), **Demos** (`/demos`), the **Memory lab** (`/memory`) for anyone logged in (a guest sees the demo memories and its own), and for the admin the **stream wall** (`/admin/streams`) and the **glasses harness** (`/glasses`), plus the login pages. |
 | `glasses-android/` | The real glasses client: an Android app that streams the Meta glasses' camera and sends frames, photos and voice to the backend; see [its README](glasses-android/README.md). |
 | `memory/` | The visual memory service that runs on the Gemma server: embeds frames, serves the embeddings and chat, and draws the memory map; see [its README](memory/README.md). Its own uv project (about 6 GB with torch). |
 | `my-glasses-app/` | A small web app for the glasses' display (React, Meta's UI toolkit), see below. |
