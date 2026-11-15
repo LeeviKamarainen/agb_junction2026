@@ -7,7 +7,7 @@ import "../glasses/glasses.css";
 import { TryView } from "./try-view";
 
 export const metadata: Metadata = {
-  title: "Try it — GlassMemory",
+  title: "Try it — Recall/Remind",
   description: "Watch a demo or your own camera through the glasses and ask what they have seen.",
 };
 

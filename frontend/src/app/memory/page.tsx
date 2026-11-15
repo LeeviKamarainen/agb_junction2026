@@ -7,7 +7,7 @@ import "../glasses/glasses.css";
 import { MemoryLab } from "./lab";
 
 export const metadata: Metadata = {
-  title: "Memory lab — GlassMemory",
+  title: "Memory lab — Recall/Remind",
   robots: { index: false },
 };
 

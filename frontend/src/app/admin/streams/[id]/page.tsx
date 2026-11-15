@@ -5,7 +5,7 @@ import { SiteShell } from "@/components/site-shell";
 import { StreamDetail } from "./stream-detail";
 
 export const metadata: Metadata = {
-  title: "Stream — GlassMemory",
+  title: "Stream — Recall/Remind",
   robots: { index: false },
 };
 
