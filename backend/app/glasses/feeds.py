@@ -3,13 +3,13 @@
 Every frame that reaches the backend (a memory frame or a watched frame, over HTTP or the
 WebSocket) is recorded here once its faces are blurred, under the client that sent it: who
 (the login), which app (`client`: "live" for the home page, "harness" for the glasses harness,
-"glasses" for the Android app, as each says), what kind (a "stream", a "photo" or "watch"
-frames) and which stream. Only the newest frame of each feed is kept, in memory: nothing is
+"glasses" for the Android app, as each says), what kind (a "stream" or
+"photo" frames) and which stream. Only the newest frame of each feed is kept, in memory: nothing is
 written, a restart forgets them, and a feed with no frame for IDLE_S is dropped.
 GET /api/admin/streams lists them for the admin (routes/streams.py).
 
-Each feed also carries its user's log: the questions they sent, the goals and reminders they
-set, and the triggers and warnings that fired for them (`note`), newest first, kept in memory
+Each feed also carries its user's log: the questions they sent, the goals they set, and the
+triggers that fired for them (`note`), newest first, kept in memory
 for EVENTS_S and at most MAX_EVENTS per user. A question or goal is the user's, not one app's,
 so every feed of a user shows the same log. The wall's tiles show only those (SUMMARY); the
 full page of one feed (GET /api/admin/streams/{id}) shows everything, verbose: what became of
@@ -27,12 +27,10 @@ from typing import Literal
 
 from pydantic import BaseModel
 
-Kind = Literal["stream", "photo", "watch"]
-EventKind = Literal[
-    "question", "answer", "search", "goal", "reminder", "trigger", "warning", "frame", "error"
-]
+Kind = Literal["stream", "photo"]
+EventKind = Literal["question", "answer", "search", "goal", "trigger", "frame", "error"]
 # What the wall's tiles show; the full page shows every kind.
-SUMMARY: set[str] = {"question", "goal", "reminder", "trigger", "warning"}
+SUMMARY: set[str] = {"question", "goal", "trigger"}
 
 IDLE_S = 60.0  # a feed with no frame for this long is dropped
 LIVE_S = 5.0  # a feed whose last frame is newer than this counts as live
@@ -50,7 +48,7 @@ class FeedEvent(BaseModel):
     at: datetime
     kind: EventKind
     text: str
-    via: str  # how it arrived: "chat", "glasses", "stream", "watch", "panel"
+    via: str  # how it arrived: "chat", "glasses", "stream", "panel"
     ms: int | None = None  # how long the backend took, when measured
     detail: dict | None = None  # the full answer or request, as JSON, for the full page
 
@@ -108,8 +106,8 @@ def note(
     detail: dict | None = None,
     ms: int | None = None,
 ) -> None:
-    """Add to a user's log: a question they sent, a goal or reminder they set, a search or an
-    answer of the chat model, a trigger or warning that fired for them."""
+    """Add to a user's log: a question they sent, a goal they set, a search or an answer of the
+    chat model, a trigger that fired for them."""
     event = FeedEvent(
         at=datetime.now(UTC), kind=kind, text=text.strip()[:500], via=via, ms=ms, detail=detail
     )

@@ -136,6 +136,8 @@ export function MemoryLab() {
               embedded
               active={tab === "stream"}
               recalled={recalled}
+              // "Warn me…" said to the glasses set up a goal: reload the list below.
+              onGoal={() => setFired((n) => n + 1)}
               onFrame={(reply) => {
                 setMatches(
                   new Map(

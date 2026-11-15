@@ -10,6 +10,7 @@ in that account's own panel, or by the chat model when its owner asks it to stop
 """
 
 import json
+import re
 from pathlib import Path
 
 from pydantic import ValidationError
@@ -21,6 +22,15 @@ from app.llm import Chat
 from app.models import Goal, GoalPublic, Trigger, TriggerDraft, TriggerPublic
 
 SKILL = (Path(__file__).parent / "trigger_skill.md").read_text()
+# What the wearer says to set up a goal on the glasses: "warn me when…", "remind me to…".
+_GOAL = re.compile(r"^(please |can you |could you )?(remind|warn|alert|tell|notify) me\b", re.I)
+
+
+def is_goal(text: str) -> bool:
+    """Whether what the wearer said asks to be warned or reminded: a goal, not a question."""
+    return bool(_GOAL.match(text.strip()))
+
+
 MOST = 10  # triggers kept from one answer
 SYSTEM = f"""You set up a person's smart glasses for something they asked you to watch out for. \
 You cannot watch the camera yourself: you write triggers, and the glasses wake an assistant with \

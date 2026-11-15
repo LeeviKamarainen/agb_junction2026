@@ -9,7 +9,7 @@ from sqlmodel import select
 from app import media, vectors
 from app.llm import get_chat, get_embedder
 from app.main import app
-from app.models import Memory, Reminder, User
+from app.models import Goal, Memory, Trigger, User
 from app.routes.glasses import optional_chat, optional_embedder
 from app.search import TABLE
 
@@ -166,7 +166,11 @@ def test_an_expired_guest_is_logged_out_and_deleted_with_its_memories(client, gu
     aino = guest("aino")
     image = add_image(client, "aino's photo", aino).json()
     add_text(client, "aino: keys under the mat", aino)
-    client.post("/api/glasses/reminders", json={"text": "warn me about the stool"}, headers=aino)
+    goal = {
+        "text": "warn me about the stool",
+        "triggers": [{"name": "Stool", "watch_for": "stool"}],
+    }
+    assert client.post("/api/glasses/goals", json=goal, headers=aino).status_code == 201
     stored = db(lambda session: session.get(Memory, image["id"]))
     assert stored is not None and stored.image_file
     image_file = media.path(stored.image_file)
@@ -179,11 +183,12 @@ def test_an_expired_guest_is_logged_out_and_deleted_with_its_memories(client, gu
 
     async def left(session):
         guests = (await session.exec(select(User).where(User.role == "guest"))).first()
-        reminders = (await session.exec(select(Reminder))).first()
+        goals = (await session.exec(select(Goal))).first()
+        triggers = (await session.exec(select(Trigger))).first()
         stored = await vectors.stored(await session.connection(), TABLE)
-        return guests, reminders, stored
+        return guests, goals, triggers, stored
 
-    assert db(left) == (None, None, {})
+    assert db(left) == (None, None, None, {})
 
 
 def test_starting_a_guest_sweeps_the_expired_ones(anonymous, guest, db):
@@ -221,7 +226,7 @@ def test_bearer_token_works_without_cookies(anonymous, guest):
         ("post", "/api/ask"),
         ("post", "/api/ask/stream"),
         ("post", "/api/glasses/command"),
-        ("get", "/api/glasses/reminders"),
+        ("get", "/api/glasses/goals"),
     ],
 )
 def test_memory_routes_need_a_login(anonymous, method, path):
@@ -345,14 +350,3 @@ def test_the_streamed_answer_is_scoped_too(client, two_guests):
     assert reply.status_code == 200
     assert "ville" not in everything_said(seen)
     assert "ville" not in reply.text
-
-
-# --- The glasses ----------------------------------------------------------------------------
-
-
-def test_glasses_reminders_are_per_user(client, guest):
-    aino, ville = guest("aino"), guest("ville")
-
-    client.post("/api/glasses/reminders", json={"text": "warn me about the stool"}, headers=aino)
-    assert client.get("/api/glasses/reminders", headers=ville).json() == []
-    assert len(client.get("/api/glasses/reminders", headers=aino).json()) == 1

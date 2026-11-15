@@ -30,9 +30,7 @@ export type FeedEvent = Feed["events"][number];
 export const EVENTS: Record<FeedEvent["kind"], { label: string; Icon: typeof Bell; tone: string }> = {
   question: { label: "Question", Icon: MessageSquareText, tone: "text-sky-300" },
   goal: { label: "Watch for", Icon: Zap, tone: "text-amber-300" },
-  reminder: { label: "Reminder", Icon: Bell, tone: "text-amber-300" },
   trigger: { label: "Trigger fired", Icon: BellRing, tone: "text-red-300" },
-  warning: { label: "Warning", Icon: TriangleAlert, tone: "text-red-300" },
   answer: { label: "Answer", Icon: Sparkles, tone: "text-emerald-300" },
   search: { label: "Search", Icon: Search, tone: "text-violet-300" },
   frame: { label: "Frame", Icon: ImageIcon, tone: "text-muted-foreground" },
@@ -57,7 +55,6 @@ const order = (name: string) => {
 export const KINDS: Record<Feed["kind"], string> = {
   stream: "stream",
   photo: "photos",
-  watch: "reminder watch",
 };
 
 export function since(iso: string, now: number): string {
@@ -68,8 +65,8 @@ export function since(iso: string, now: number): string {
 /**
  * The admin's stream wall: every client sending frames to the backend right now, grouped by app
  * (the Meta glasses app, the live page, the glasses harness), each with its newest frame about
- * twice a second and, under it, the log of what its user sent: questions, goals and reminders,
- * and the triggers and warnings that fired. Faces are blurred in every frame before the backend
+ * twice a second and, under it, the log of what its user sent: questions and goals, and the
+ * triggers that fired. Faces are blurred in every frame before the backend
  * keeps it.
  */
 export function StreamWall() {

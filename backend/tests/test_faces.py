@@ -236,29 +236,6 @@ def test_a_frame_over_the_socket_is_stored_and_embedded_with_its_face_blurred(cl
     assert models.all_filled()
 
 
-def test_a_watched_frame_is_shown_with_its_face_blurred(client, models):
-    client.post("/api/glasses/reminders", json={"text": "warn me about the stool"})
-    models.answer = "1"  # the chat model sees item 1, the stool
-
-    reply = client.post("/api/glasses/watch", files={"photo": ("w.jpg", PORTRAIT, "image/jpeg")})
-
-    assert reply.status_code == 200 and reply.json()["seen"] == ["stool"]
-    assert models.all_filled()
-
-
-def test_a_watched_frame_over_the_socket_is_shown_with_its_face_blurred(client, models):
-    client.post("/api/glasses/reminders", json={"text": "warn me about the stool"})
-    models.answer = "1"
-    with client.websocket_connect("/api/glasses/ws") as ws:
-        ws.send_json({"type": "watch", "on": True})
-        ws.send_json({"type": "frame", "id": 1})
-        ws.send_bytes(PORTRAIT)
-        result = ws.receive_json()
-
-    assert result["type"] == "watch_result" and result["result"]["seen"] == ["stool"], result
-    assert models.all_filled()
-
-
 def test_an_uploaded_image_memory_has_its_face_blurred(client, models):
     reply = client.post("/api/memories/image", files={"file": ("p.jpg", PORTRAIT, "image/jpeg")})
 
@@ -268,22 +245,20 @@ def test_an_uploaded_image_memory_has_its_face_blurred(client, models):
 
 
 @pytest.mark.parametrize("how", ["http", "socket"])
-def test_a_watched_frame_that_is_not_an_image_is_refused(client, models, how):
+def test_a_frame_that_is_not_an_image_is_refused(client, models, how):
     """It starts like a JPEG, so only the anonymiser finds out that it is not one."""
-    client.post("/api/glasses/reminders", json={"text": "warn me about the stool"})
     broken = b"\xff\xd8\xff and then no picture"
     if how == "http":
-        files = {"photo": ("w.jpg", broken, "image/jpeg")}
-        status = client.post("/api/glasses/watch", files=files).status_code
+        files = {"frame": ("f.jpg", broken, "image/jpeg")}
+        status = client.post("/api/glasses/frames", files=files).status_code
     else:
         with client.websocket_connect("/api/glasses/ws") as ws:
-            ws.send_json({"type": "watch", "on": True})
-            ws.send_json({"type": "frame", "id": 1})
+            ws.send_json({"type": "memory_frame", "id": 1, "source": "single"})
             ws.send_bytes(broken)
             status = ws.receive_json()["status"]
 
     assert status == 415
-    assert not models.shown
+    assert not models.embedded and not models.shown
 
 
 def test_uploaded_demo_images_have_their_faces_blurred(client):
@@ -348,7 +323,6 @@ def test_every_upload_route_is_one_of_those_tested_here():
 
     assert uploads == {
         "/api/glasses/frames",
-        "/api/glasses/watch",
         "/api/memories/image",
         "/api/demo/clips/{id}/media",
     }

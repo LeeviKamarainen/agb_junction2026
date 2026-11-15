@@ -11,7 +11,7 @@ Everything runs on our own servers with open models (EmbeddingGemma 2 for the em
 
 ```
 Meta glasses ──► Android app ──WebSocket──► backend (FastAPI + SQLite + sqlite-vec) ──► Memory API / Gemma server
- camera, mic,     (glasses-android)           memories, triggers, reminders, accounts     EmbeddingGemma 2 + Gemma (vLLM)
+ camera, mic,     (glasses-android)           memories, triggers, accounts                EmbeddingGemma 2 + Gemma (vLLM)
  Neural Band,                                           ▲
  display  ◄───────── messages and warnings ─────────────┤
                                         Next.js web app: live view, demos, Memory lab
@@ -21,7 +21,7 @@ Meta glasses ──► Android app ──WebSocket──► backend (FastAPI + S
 
 | Folder | What it is |
 |---|---|
-| `backend/` | FastAPI backend (SQLModel on SQLite, vector search with sqlite-vec). Stores memories, runs the ask loop, checks frames against triggers and reminders, decides what the glasses display. All routes are under `/api`. |
+| `backend/` | FastAPI backend (SQLModel on SQLite, vector search with sqlite-vec). Stores memories, runs the ask loop, checks frames against triggers, decides what the glasses display. All routes are under `/api`. |
 | `frontend/` | Next.js web app: the **live view** (`/`), **Demos** (`/demos`), and for the admin the **Memory lab** (`/memory`) and the **glasses harness** (`/glasses`), plus the login pages. |
 | `glasses-android/` | The real glasses client: an Android app that streams the Meta glasses' camera and sends frames, photos and voice to the backend; see [its README](glasses-android/README.md). |
 | `memory/` | The visual memory service that runs on the Gemma server: embeds frames, serves the embeddings and chat, and draws the memory map; see [its README](memory/README.md). Its own uv project (about 6 GB with torch). |
@@ -67,7 +67,7 @@ Watch `/demos` without logging in. Published videos and ordered image sequences 
 
 At `/admin`, add a draft, upload one MP4/WebM video (up to 200 MB) or a batch of images (up to 100, 15 MB each, 200 MB per upload), then publish. Adjust image dwell time, reorder images and move demos earlier or later. Video length is detected in the browser and can be adjusted. Published media is public; drafts are visible only to the admin. Publishing a demo also makes it searchable: the backend stores a video's frames at 2 fps (skipping near-duplicates) and each image of a sequence as demo memories that everyone can ask about, faces blurred, and replaces or removes them when the demo changes or is unpublished. That needs the embedding model (`EMBED_URL`) and takes a while for a long video.
 
-At `/admin/streams` the admin sees every client streaming right now (the live page, the glasses harness, the glasses app), each with its newest frame refreshing about twice a second and, under it, a log of the questions its user asked, the triggers and reminders they set, and what fired. Click a stream to open it in full, with fullscreen and a verbose backend log: every frame's result and trigger scores, Gemma's searches and answers, and errors, each with its JSON.
+At `/admin/streams` the admin sees every client streaming right now (the live page, the glasses harness, the glasses app), each with its newest frame refreshing about twice a second and, under it, a log of the questions its user asked, the goals they set, and the triggers that fired. Click a stream to open it in full, with fullscreen and a verbose backend log: every frame's result and trigger scores, Gemma's searches and answers, and errors, each with its JSON.
 
 Media files live in `showcase-media/` beside the database. Schema or seed changes rebuild the disposable database and remove demo configurations; old files are not reassigned to new demos. The database starts empty; upload your own memories and curated media after a rebuild.
 
@@ -76,7 +76,7 @@ Media files live in `showcase-media/` beside the database. Schema or seed change
 - **Library:** add memories by uploading images, taking a webcam picture, or writing a note; group them into collections. Browse stable thumbnails in pages of 24, search captions/collections, and tap a memory to inspect the full image.
 - **Ask tab:** ask Gemma a question and watch it search the memories step by step.
 - **Map:** every stored vector projected to 2D and 3D; the memories found by the last question are ringed.
-- **Memory tab:** configure camera streaming, microphone questions, reminders and triggers in the shared glasses emulator. Say a goal and Gemma writes its triggers. Open the fullscreen emulator to use the same experience across the phone display.
+- **Memory tab:** configure camera streaming, microphone questions and triggers in the shared glasses emulator. Say a goal and Gemma writes its triggers. Open the fullscreen emulator to use the same experience across the phone display.
 
 ### Glasses harness (`/glasses`)
 
@@ -87,7 +87,7 @@ It calls the same `/api/glasses/*` endpoints and WebSocket the Android app uses.
 On a phone, open the HTTPS site at `/glasses`, rotate to landscape, and tap **Start camera**. The
 feed comes from that phone, preferring the rear camera; **Switch camera** requests the other lens.
 If the device has only one camera, the browser uses it. The feed appears behind the display by
-default, and memory and reminder frames use the same stream. In landscape the POV fills the first viewport; scroll down for controls and account navigation.
+default, and the memory stream uses it. In landscape the POV fills the first viewport; scroll down for controls and account navigation.
 Tap **Fullscreen** to hide browser chrome where supported, and **Controls** to jump below the POV. Portrait and desktop layouts are supported too. Use **Turn off** to
 release the camera, or **Cancel camera** if the permission request is still waiting. Camera access
 on a real phone requires HTTPS; an ordinary HTTP LAN address will not work.
@@ -100,7 +100,7 @@ Things to try: ask "where did I leave my keys?", say "remind me about the stool"
 1. Pair the glasses in the Meta AI app, turn on Developer Mode, and build `glasses-android` in Android Studio (setup is in [its README](glasses-android/README.md)).
 2. Copy `local.properties.example` to `local.properties` and set `glasses.api` to the backend's address (without `/api`). Without `glasses.token` the app starts a guest account by itself.
 3. In the app press **Register**, then **Arm memory mode**. A double tap or double press of the capture button starts and stops the 2 fps stream; one tap or short press sends one photo; holding the capture button records a voice message, which is turned into text on the phone and sent to Gemma as a question.
-4. Triggers and reminders now warn you on the display. Memories show up in the Memory lab.
+4. Triggers now warn you on the display; say "warn me when…" to set one up. Memories show up in the Memory lab.
 
 The memory service itself (embedding, the map page, deploying to the Gemma server) is described in [memory/README.md](memory/README.md).
 

@@ -1,6 +1,6 @@
 """One WebSocket per glasses client, at /api/glasses/ws: the live traffic between the phone (or
-the browser harness) and the backend, so the server can push warnings and frames skip the
-per-request overhead. The HTTP routes do the same work one request at a time.
+the browser harness) and the backend, so frames and commands skip the per-request overhead. The
+HTTP routes do the same work one request at a time.
 
 Messages are JSON text frames with a `type`. A frame is a small JSON header followed by the JPEG
 as the next, binary, frame. Client to server:
@@ -9,17 +9,14 @@ as the next, binary, frame. Client to server:
   carrying the same `id`.
 - `memory_frame` + JPEG: as POST /api/glasses/frames, with `source` (stream/single),
   `stream_id` and optional `seen_at`; answered with `memory_result` containing a FrameReply.
-  One may be in flight per connection; another gets 429, keeping camera uploads bounded.
-- `watch` with `on`: start or stop watching for reminders.
-- `frame` + JPEG, while watching: as POST /api/glasses/watch; answered with a `watch_result`.
-  The latest frame wins: while one is being checked only the newest arrival waits, and the ones
-  it replaced are counted in the next result's `dropped`, so a slow model never builds a queue.
+  One may be in flight per connection; another gets 429, keeping camera uploads bounded. A
+  trigger that fires on the frame comes back in that result's `message` (app/glasses/frames.py).
 - `ping`: answered with a `pong`.
 
-Server to client: `reply` (a GlassesReply to draw and speak), `watch_result`, `error` and `pong`.
-A warning is pushed as a `reply` without an `id`, after the `watch_result` that found it.
+Server to client: `reply` (a GlassesReply to draw and speak), `memory_result`, `error` and
+`pong`.
 
-Commands run concurrently, frames one at a time beside them, each as a coroutine with its own
+Commands run concurrently, memory frames one at a time beside them, each as a coroutine with its own
 database session: the queries and model calls are awaited, so one slow client cannot stall the
 others. One client runs at most WORKERS of them at a time; on disconnect, commands and frames
 still running are cancelled.
@@ -32,7 +29,6 @@ Everything the socket does then is scoped to that user, like the HTTP routes.
 """
 
 import logging
-import time
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Annotated, Literal
@@ -46,7 +42,7 @@ from app import auth
 from app.auth import Viewer
 from app.db import new_session
 from app.glasses import actions, feeds, frames
-from app.glasses.actions import Command, WatchResult
+from app.glasses.actions import Command
 from app.glasses.layout import GlassesReply
 from app.llm import Chat, Embedder
 
@@ -70,14 +66,6 @@ class CommandMessage(Command):
     id: int | None = None
 
 
-class FrameMessage(BaseModel):
-    """The header of a watched frame; the JPEG is the next, binary, frame."""
-
-    type: Literal["frame"]
-    id: int | None = None
-    client: str = Field(default="", max_length=100)  # the app, for the admin's stream wall
-
-
 class MemoryFrameMessage(BaseModel):
     type: Literal["memory_frame"]
     id: int | None = None
@@ -85,11 +73,6 @@ class MemoryFrameMessage(BaseModel):
     stream_id: str = Field(default="", max_length=100)
     seen_at: datetime | None = None
     client: str = Field(default="", max_length=100)  # the app, for the admin's stream wall
-
-
-class WatchMessage(BaseModel):
-    type: Literal["watch"]
-    on: bool
 
 
 class PingMessage(BaseModel):
@@ -106,7 +89,7 @@ class AuthMessage(BaseModel):
 
 
 ClientMessage = Annotated[
-    CommandMessage | FrameMessage | MemoryFrameMessage | WatchMessage | PingMessage | AuthMessage,
+    CommandMessage | MemoryFrameMessage | PingMessage | AuthMessage,
     Field(discriminator="type"),
 ]
 client_message: TypeAdapter[ClientMessage] = TypeAdapter(ClientMessage)
@@ -117,16 +100,8 @@ client_message: TypeAdapter[ClientMessage] = TypeAdapter(ClientMessage)
 
 class ReplyMessage(BaseModel):
     type: Literal["reply"] = "reply"
-    id: int | None  # the command's; None for a pushed warning
+    id: int | None  # the command's
     reply: GlassesReply
-
-
-class WatchResultMessage(BaseModel):
-    type: Literal["watch_result"] = "watch_result"
-    id: int | None  # the checked frame's
-    result: WatchResult
-    dropped: int  # frames replaced by newer ones while the previous check ran
-    ms: int  # how long the check took
 
 
 class ErrorMessage(BaseModel):
@@ -147,7 +122,7 @@ class MemoryResultMessage(BaseModel):
     result: frames.FrameReply
 
 
-ServerMessage = ReplyMessage | WatchResultMessage | MemoryResultMessage | ErrorMessage | PongMessage
+ServerMessage = ReplyMessage | MemoryResultMessage | ErrorMessage | PongMessage
 
 
 async def _viewer_for(token: str | None) -> Viewer | None:
@@ -191,13 +166,7 @@ class Channel:
         self.embed = embed
         self.send_lock = anyio.Lock()
         self.running = anyio.Semaphore(WORKERS)
-        self.watching = False
         self.memory_busy = False
-        # The newest frame not yet checked, and how many it and its predecessors replaced.
-        self.frame: tuple[int | None, bytes] | None = None
-        self.dropped = 0
-        self.frame_ready = anyio.Event()
-        self.watch_client = DEFAULT_CLIENT  # what the latest watched frame said it came from
 
     async def send(self, message: ServerMessage) -> None:
         async with self.send_lock:
@@ -237,10 +206,6 @@ class Channel:
                     await self.send(PongMessage(id=message.id))
                 case AuthMessage():
                     pass
-                case WatchMessage():
-                    self.watching = message.on
-                    if not message.on:
-                        self.frame, self.dropped = None, 0
                 case CommandMessage():
                     tasks.start_soon(self.run_command, message)
                 case MemoryFrameMessage():
@@ -256,17 +221,6 @@ class Channel:
                     else:
                         self.memory_busy = True
                         tasks.start_soon(self.run_memory_frame, message, data)
-                case FrameMessage():
-                    data = await self.receive_jpeg(message.id)
-                    if data is None:
-                        pass
-                    elif not self.watching:
-                        await self.send(
-                            ErrorMessage(id=message.id, status=409, detail="send watch on first")
-                        )
-                    else:
-                        self.watch_client = feeds.clean_client(message.client, DEFAULT_CLIENT)
-                        self.offer_frame(message.id, data)
 
     async def receive_jpeg(self, id: int | None) -> bytes | None:
         """The binary frame after a header, or None (and an error sent) when text came instead."""
@@ -277,32 +231,6 @@ class Channel:
         if data is None:
             await self.send(ErrorMessage(id=id, status=400, detail="expected the JPEG next"))
         return data
-
-    def offer_frame(self, id: int | None, data: bytes) -> None:
-        if self.frame is not None:
-            self.dropped += 1
-        self.frame = (id, data)
-        self.frame_ready.set()
-
-    async def check_frames(self) -> None:
-        """Checks the newest frame, then the newest that arrived meanwhile, and so on."""
-        while True:
-            await self.frame_ready.wait()
-            self.frame_ready = anyio.Event()
-            if self.frame is None:
-                continue
-            (id, data), self.frame = self.frame, None
-            dropped, self.dropped = self.dropped, 0
-            started = time.perf_counter()
-            result = await self.work(
-                id, actions.watch, self.viewer, data, self.chat, self.watch_client
-            )
-            if result is None:
-                continue
-            ms = round((time.perf_counter() - started) * 1000)
-            await self.send(WatchResultMessage(id=id, result=result, dropped=dropped, ms=ms))
-            if result.warning is not None and self.watching:
-                await self.send(ReplyMessage(id=None, reply=result.warning))
 
     async def run_command(self, message: CommandMessage) -> None:
         body = Command(action=message.action, question=message.question)
@@ -372,7 +300,6 @@ async def serve(websocket: WebSocket, chat: Chat | None, embed: Embedder | None)
         return
     channel = Channel(websocket, viewer, chat, embed)
     async with anyio.create_task_group() as tasks:
-        tasks.start_soon(channel.check_frames)
         try:
             await channel.receive(tasks)
         except _Left:

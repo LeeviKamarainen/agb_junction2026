@@ -1,7 +1,7 @@
 """The glasses' API: every response is a `GlassesReply` the client draws and speaks.
 
 Clients: the browser harness (frontend /glasses) and, later, glasses-android. The live traffic
-(commands, frames, pushed warnings) also runs over one WebSocket per client at /ws
+(commands and frames) also runs over one WebSocket per client at /ws
 (app/glasses/channel.py); both call the same code in app/glasses/actions.py.
 """
 
@@ -13,8 +13,8 @@ from sqlmodel import col, select
 
 from app.auth import Viewer, ViewerDep
 from app.db import SessionDep
-from app.glasses import actions, channel, feeds, frames, reminders, screens, triggers
-from app.glasses.actions import Command, WatchResult
+from app.glasses import actions, channel, feeds, frames, screens, triggers
+from app.glasses.actions import Command
 from app.glasses.layout import GlassesReply
 from app.llm import Chat, Embedder, UpstreamError, get_chat, get_embedder
 from app.models import (
@@ -22,9 +22,6 @@ from app.models import (
     GoalCreate,
     GoalPublic,
     GoalUpdate,
-    Reminder,
-    ReminderCreate,
-    ReminderPublic,
     Trigger,
     TriggerDraft,
     TriggerPublic,
@@ -69,64 +66,6 @@ async def command(
     body: Command, session: SessionDep, viewer: ViewerDep, chat: ChatDep, embed: EmbedderDep
 ):
     return await actions.command(session, viewer, body, chat, embed)
-
-
-@router.get("/reminders", response_model=list[ReminderPublic])
-async def list_reminders(session: SessionDep, viewer: ViewerDep):
-    """Your reminders; the admin's list holds everyone's."""
-    return await reminders.active(session, None if viewer.is_admin else viewer.id)
-
-
-@router.post("/reminders", response_model=ReminderPublic, status_code=201)
-async def add_reminder(body: ReminderCreate, session: SessionDep, viewer: ViewerDep, chat: ChatDep):
-    """What the wearer would say, e.g. "remind me not to trip over the stool"; 422 when no
-    object can be found in it."""
-    reminder = await reminders.add(session, body.text, chat, viewer.id)
-    if reminder is None:
-        raise HTTPException(422, "no object to watch for in that text")
-    feeds.note(viewer.id, "reminder", body.text, "panel")
-    return reminder
-
-
-@router.delete("/reminders/{reminder_id}", status_code=204)
-async def delete_reminder(reminder_id: int, session: SessionDep, viewer: ViewerDep):
-    reminder = await session.get(Reminder, reminder_id)
-    if reminder is None or not viewer.can_change(reminder.owner_id):
-        raise HTTPException(404, "no such reminder")
-    await session.delete(reminder)
-    await session.commit()
-
-
-@router.post(
-    "/reminders/{reminder_id}/trigger",
-    response_model=GlassesReply,
-    description="The warning as if the object were in view, for testing without a vision model.",
-)
-async def trigger_reminder(reminder_id: int, session: SessionDep, viewer: ViewerDep):
-    reminder = await session.get(Reminder, reminder_id)
-    if reminder is None or not viewer.can_change(reminder.owner_id):
-        raise HTTPException(404, "no such reminder")
-    return screens.warning(reminder.target, reminder.text)
-
-
-@router.post(
-    "/watch",
-    response_model=WatchResult,
-    description=(
-        "One frame from the camera while the glasses watch for reminders, with every face in it "
-        "blurred before the chat model sees it. Not stored. A target in view gives a warning, at "
-        "most once a minute per reminder."
-    ),
-)
-async def watch(
-    photo: Annotated[UploadFile, File(description="One JPEG frame")],
-    session: SessionDep,
-    viewer: ViewerDep,
-    chat: ChatDep,
-    client: Annotated[str, Form(max_length=100)] = "",
-):
-    data = await photo.read(actions.MAX_FRAME + 1)
-    return await actions.watch(session, viewer, data, chat, feeds.clean_client(client, "web"))
 
 
 @router.post("/frames", response_model=frames.FrameReply)
