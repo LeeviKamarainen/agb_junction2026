@@ -14,6 +14,7 @@ whenever the admin changes a clip (`request_sync`), since embedding a video take
 import asyncio
 import hashlib
 import logging
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 import anyio
@@ -69,6 +70,51 @@ async def worker(session_factory, embed: Embedder, retry_s: float) -> None:
 def clip_prefix(clip_id: int) -> str:
     """How the `source` of every memory of a clip starts, whatever its media."""
     return f"{_PREFIX}{clip_id}:"
+
+
+def clip_of(source: str) -> int | None:
+    """The clip a memory with this `source` is a frame of; None for any other memory."""
+    if not source.startswith(_PREFIX):
+        return None
+    clip_id, _digest = source.removeprefix(_PREFIX).split(":")
+    return int(clip_id)
+
+
+def _aware(moment: datetime) -> datetime:
+    # SQLite gives times back without their offset; every time stored here is UTC.
+    return moment if moment.tzinfo else moment.replace(tzinfo=UTC)
+
+
+def frame_at_s(frame: Memory, starts: dict[str, datetime]) -> float:
+    """How many seconds into its clip a clip frame was taken: `starts` holds each clip's start,
+    by source."""
+    return (_aware(frame.created_at) - starts[frame.source]).total_seconds()
+
+
+async def clip_frames(session: AsyncSession, clip_id: int) -> list[tuple[float, Memory]]:
+    """A clip's frames, oldest first, each with how many seconds into the clip it was taken."""
+    frames = list(
+        await session.exec(
+            select(Memory)
+            .where(Memory.owner_id == DEMO_OWNER)
+            .where(col(Memory.source).startswith(clip_prefix(clip_id)))
+            .order_by(col(Memory.created_at), col(Memory.id))
+        )
+    )
+    # All of the clip's frames are here, oldest first: the first of a source is its start, with
+    # no second read that a clip being replaced meanwhile could leave without it.
+    starts: dict[str, datetime] = {}
+    for frame in frames:
+        starts.setdefault(frame.source, _aware(frame.created_at))
+    return [(frame_at_s(frame, starts), frame) for frame in frames]
+
+
+@dataclass(frozen=True)
+class DemoView:
+    """Someone watches a demo clip instead of a camera: which, and how far into it, in seconds."""
+
+    clip_id: int
+    at_s: float
 
 
 def source(clip: Showcase) -> str:

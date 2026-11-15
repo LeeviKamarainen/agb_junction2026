@@ -18,7 +18,7 @@ from fastapi import HTTPException
 from pydantic import BaseModel, Field, model_validator
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from app import agent, faces
+from app import agent, demo, faces
 from app.auth import Viewer
 from app.glasses import dejavu, feeds, frames, screens, triggers
 from app.glasses.layout import GlassesReply
@@ -123,7 +123,7 @@ class Command(BaseModel):
     action: str | None = Field(default=None, max_length=100)
     question: str | None = Field(default=None, max_length=500)
     # The home page plays a demo clip instead of a camera: which, and how many seconds into it.
-    # Déjà vu then asks about the clip's frame there (dejavu.DemoView).
+    # Déjà vu then asks about the clip's frame there (demo.DemoView).
     demo_clip_id: int | None = None
     demo_at_s: float | None = Field(default=None, ge=0)
 
@@ -150,7 +150,7 @@ async def command(
     feeds.note(viewer.id, "question", question, "glasses")
     if dejavu.is_recall(question):
         view = (
-            dejavu.DemoView(body.demo_clip_id, body.demo_at_s or 0.0)
+            demo.DemoView(body.demo_clip_id, body.demo_at_s or 0.0)
             if body.demo_clip_id is not None
             else None
         )
@@ -180,7 +180,7 @@ async def _recall(
     question: str,
     chat: Chat | None,
     viewer: Viewer,
-    view: dejavu.DemoView | None = None,
+    view: demo.DemoView | None = None,
 ) -> GlassesReply:
     """Déjà vu (dejavu.py): where the wearer has seen what is in front of them."""
     if chat is None:

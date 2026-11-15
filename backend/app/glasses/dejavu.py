@@ -7,7 +7,7 @@ show the same thing. The nearest stills are only the most alike, not the same (m
 memory/notebooks/RECALL-1: a place never visited still scores 0.7 to 0.9), so the model is told
 to be strict, and the wearer hears a plain no when none is.
 
-On the home page the view can play a demo clip instead of a camera (`DemoView`). Its frames are
+On the home page the view can play a demo clip instead of a camera (`demo.DemoView`). Its frames are
 demo memories already (app/demo.py), so what is in front of the wearer is the clip's memory at the
 point it is playing, and "before" is the clip's own earlier frames, outside the current look, and
 everything else they may see: the other clips and their own memories.
@@ -26,7 +26,7 @@ from app import demo, media, vectors
 from app.auth import Viewer
 from app.llm import Chat
 from app.models import Memory, Showcase
-from app.search import DEMO_OWNER, NEAR_COPY_S, TABLE
+from app.search import NEAR_COPY_S, TABLE
 
 FRESH_S = 30.0  # the newest still counts as what the wearer is looking at for this long
 # "Before" ends GAP_S ahead of the current look at the thing, so the look does not find itself.
@@ -62,14 +62,6 @@ SYSTEM = (
 
 
 @dataclass(frozen=True)
-class DemoView:
-    """The wearer watches a demo clip: which, and how far into it, in seconds."""
-
-    clip_id: int
-    at_s: float
-
-
-@dataclass(frozen=True)
 class Still:
     memory_id: int
     ago: str  # "2 hours ago"
@@ -99,31 +91,8 @@ def _aware(moment: datetime) -> datetime:
     return moment if moment.tzinfo else moment.replace(tzinfo=UTC)
 
 
-async def _clip(session: AsyncSession, clip_id: int) -> list[tuple[float, Memory]]:
-    """A demo clip's memories with their time into the clip, in order. The first frame of a clip
-    is always stored, so the earliest memory is the clip's start."""
-    rows = list(
-        await session.exec(
-            select(Memory)
-            .where(Memory.owner_id == DEMO_OWNER)
-            .where(col(Memory.source).startswith(demo.clip_prefix(clip_id)))
-            .order_by(col(Memory.created_at), col(Memory.id))
-        )
-    )
-    if not rows:
-        return []
-    start = _aware(rows[0].created_at)
-    return [((_aware(m.created_at) - start).total_seconds(), m) for m in rows]
-
-
-def _clip_id(memory: Memory) -> int | None:
-    if not memory.source.startswith("clip:"):
-        return None
-    return int(memory.source.split(":")[1])
-
-
 async def recall(
-    session: AsyncSession, chat: Chat, viewer: Viewer, view: DemoView | None = None
+    session: AsyncSession, chat: Chat, viewer: Viewer, view: demo.DemoView | None = None
 ) -> Recall | None:
     """Where the wearer has seen what their newest still shows, or what the demo clip they are
     watching shows now (`view`). None when there is no such still: none from the last FRESH_S,
@@ -135,7 +104,7 @@ async def recall(
 
     async def label(memory: Memory, moment: datetime) -> str:
         """When it was seen, as the wearer hears it."""
-        clip = _clip_id(memory)
+        clip = demo.clip_of(memory.source)
         if view is not None and clip == view.clip_id:
             return ago(max(0.0, (current_seen - moment).total_seconds()))
         if clip is not None:
@@ -184,7 +153,7 @@ async def recall(
         not_before: set[int] = set()
         wanted = SHOWN * 5
     else:
-        clip = await _clip(session, view.clip_id)
+        clip = await demo.clip_frames(session, view.clip_id)
         # The frame on the view: the clip's last memory up to where it is playing (a frame much
         # like the one before it was not stored, so the one before stands for it).
         shown = [(at, memory) for at, memory in clip if at <= view.at_s + 0.25]
