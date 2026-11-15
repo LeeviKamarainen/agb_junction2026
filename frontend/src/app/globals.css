@@ -202,7 +202,7 @@
 }
 
 /* Compact Junction-inspired application chrome. */
-.site-shell { width: min(100% - 40px, 1180px); }
+.site-shell { width: min(100% - 40px, 1440px); }
 .site-header { min-height: 68px; gap: 12px; }
 .wordmark { font-size: 18px; font-weight: 650; letter-spacing: -.6px; gap: 0; }
 .home-ask > form { order: -1; padding: 12px; }
@@ -216,7 +216,9 @@
 @media (max-width: 700px) { .site-shell { width: calc(100% - 28px); } .site-header { padding-block: 12px; } }
 
 /* /try: the glasses view and what to do with it on the left, the growing memory on the right. */
-.try-grid { display: grid; gap: 24px; padding-block: 16px 40px; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); align-items: start; }
+/* The view as large as the window allows while the controls under it stay in sight (190px: the
+   header, the clip chips and the ask bar), the memory beside it taking the rest. */
+.try-grid { display: grid; gap: 24px; padding-block: 16px 40px; grid-template-columns: minmax(0, clamp(560px, (100dvh - 190px) * 1.6, 1040px)) minmax(320px, 1fr); align-items: start; }
 @media (max-width: 1023px) { .try-grid { grid-template-columns: minmax(0, 1fr); } }
 .try-memory { position: sticky; top: 16px; display: flex; flex-direction: column; gap: 10px; border: 1px solid var(--border); border-radius: 12px; background: var(--card); padding: 14px; }
 /* Square enough for the map's two axes, never taller than the window beside the view. */
