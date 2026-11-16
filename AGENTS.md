@@ -54,6 +54,16 @@ Each change that lands on `main` runs the checks, then deploys: the code is copi
 - `make prod-import-keys`: give everyone in `TEAM_GITHUB_USERS` (Makefile) SSH access with the keys on their GitHub accounts.
 - Secrets: `gh secret set APP_<NAME>` (only the repo owner can) becomes `<NAME>` in the backend's environment on the next deploy; `gh variable set APP_<NAME>` for non-secret settings. Locally, put `<NAME>=...` in `backend/.env`.
 
+## Without the GPU server
+
+The chat and embedding models are optional, and production runs without them since the hackathon's GPU server was retired. With `LLM_URL` and `EMBED_URL` unset, the backend never contacts a model server:
+- every route that needs a model answers 503 at once, and the glasses say memory search isn't set up;
+- the demo clips' stored frames stay as they are until the models are back. A clip published meanwhile gets none. A changed or deleted clip keeps its old ones, and the map, which finds a clip's frames by its id, shows them for the changed clip, or for a new clip that gets a deleted one's id. So leave the clips as they are while the models are off.
+
+`GET /api/models` says which models are configured, and /try offers nothing until it knows. Without both, /try only plays the clips with their memory map: it sends no frames, and shows a note instead of the question box and the camera.
+
+To switch production off, first delete the `APP_LLM_URL` and `APP_EMBED_URL` variables (and the `APP_LLM_API_KEY` and `APP_EMBED_API_KEY` secrets) and redeploy, since deleting does not deploy. Check that `/api/models` says both are off, and only then shut the model server down. A URL left pointing at a server that is gone makes every model request wait for the connection timeout, and whoever gets that address next would receive the token and the visitors' questions and frames. Set them again and redeploy to turn the models back on.
+
 ## Memory API
 
 `memory/` is the visual memory for the glasses: frames are posted to its API, have their faces blurred (`memory/src/glass_memory/faces.py`, the same file as the backend's), are embedded with EmbeddingGemma 2 and stored as memories, shown as a 2D map, and Gemma answers questions from the stills a question retrieves. Read `memory/README.md` before working there; what is left is in `memory/docs/todo.md` and the choices already made in `memory/docs/decisions.md`. It is its own uv project (Python 3.14 with torch, about 6 GB), so `make check` and CI leave it out: run `make check-memory`.

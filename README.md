@@ -64,6 +64,8 @@ The home page shows our submission video (embedded from YouTube) beside the pitc
 
 Nobody needs an account: **Start** (or the first question) starts a 60-minute guest, which sees the demo memories and its own. Demo clips are only checked against the goals; camera frames are also stored as the guest's memories.
 
+Since the hackathon, the GPU server running the models is retired, so `/try` only plays the clips with their memory map: asking, goals and the camera are switched off (see "Without the GPU server" in `AGENTS.md`).
+
 At `/admin`, add a draft, upload one MP4/WebM video (up to 200 MB) or a batch of images (up to 100, 15 MB each, 200 MB per upload), then publish. Adjust image dwell time, reorder images and move demos earlier or later. Video length is detected in the browser and can be adjusted. Published media is public; drafts are visible only to the admin. Publishing a demo also makes it searchable: the backend stores a video's frames at 2 fps (skipping near-duplicates) and each image of a sequence as demo memories that everyone can ask about, faces blurred, and replaces or removes them when the demo changes or is unpublished. That needs the embedding model (`EMBED_URL`) and takes a while for a long video.
 
 At `/admin/streams` the admin sees every client streaming right now (the Try it page, the glasses harness, the glasses app), each with its newest frame refreshing about twice a second and, under it, a log of the questions its user asked, the goals they set, and the triggers that fired. Click a stream to open it in full, with fullscreen and a verbose backend log: every frame's result and trigger scores, Gemma's searches and answers, and errors, each with its JSON.
