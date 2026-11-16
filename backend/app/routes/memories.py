@@ -7,6 +7,7 @@ from typing import Annotated
 import anyio
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, Response, StreamingResponse
+from pydantic import BaseModel
 from sqlmodel import col, func, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -34,6 +35,7 @@ from app.search import (
     vector_search,
     width_error,
 )
+from app.settings import get_settings
 
 router = APIRouter(tags=["memories"])
 
@@ -319,6 +321,22 @@ async def delete_memory(id: int, session: SessionDep, viewer: ViewerDep):
     await session.commit()
     if memory.image_file:
         media.delete(memory.image_file)
+
+
+class ModelStatus(BaseModel):
+    """Which models this backend calls. A model whose URL is not set (app/settings.py) is off:
+    every route that needs it answers 503 without trying to reach one."""
+
+    chat: bool
+    embeddings: bool
+
+
+@router.get("/models", response_model=ModelStatus)
+async def model_status():
+    """Public, so /try knows before anyone logs in whether it can offer asking and reminders, or
+    only the clips and their memory map."""
+    settings = get_settings()
+    return ModelStatus(chat=bool(settings.llm_url), embeddings=bool(settings.embed_url))
 
 
 @router.post("/search", response_model=list[SearchResult])

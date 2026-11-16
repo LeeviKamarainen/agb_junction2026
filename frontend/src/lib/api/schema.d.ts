@@ -556,6 +556,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/models": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Model Status
+         * @description Public, so /try knows before anyone logs in whether it can offer asking and reminders, or
+         *     only the clips and their memory map.
+         */
+        get: operations["model_status_api_models_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/search": {
         parameters: {
             query?: never;
@@ -1248,6 +1269,17 @@ export interface components {
             clip_id: number | null;
             /** Clip At S */
             clip_at_s: number | null;
+        };
+        /**
+         * ModelStatus
+         * @description Which models this backend calls. A model whose URL is not set (app/settings.py) is off:
+         *     every route that needs it answers 503 without trying to reach one.
+         */
+        ModelStatus: {
+            /** Chat */
+            chat: boolean;
+            /** Embeddings */
+            embeddings: boolean;
         };
         /** SearchResult */
         SearchResult: {
@@ -2470,6 +2502,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    model_status_api_models_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelStatus"];
                 };
             };
         };
