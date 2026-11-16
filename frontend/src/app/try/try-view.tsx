@@ -44,6 +44,7 @@ type Clip = components["schemas"]["ShowcasePublic"];
 type FrameReply = components["schemas"]["FrameReply"];
 type Goal = components["schemas"]["GoalPublic"];
 type MemoryVector = components["schemas"]["MemoryVector"];
+type ModelStatus = components["schemas"]["ModelStatus"];
 type SearchResult = components["schemas"]["SearchResult"];
 
 /** A demo clip's id, or the visitor's camera. */
@@ -105,7 +106,8 @@ function timeOfDay(iso: string): string {
  * frames stream at FPS to /api/glasses/frames against the visitor's goals (clip frames only
  * checked, camera frames also stored); pausing stops time: nothing new is seen or fires. There is
  * no seeking; Replay starts the clip over. The answer shows in the right lens with the frame it
- * rests on.
+ * rests on. Without the models (GET /api/models) only the clips and their map work: no frame is
+ * sent, and a note takes the place of the question box and the camera.
  */
 export function TryView() {
   const params = useSearchParams();
@@ -113,6 +115,7 @@ export function TryView() {
   const camera = useCamera();
 
   const [clips, setClips] = useState<Clip[] | null>(null);
+  const [models, setModels] = useState<ModelStatus | null>(null);
   const [sourceKey, setSourceKey] = useState<SourceKey | null>(null);
   const [started, setStarted] = useState(false);
   const [playing, setPlaying] = useState(false);
@@ -149,6 +152,14 @@ export function TryView() {
   const clip = typeof sourceKey === "number" ? playable.find((c) => c.id === sourceKey) : undefined;
   const onCamera = sourceKey === "camera";
   const streaming = started && (onCamera ? Boolean(camera.stream) && cameraLive : playing);
+  // Asking, déjà vu, goals and the camera's memory need both models. Without them (the GPU server
+  // is gone) the page only plays the clips with the frames already stored for their map. Neither
+  // holds while the backend has not said (models is null).
+  const modelsOn = Boolean(models?.chat && models.embeddings);
+  const modelsOff = models !== null && !modelsOn;
+  // Frames go to the memory only while the models are on: otherwise a frame can be neither stored
+  // nor checked against goals.
+  const live = streaming && modelsOn;
 
   // The published clips, public.
   useEffect(() => {
@@ -158,6 +169,14 @@ export function TryView() {
       .catch(() => setError("Could not load the demo videos."));
   }, []);
 
+  useEffect(() => {
+    const unknown = () => setError("Could not reach the backend. Reload the page to try again.");
+    api
+      .GET("/api/models", { cache: "no-store" })
+      .then(({ data }) => (data ? setModels(data) : unknown()))
+      .catch(unknown);
+  }, []);
+
   // ?clip= names the source: a clip's id, or "camera", which a link can set and the chips keep in
   // step (choose). Next keeps this page alive between visits, so a new ?clip=
   // can reach a page that is playing something else: it switches as its chip would.
@@ -165,17 +184,20 @@ export function TryView() {
   const wanted: SourceKey | null =
     param === "camera" ? "camera" : param && /^\d+$/.test(param) ? Number(param) : null;
   const follow = useEffectEvent((list: Clip[], want: SourceKey | null) => {
-    const known = want === "camera" || list.some((c) => c.id === want);
-    if (sourceKey === null) setSourceKey(known ? want : (list[0]?.id ?? "camera"));
+    // The camera is there to build a memory, which takes the models.
+    const known = (want === "camera" && modelsOn) || list.some((c) => c.id === want);
+    const first = list[0]?.id ?? (modelsOn ? "camera" : null);
+    if (sourceKey === null) setSourceKey(known ? want : first);
     else if (known && want !== null && want !== sourceKey) void choose(want);
   });
   useEffect(() => {
-    if (!clips) return;
+    // Nothing is on offer before the model status is known, so nothing starts without it.
+    if (!clips || !models) return;
     // The address changed outside this page (a link elsewhere): follow it once this render is
     // done, as a click on its chip would.
     const timer = setTimeout(() => follow(clips, wanted));
     return () => clearTimeout(timer);
-  }, [clips, wanted]);
+  }, [clips, models, wanted]);
 
   // A returning guest's goals; after that they change only through this page.
   const loadGoals = useEffectEvent(() => void refreshGoals());
@@ -224,9 +246,12 @@ export function TryView() {
     });
     if (shownKey.current !== id) return; // the visitor moved on meanwhile
     if (problem || !data) return setError(errorText(problem, "Could not load the memory map"));
-    // A clip published moments ago is still being stored as memories, in the background.
+    // A clip published moments ago is still being stored as memories, in the background; without
+    // the models it never will be.
     if (!data.length) {
-      setTimeout(() => shownKey.current === id && void loadClipTrail(id), CLIP_RETRY_MS);
+      if (modelsOn) {
+        setTimeout(() => shownKey.current === id && void loadClipTrail(id), CLIP_RETRY_MS);
+      }
       return;
     }
     setPoints(
@@ -480,10 +505,10 @@ export function TryView() {
 
   const tick = useEffectEvent(() => void sendFrame());
   useEffect(() => {
-    if (!streaming) return;
+    if (!live) return;
     const timer = setInterval(() => tick(), 1000 / FPS);
     return () => clearInterval(timer);
-  }, [streaming]);
+  }, [live]);
 
   // ---- Asking ----------------------------------------------------------------------------
 
@@ -604,7 +629,11 @@ export function TryView() {
     />
   ) : (
     <p className="m-auto p-6 text-center text-sm text-white/70">
-      {clips === null ? "Loading…" : "No demo videos yet: try your camera."}
+      {clips === null || models === null
+        ? "Loading…"
+        : modelsOn
+          ? "No demo videos yet: try your camera."
+          : "No demo videos yet."}
     </p>
   );
 
@@ -638,7 +667,7 @@ export function TryView() {
   const status = (
     <>
       <span>{onCamera ? "Your camera" : clip ? clip.title : "Demo"}</span>
-      {streaming && (
+      {live && (
         <span className="inline-flex items-center gap-1.5">
           <span className="size-2 animate-pulse rounded-full bg-red-500" aria-hidden="true" /> Live
         </span>
@@ -669,21 +698,23 @@ export function TryView() {
                 type="button"
                 className="try-chip"
                 aria-pressed={sourceKey === option.id}
-                disabled={starting}
+                disabled={starting || !models}
                 onClick={() => void choose(option.id)}
               >
                 {option.title}
               </button>
             ))}
-            <button
-              type="button"
-              className="try-chip"
-              aria-pressed={onCamera}
-              disabled={starting}
-              onClick={() => void choose("camera")}
-            >
-              <Camera size={14} aria-hidden="true" /> Your camera
-            </button>
+            {modelsOn && (
+              <button
+                type="button"
+                className="try-chip"
+                aria-pressed={onCamera}
+                disabled={starting}
+                onClick={() => void choose("camera")}
+              >
+                <Camera size={14} aria-hidden="true" /> Your camera
+              </button>
+            )}
           </div>
           <span className="ml-auto flex gap-1.5">
             {onCamera && camera.stream && camera.cameras > 1 && (
@@ -722,48 +753,59 @@ export function TryView() {
           </span>
         </div>
 
-        <form onSubmit={submit} className="flex items-center gap-2">
-          <HoldToTalk
-            label="Hold to ask"
-            className="h-10"
-            disabled={asking}
-            onText={(text) => void ask(text)}
-            onListening={setListening}
-          />
-          <label htmlFor="try-question" className="sr-only">
-            Your question
-          </label>
-          <input
-            id="try-question"
-            value={question}
-            onChange={(event) => setQuestion(event.target.value)}
-            maxLength={2000}
-            placeholder="Ask what you've seen, or say “notify me when…”"
-            className="h-10 min-w-0 flex-1 rounded-md border border-border bg-card px-3 text-sm outline-none focus-visible:border-primary"
-          />
-          <Button type="submit" size="lg" disabled={asking || !question.trim()}>
-            {asking ? (
-              <LoaderCircle className="animate-spin" aria-hidden="true" />
-            ) : (
-              <SendHorizontal aria-hidden="true" />
-            )}
-            Ask
-          </Button>
-        </form>
+        {modelsOn && (
+          <>
+            <form onSubmit={submit} className="flex items-center gap-2">
+              <HoldToTalk
+                label="Hold to ask"
+                className="h-10"
+                disabled={asking}
+                onText={(text) => void ask(text)}
+                onListening={setListening}
+              />
+              <label htmlFor="try-question" className="sr-only">
+                Your question
+              </label>
+              <input
+                id="try-question"
+                value={question}
+                onChange={(event) => setQuestion(event.target.value)}
+                maxLength={2000}
+                placeholder="Ask what you've seen, or say “notify me when…”"
+                className="h-10 min-w-0 flex-1 rounded-md border border-border bg-card px-3 text-sm outline-none focus-visible:border-primary"
+              />
+              <Button type="submit" size="lg" disabled={asking || !question.trim()}>
+                {asking ? (
+                  <LoaderCircle className="animate-spin" aria-hidden="true" />
+                ) : (
+                  <SendHorizontal aria-hidden="true" />
+                )}
+                Ask
+              </Button>
+            </form>
 
-        <div className="flex flex-wrap gap-1.5" aria-label="Things to ask">
-          {examples.map((example) => (
-            <button
-              key={example}
-              type="button"
-              className="try-suggestion"
-              disabled={asking}
-              onClick={() => void ask(example)}
-            >
-              {example}
-            </button>
-          ))}
-        </div>
+            <div className="flex flex-wrap gap-1.5" aria-label="Things to ask">
+              {examples.map((example) => (
+                <button
+                  key={example}
+                  type="button"
+                  className="try-suggestion"
+                  disabled={asking}
+                  onClick={() => void ask(example)}
+                >
+                  {example}
+                </button>
+              ))}
+            </div>
+          </>
+        )}
+        {modelsOff && (
+          <p className="rounded-md border border-border bg-card px-3 py-2 text-sm text-muted-foreground">
+            Asking and reminders are switched off: the hackathon is over, and the GPU server that ran
+            the AI has been shut down. The clips still play through the glasses, and the memory map
+            shows the frames they remembered.
+          </p>
+        )}
 
         {goals.length > 0 && (
           <ul className="flex flex-wrap items-center gap-1.5" aria-label="Watching for">

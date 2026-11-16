@@ -46,7 +46,10 @@ async def _load_demo() -> None:
     changes one. In the background, so a slow or missing embedding model never holds up the
     start; only asking about the demo waits for it."""
     if not get_settings().embed_url:
-        log.warning("No EMBED_URL: the demo clips are not stored, so asking finds nothing")
+        log.warning(
+            "No EMBED_URL: the demo clips' memories stay as they are until it is set: a clip "
+            "published meanwhile gets none, and a changed or deleted one keeps its old ones"
+        )
         return
     await demo.worker(new_session, get_embedder(), DEMO_RETRY_S)
 

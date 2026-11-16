@@ -26,6 +26,7 @@ from app.search import (
     local,
     vector_search,
 )
+from app.settings import get_settings
 
 WIDTH = vectors.VECTOR_TABLES[TABLE].dimensions
 NOON = datetime(2026, 11, 14, 12, 0, tzinfo=UTC)
@@ -187,6 +188,22 @@ def test_search_endpoint(client, memories):
 def test_endpoints_need_the_models_configured(client):
     assert client.post("/api/search", json={"user_query": "keys"}).status_code == 503
     assert client.post("/api/ask", json={"question": "Where are my keys?"}).status_code == 503
+
+
+def test_anyone_can_see_which_models_are_configured(anonymous, monkeypatch):
+    """/try reads this before anyone logs in, to offer asking only when it can work."""
+
+    def status(llm_url: str, embed_url: str) -> dict:
+        monkeypatch.setenv("LLM_URL", llm_url)
+        monkeypatch.setenv("EMBED_URL", embed_url)
+        get_settings.cache_clear()
+        reply = anonymous.get("/api/models")
+        assert reply.status_code == 200, reply.text
+        return reply.json()
+
+    assert status("", "") == {"chat": False, "embeddings": False}
+    assert status("https://gemma.example", "") == {"chat": True, "embeddings": False}
+    assert status("", "https://memory.example") == {"chat": False, "embeddings": True}
 
 
 class FakeGemma:
